@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+dist/
+build/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Conda
+*.conda
+
+# Weights & Biases
+wandb/
+
+# Logs
+logs/
+
+# Data (actual data lives on Sol — only symlinks committed)
+data/raw/*
+data/processed/*
+data/synthetic/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+!data/synthetic/.gitkeep
+
+# Brainstorming session files
+.superpowers/
+
+# macOS
+.DS_Store
+
+# VS Code
+.vscode/
