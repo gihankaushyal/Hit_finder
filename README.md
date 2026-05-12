@@ -7,7 +7,7 @@
 [![Python](https://img.shields.io/badge/python-3.11-3776AB?style=flat&logo=python&logoColor=white)](https://www.python.org/)
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.x-EE4C2C?style=flat&logo=pytorch&logoColor=white)](https://pytorch.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-28a745?style=flat)](LICENSE)
-[![Phase](https://img.shields.io/badge/phase-1%20--%20Proposal-6f42c1?style=flat)]()
+![Phase](https://img.shields.io/badge/phase-1%20--%20Proposal-6f42c1?style=flat)
 [![ASU Fromme Lab](https://img.shields.io/badge/institution-ASU%20Fromme%20Lab-8C1D40?style=flat)](https://biodesign.asu.edu/petra-fromme)
 
 </div>
