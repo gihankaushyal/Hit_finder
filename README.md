@@ -87,3 +87,28 @@ The model must generalize across all four detectors without per-detector retrain
 | 6 | Ablations & cross-detector benchmarking | ⏳ Pending |
 | 7 | Deployment preparation | 🔮 Future |
 | 8 | Thesis writing | 🔮 Future |
+
+## Setup
+
+> ⚠️ **Environment setup and training instructions are coming in Phase 2.**
+> The conda environment definition (`environment.yml`) and SLURM job scripts will be finalized once the Sol HPC data pipeline is established.
+>
+> **Compute:** ASU Sol HPC — 8× NVIDIA A100 (80 GB) · SLURM scheduler · Partition: `htc`
+
+## Citation
+
+If you use this work, please cite:
+
+```bibtex
+@misc{ketawala2026sfxhitfinder,
+  author      = {Ketawala, Gihan},
+  title       = {Detector-Agnostic Hitfinder for Serial Femtosecond X-ray Crystallography},
+  year        = {2026},
+  institution = {Arizona State University, Fromme Lab},
+  url         = {https://github.com/gihankaushyal/Hit_finder}
+}
+```
+
+## Acknowledgments
+
+Developed at the [Fromme Lab](https://biodesign.asu.edu/petra-fromme), Biodesign Institute, Arizona State University, under the supervision of Prof. Petra Fromme. Compute resources provided by the ASU Sol HPC cluster.
