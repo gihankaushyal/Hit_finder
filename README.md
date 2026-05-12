@@ -28,11 +28,11 @@ All four detector types pass through an **identical, bit-for-bit pipeline** befo
 
 ```mermaid
 flowchart LR
-    A["📂 HDF5 / CXI"] --> B["🔍 Detector ID\nfrom metadata"]
-    B --> C["📐 Reborn\nGeometry Assembly"]
-    C --> D["📊 GCN\nGlobal Contrast Norm"]
-    D --> E["🔬 LCN\nLocal Contrast Norm"]
-    E --> F["🖼 Resize\n224 × 224 px"]
+    A["HDF5 / CXI"] --> B["Detector ID\nfrom metadata"]
+    B --> C["Reborn\nGeometry Assembly"]
+    C --> D["GCN\nGlobal Contrast Norm"]
+    D --> E["LCN\nLocal Contrast Norm"]
+    E --> F["Resize\n224 × 224 px"]
 
     style A fill:#161b22,stroke:#30363d,color:#c9d1d9
     style B fill:#161b22,stroke:#30363d,color:#c9d1d9
@@ -50,12 +50,12 @@ The shared pipeline feeds two independent model tracks. The supervised vs. self-
 
 ```mermaid
 flowchart TD
-    PP["⚙️ Shared Preprocessing Pipeline\nHDF5/CXI → Geometry → GCN → LCN → 224×224\n─────────────────────────────────────\nidentical for both tracks"]
+    PP["Shared Preprocessing Pipeline\nHDF5/CXI → Geometry → GCN → LCN → 224×224\nidentical for both tracks"]
 
-    PP --> T1["🔵 Track 1 — Supervised Baseline\nResNet18 → ResNet50\nFine-tuned on labeled hit/non-hit frames\nPretrained weights via timm"]
-    PP --> T2["🟢 Track 2 — Self-Supervised (MAE)\nViT Encoder — masked image pretraining\nUnlabeled XFEL frames for pretraining\nClassification head fine-tuned on labels"]
+    PP --> T1["Track 1 — Supervised Baseline\nResNet18 → ResNet50\nFine-tuned on labeled hit/non-hit frames\nPretrained weights via timm"]
+    PP --> T2["Track 2 — Self-Supervised (MAE)\nViT Encoder — masked image pretraining\nUnlabeled XFEL frames for pretraining\nClassification head fine-tuned on labels"]
 
-    T1 --> E["📈 Cross-Detector Evaluation\nLeave-one-detector-out benchmark\nAGIPD · JUNGFRAU 4M · ePix10k · Eiger4M"]
+    T1 --> E["Cross-Detector Evaluation\nLeave-one-detector-out benchmark\nAGIPD · JUNGFRAU 4M · ePix10k · Eiger4M"]
     T2 --> E
 
     style PP fill:#1f2937,stroke:#e3b341,color:#c9d1d9
