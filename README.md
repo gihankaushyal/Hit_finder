@@ -79,7 +79,7 @@ The model must generalize across all four detectors without per-detector retrain
 
 | Phase | Description | Status |
 |-------|-------------|--------|
-| **1** | Proposal & methodology finalization | ✅ **CURRENT** |
+| **1** | Proposal & methodology finalization | 🔄 **IN PROGRESS** |
 | 2 | Data infrastructure (real + synthetic) | ⏳ Pending |
 | 3 | Preprocessing implementation | ⏳ Pending |
 | 4 | Supervised baseline (ResNet18 → ResNet50) | ⏳ Pending |
@@ -104,7 +104,7 @@ If you use this work, please cite:
   author      = {Ketawala, Gihan},
   title       = {Detector-Agnostic Hitfinder for Serial Femtosecond X-ray Crystallography},
   year        = {2026},
-  institution = {Arizona State University, Fromme Lab},
+  note        = {Arizona State University, Fromme Lab},
   url         = {https://github.com/gihankaushyal/Hit_finder}
 }
 ```
