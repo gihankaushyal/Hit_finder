@@ -1,0 +1,19 @@
+seed: 42
+
+preprocessing:
+  gcn_eps: 1.0e-5
+  lcn_window_size: null  # TBD — ablation in Phase 3
+  lcn_eps: 1.0e-5
+  output_size: 224
+
+training:
+  batch_size: 32
+  num_workers: 8
+  learning_rate: 1.0e-4
+  epochs: 50
+  optimizer: adamw
+  weight_decay: 1.0e-4
+
+wandb:
+  project: sfx-hitfinder
+  entity: null  # set per user

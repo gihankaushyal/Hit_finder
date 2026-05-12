@@ -78,9 +78,9 @@ BibTeX block:
 @misc{ketawala2025sfxhitfinder,
   author      = {Ketawala, Gihan},
   title       = {Detector-Agnostic Hitfinder for SFX},
-  year        = {2025},
+  year        = {2026},
   institution = {Arizona State University, Fromme Lab},
-  url         = {https://github.com/gketawal/Hit_finder}
+  url         = {https://github.com/gihankaushyal/Hit_finder}
 }
 ```
 

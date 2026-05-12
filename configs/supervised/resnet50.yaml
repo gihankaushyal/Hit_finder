@@ -1,0 +1,14 @@
+defaults:
+  - base
+
+model:
+  backbone: resnet50
+  pretrained: true
+  num_classes: 2
+
+training:
+  epochs: 50
+  learning_rate: 5.0e-5
+
+wandb:
+  tags: [supervised, resnet50]

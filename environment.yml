@@ -1,0 +1,21 @@
+name: sfx-hitfinder
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11
+  - pytorch
+  - torchvision
+  - pytorch-cuda=12.1
+  - h5py
+  - numpy
+  - pyyaml
+  - pip
+  - pip:
+    - timm
+    - wandb
+    - reborn
+    - black
+    - pytest

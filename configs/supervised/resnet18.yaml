@@ -1,0 +1,14 @@
+defaults:
+  - base
+
+model:
+  backbone: resnet18
+  pretrained: true
+  num_classes: 2
+
+training:
+  epochs: 50
+  learning_rate: 1.0e-4
+
+wandb:
+  tags: [supervised, resnet18]
