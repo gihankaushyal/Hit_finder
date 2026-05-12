@@ -63,3 +63,27 @@ flowchart TD
     style T2 fill:#161b22,stroke:#3fb950,color:#c9d1d9
     style E fill:#161b22,stroke:#a371f7,color:#c9d1d9
 ```
+
+## Target Detectors
+
+The model must generalize across all four detectors without per-detector retraining. Post-assembly, all images are normalized and resized to **224 × 224 × 1** (single channel).
+
+| Detector | Facility | Raw Dimensions | Module Layout |
+|----------|----------|----------------|---------------|
+| `AGIPD` | EuXFEL | 16 × 512 × 128 px | 16 modules |
+| `JUNGFRAU 4M` | LCLS CXI | 8 × 512 × 1024 px | 8 modules |
+| `ePix10k` | LCLS | varies | multiple configurations |
+| `Eiger4M` | Synchrotron / SSX | 2068 × 2162 px | monolithic |
+
+## Project Status
+
+| Phase | Description | Status |
+|-------|-------------|--------|
+| **1** | Proposal & methodology finalization | ✅ **CURRENT** |
+| 2 | Data infrastructure (real + synthetic) | ⏳ Pending |
+| 3 | Preprocessing implementation | ⏳ Pending |
+| 4 | Supervised baseline (ResNet18 → ResNet50) | ⏳ Pending |
+| 5 | SSL model (MAE pretraining → fine-tune) | ⏳ Pending |
+| 6 | Ablations & cross-detector benchmarking | ⏳ Pending |
+| 7 | Deployment preparation | 🔮 Future |
+| 8 | Thesis writing | 🔮 Future |
