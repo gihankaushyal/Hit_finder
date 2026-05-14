@@ -16,6 +16,6 @@ dependencies:
   - pip:
     - timm
     - wandb
-    - reborn
+    - git+https://gitlab.com/kirianlab/reborn.git@gihan
     - black
     - pytest
