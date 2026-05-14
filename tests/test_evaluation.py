@@ -309,3 +309,5 @@ def test_format_results_table_with_oracle():
     table = format_results_table(results, oracle_ap=oracle)
     assert "Oracle" in table
     assert "%" in table
+    # AGIPD fold: oracle=0.95, model=0.85 -> rel gap = (0.95-0.85)/0.95*100 = 10.5%
+    assert "10.5%" in table

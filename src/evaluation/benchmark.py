@@ -211,7 +211,7 @@ def format_results_table(
         line = f"{fold_key:<8} {detector:<15} {ap:>8.4f}"
         if has_oracle:
             o_ap = oracle_ap.get(detector, float("nan"))
-            if o_ap and o_ap > 0:
+            if o_ap is not None and o_ap > 0:
                 gap = (o_ap - ap) / o_ap * 100
                 line += f"  {o_ap:>10.4f}  {gap:>8.1f}%"
             else:
@@ -221,5 +221,10 @@ def format_results_table(
     lines.append(sep)
     mean_ap = results.get("mean_ap", float("nan"))
     std_ap = results.get("std_ap", float("nan"))
-    lines.append(f"{'Mean':<8} {'':<15} {mean_ap:>8.4f}  +/- {std_ap:.4f}")
+    mean_line = f"{'Mean':<8} {'':<15} {mean_ap:>8.4f}"
+    if has_oracle:
+        mean_line += f"  {'':>10}  {'+/-' + f' {std_ap:.4f}':>9}"
+    else:
+        mean_line += f"  +/- {std_ap:.4f}"
+    lines.append(mean_line)
     return "\n".join(lines)
