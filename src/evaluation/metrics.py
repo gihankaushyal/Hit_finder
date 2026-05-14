@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import numpy as np
 
+__all__ = ["average_precision", "auc_roc", "f1_at_optimal_threshold"]
+
 
 def average_precision(y_true: np.ndarray, y_score: np.ndarray) -> float:
     """Area under the precision-recall curve (interpolation-free, sklearn-compatible).
@@ -13,7 +15,7 @@ def average_precision(y_true: np.ndarray, y_score: np.ndarray) -> float:
     y_true = np.asarray(y_true, dtype=float)
     y_score = np.asarray(y_score, dtype=float)
 
-    sorted_idx = np.argsort(y_score)[::-1]
+    sorted_idx = np.lexsort((-y_true, -y_score))
     y_sorted = y_true[sorted_idx]
 
     n_pos = y_sorted.sum()
@@ -35,7 +37,7 @@ def auc_roc(y_true: np.ndarray, y_score: np.ndarray) -> float:
     y_true = np.asarray(y_true, dtype=float)
     y_score = np.asarray(y_score, dtype=float)
 
-    sorted_idx = np.argsort(y_score)[::-1]
+    sorted_idx = np.lexsort((-y_true, -y_score))
     y_sorted = y_true[sorted_idx]
 
     n_pos = y_sorted.sum()
@@ -61,6 +63,9 @@ def f1_at_optimal_threshold(
 
     thresholds = np.unique(y_score)
     best_f1, best_thresh = 0.0, float(thresholds[0])
+
+    if y_true.sum() == 0:
+        return 0.0, float("nan")
 
     for t in thresholds:
         y_pred = (y_score >= t).astype(float)

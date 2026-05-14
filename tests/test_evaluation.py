@@ -58,3 +58,15 @@ def test_f1_at_optimal_threshold_range():
     f1, thresh = f1_at_optimal_threshold(y_true, y_score)
     assert 0.0 <= f1 <= 1.0
     assert y_score.min() <= thresh <= y_score.max()
+
+
+def test_f1_at_optimal_threshold_known_value():
+    # At threshold 0.6: pred=[1,1,0,0], TP=1,FP=1,FN=0 -> P=0.5,R=1.0,F1=0.667
+    # At threshold 0.5: pred=[1,1,1,0], TP=1,FP=2,FN=0 -> P=0.33,R=1.0,F1=0.5
+    # At threshold 0.9: pred=[1,0,0,0], TP=1,FP=0,FN=0 -> P=1.0,R=1.0,F1=1.0
+    # Best: threshold=0.9, F1=1.0
+    y_true = np.array([1, 0, 0, 0])
+    y_score = np.array([0.9, 0.6, 0.5, 0.1])
+    f1, thresh = f1_at_optimal_threshold(y_true, y_score)
+    assert abs(f1 - 1.0) < 1e-6
+    assert thresh == pytest.approx(0.9)
