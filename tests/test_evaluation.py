@@ -112,3 +112,89 @@ def test_build_lodo_folds_fold1():
     fold1 = next(f for f in folds if f["fold_id"] == 1)
     assert fold1["test_detector"] == "AGIPD"
     assert set(fold1["train_detectors"]) == {"JUNGFRAU_4M", "ePix10k", "Eiger4M"}
+
+
+import json
+import tempfile
+from pathlib import Path
+
+from src.evaluation.benchmark import (
+    SPLIT_CROSS_DETECTOR,
+    SPLIT_IN_DOMAIN_TEST,
+    SPLIT_TRAIN,
+    SPLIT_VAL,
+    build_session_stratified_split,
+    load_split_artifact,
+    save_split_artifact,
+)
+
+
+def _make_sessions(n_train: int, n_test: int) -> list[dict]:
+    sessions = [
+        {"session_id": f"train_sess_{i}", "detector": "JUNGFRAU_4M", "frame_count": 100 + i}
+        for i in range(n_train)
+    ]
+    sessions += [
+        {"session_id": f"test_sess_{i}", "detector": "AGIPD", "frame_count": 80 + i}
+        for i in range(n_test)
+    ]
+    return sessions
+
+
+def test_split_test_detector_sessions_held_out():
+    sessions = _make_sessions(n_train=10, n_test=5)
+    artifact = build_session_stratified_split(sessions, test_detector="AGIPD", seed=42)
+    for sid, split in artifact["splits"].items():
+        if sid.startswith("test_sess"):
+            assert split == SPLIT_CROSS_DETECTOR
+
+
+def test_split_train_sessions_get_three_way_split():
+    sessions = _make_sessions(n_train=10, n_test=3)
+    artifact = build_session_stratified_split(sessions, test_detector="AGIPD", seed=42)
+    train_splits = {
+        split for sid, split in artifact["splits"].items() if sid.startswith("train_sess")
+    }
+    assert train_splits.issubset({SPLIT_TRAIN, SPLIT_VAL, SPLIT_IN_DOMAIN_TEST})
+
+
+def test_split_ratios_approximate():
+    sessions = _make_sessions(n_train=100, n_test=20)
+    artifact = build_session_stratified_split(sessions, test_detector="AGIPD", seed=42)
+    train_splits = [
+        s for sid, s in artifact["splits"].items() if sid.startswith("train_sess")
+    ]
+    n = len(train_splits)
+    n_tr = sum(1 for s in train_splits if s == SPLIT_TRAIN)
+    n_va = sum(1 for s in train_splits if s == SPLIT_VAL)
+    n_te = sum(1 for s in train_splits if s == SPLIT_IN_DOMAIN_TEST)
+    assert abs(n_tr / n - 0.80) < 0.05
+    assert abs(n_va / n - 0.10) < 0.05
+    assert abs(n_te / n - 0.10) < 0.05
+
+
+def test_split_reproducible():
+    sessions = _make_sessions(n_train=20, n_test=5)
+    a1 = build_session_stratified_split(sessions, test_detector="AGIPD", seed=42)
+    a2 = build_session_stratified_split(sessions, test_detector="AGIPD", seed=42)
+    assert a1["splits"] == a2["splits"]
+
+
+def test_split_artifact_metadata():
+    sessions = _make_sessions(n_train=10, n_test=3)
+    artifact = build_session_stratified_split(
+        sessions, test_detector="AGIPD", fold=2, variant="strict_lodo", seed=42
+    )
+    assert artifact["fold"] == 2
+    assert artifact["variant"] == "strict_lodo"
+    assert artifact["test_detector"] == "AGIPD"
+    assert "splits" in artifact
+
+
+def test_save_load_split_artifact(tmp_path):
+    sessions = _make_sessions(n_train=10, n_test=3)
+    artifact = build_session_stratified_split(sessions, test_detector="AGIPD", seed=42)
+    path = tmp_path / "fold1_strict.json"
+    save_split_artifact(artifact, path)
+    loaded = load_split_artifact(path)
+    assert loaded == artifact
