@@ -14,6 +14,7 @@ from src.evaluation.benchmark import (
     SPLIT_VAL,
     build_lodo_folds,
     build_session_stratified_split,
+    format_results_table,
     load_split_artifact,
     run_benchmark,
     run_fold,
@@ -278,3 +279,33 @@ def test_run_benchmark_covers_all_folds():
         assert f"fold_{fold_id}" in results
     assert "mean_ap" in results
     assert "std_ap" in results
+
+
+def test_format_results_table_contains_all_detectors():
+    results = {
+        "fold_1": {"ap": 0.85, "test_detector": "AGIPD"},
+        "fold_2": {"ap": 0.82, "test_detector": "JUNGFRAU_4M"},
+        "fold_3": {"ap": 0.78, "test_detector": "ePix10k"},
+        "fold_4": {"ap": 0.90, "test_detector": "Eiger4M"},
+        "mean_ap": 0.8375,
+        "std_ap": 0.045,
+    }
+    table = format_results_table(results)
+    for detector in ["AGIPD", "JUNGFRAU_4M", "ePix10k", "Eiger4M"]:
+        assert detector in table
+    assert "0.8375" in table or "0.84" in table
+
+
+def test_format_results_table_with_oracle():
+    results = {
+        "fold_1": {"ap": 0.85, "test_detector": "AGIPD"},
+        "fold_2": {"ap": 0.82, "test_detector": "JUNGFRAU_4M"},
+        "fold_3": {"ap": 0.78, "test_detector": "ePix10k"},
+        "fold_4": {"ap": 0.90, "test_detector": "Eiger4M"},
+        "mean_ap": 0.8375,
+        "std_ap": 0.045,
+    }
+    oracle = {"AGIPD": 0.95, "JUNGFRAU_4M": 0.93, "ePix10k": 0.88, "Eiger4M": 0.97}
+    table = format_results_table(results, oracle_ap=oracle)
+    assert "Oracle" in table
+    assert "%" in table

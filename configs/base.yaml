@@ -17,3 +17,10 @@ training:
 wandb:
   project: sfx-hitfinder
   entity: null  # set per user
+
+benchmark:
+  split_seed: 42
+  split_ratios: [0.80, 0.10, 0.10]
+  variants: [strict_lodo, semi_supervised_lodo]
+  detector_agnostic_max_relative_degradation: null  # set after Phase 4
+  detector_agnostic_min_absolute_ap: null           # set after Phase 4

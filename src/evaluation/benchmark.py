@@ -25,6 +25,7 @@ __all__ = [
     "run_on_loader",
     "run_fold",
     "run_benchmark",
+    "format_results_table",
 ]
 
 DETECTORS: list[str] = ["AGIPD", "JUNGFRAU_4M", "ePix10k", "Eiger4M"]
@@ -184,3 +185,41 @@ def run_benchmark(
     results["mean_ap"] = float(np.mean(ap_values))
     results["std_ap"] = float(np.std(ap_values))
     return results
+
+
+def format_results_table(
+    results: dict,
+    oracle_ap: dict[str, float] | None = None,
+) -> str:
+    """Format a results table showing per-fold AP and optional oracle comparison.
+
+    oracle_ap: {detector_name: oracle_AP} — within-detector upper bound.
+    """
+    has_oracle = oracle_ap is not None
+    header = f"{'Fold':<8} {'Detector':<15} {'AP':>8}"
+    if has_oracle:
+        header += f"  {'Oracle AP':>10}  {'Rel. Gap':>9}"
+
+    sep = "-" * len(header)
+    lines = [header, sep]
+
+    for fold_id in range(1, len(DETECTORS) + 1):
+        fold_key = f"fold_{fold_id}"
+        fold_data = results.get(fold_key, {})
+        ap = fold_data.get("ap", float("nan"))
+        detector = fold_data.get("test_detector", DETECTORS[fold_id - 1])
+        line = f"{fold_key:<8} {detector:<15} {ap:>8.4f}"
+        if has_oracle:
+            o_ap = oracle_ap.get(detector, float("nan"))
+            if o_ap and o_ap > 0:
+                gap = (o_ap - ap) / o_ap * 100
+                line += f"  {o_ap:>10.4f}  {gap:>8.1f}%"
+            else:
+                line += f"  {'N/A':>10}  {'N/A':>9}"
+        lines.append(line)
+
+    lines.append(sep)
+    mean_ap = results.get("mean_ap", float("nan"))
+    std_ap = results.get("std_ap", float("nan"))
+    lines.append(f"{'Mean':<8} {'':<15} {mean_ap:>8.4f}  +/- {std_ap:.4f}")
+    return "\n".join(lines)
