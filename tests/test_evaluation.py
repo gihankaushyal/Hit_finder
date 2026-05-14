@@ -76,3 +76,39 @@ def test_f1_empty_input():
     f1, thresh = f1_at_optimal_threshold(np.array([]), np.array([]))
     assert f1 == 0.0
     assert np.isnan(thresh)
+
+
+from src.evaluation.benchmark import DETECTORS, build_lodo_folds
+
+
+def test_detectors_constant():
+    assert set(DETECTORS) == {"AGIPD", "JUNGFRAU_4M", "ePix10k", "Eiger4M"}
+    assert len(DETECTORS) == 4
+
+
+def test_build_lodo_folds_count():
+    folds = build_lodo_folds()
+    assert len(folds) == 4
+
+
+def test_build_lodo_folds_structure():
+    folds = build_lodo_folds()
+    for fold in folds:
+        assert "fold_id" in fold
+        assert "test_detector" in fold
+        assert "train_detectors" in fold
+        assert fold["test_detector"] not in fold["train_detectors"]
+        assert len(fold["train_detectors"]) == 3
+
+
+def test_build_lodo_folds_all_detectors_tested():
+    folds = build_lodo_folds()
+    tested = {f["test_detector"] for f in folds}
+    assert tested == set(DETECTORS)
+
+
+def test_build_lodo_folds_fold1():
+    folds = build_lodo_folds()
+    fold1 = next(f for f in folds if f["fold_id"] == 1)
+    assert fold1["test_detector"] == "AGIPD"
+    assert set(fold1["train_detectors"]) == {"JUNGFRAU_4M", "ePix10k", "Eiger4M"}
