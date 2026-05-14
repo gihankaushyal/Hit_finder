@@ -3,7 +3,7 @@
 ## Current Phase Checklist
 
 - [x] Finalize NSF-style proposal draft
-- [ ] Formalize cross-detector benchmark protocol (leave-one-detector-out)
+- [x] Formalize cross-detector benchmark protocol (leave-one-detector-out)
 - [ ] Define synthetic data generation strategy
 - [ ] Verify Reborn handles all four target detector types
 - [ ] Confirm Sol HPC CUDA version and validate environment
@@ -30,7 +30,7 @@ Move to Phase 2 only when all five are checked.
 ## Open Decisions (resolve before Phase 2)
 
 - [ ] Synthetic data generation tool: nanoBragg vs. simulated augmentation vs. other
-- [ ] Formal definition of "detector-agnostic" as a measurable evaluation criterion
+- [x] Formal definition of "detector-agnostic" as a measurable evaluation criterion
 - [ ] ViT variant for SSL track: ViT-Base vs. ViT-Small (latency vs. capacity tradeoff)
 - [ ] Label format and storage convention for HDF5/CXI files
 - [ ] LCN window size parameter (needs ablation in Phase 3)
