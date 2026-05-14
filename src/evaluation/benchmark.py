@@ -60,6 +60,10 @@ def build_session_stratified_split(
     Sessions from test_detector get SPLIT_CROSS_DETECTOR.
     Remaining sessions are assigned greedy train/val/in_domain_test
     (sorted by frame_count descending, bucket fills in ratio order).
+
+    The algorithm is fully deterministic from the sorted order of sessions by
+    frame_count. The ``seed`` parameter is accepted for API forward-compatibility
+    but has no effect on the current implementation.
     """
     held_out = [s for s in sessions if s["detector"] == test_detector]
     train_pool = sorted(
@@ -82,7 +86,12 @@ def build_session_stratified_split(
     for s in held_out:
         splits[s["session_id"]] = SPLIT_CROSS_DETECTOR
 
-    return {"fold": fold, "variant": variant, "test_detector": test_detector, "splits": splits}
+    return {
+        "fold": fold,
+        "variant": variant,
+        "test_detector": test_detector,
+        "splits": splits,
+    }
 
 
 def save_split_artifact(artifact: dict, path: str | Path) -> None:

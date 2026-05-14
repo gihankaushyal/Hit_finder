@@ -1,5 +1,20 @@
+import tempfile
+from pathlib import Path
+
 import numpy as np
 import pytest
+
+from src.evaluation.benchmark import (
+    DETECTORS,
+    SPLIT_CROSS_DETECTOR,
+    SPLIT_IN_DOMAIN_TEST,
+    SPLIT_TRAIN,
+    SPLIT_VAL,
+    build_lodo_folds,
+    build_session_stratified_split,
+    load_split_artifact,
+    save_split_artifact,
+)
 from src.evaluation.metrics import average_precision, auc_roc, f1_at_optimal_threshold
 
 
@@ -78,9 +93,6 @@ def test_f1_empty_input():
     assert np.isnan(thresh)
 
 
-from src.evaluation.benchmark import DETECTORS, build_lodo_folds
-
-
 def test_detectors_constant():
     assert set(DETECTORS) == {"AGIPD", "JUNGFRAU_4M", "ePix10k", "Eiger4M"}
     assert len(DETECTORS) == 4
@@ -114,24 +126,13 @@ def test_build_lodo_folds_fold1():
     assert set(fold1["train_detectors"]) == {"JUNGFRAU_4M", "ePix10k", "Eiger4M"}
 
 
-import json
-import tempfile
-from pathlib import Path
-
-from src.evaluation.benchmark import (
-    SPLIT_CROSS_DETECTOR,
-    SPLIT_IN_DOMAIN_TEST,
-    SPLIT_TRAIN,
-    SPLIT_VAL,
-    build_session_stratified_split,
-    load_split_artifact,
-    save_split_artifact,
-)
-
-
 def _make_sessions(n_train: int, n_test: int) -> list[dict]:
     sessions = [
-        {"session_id": f"train_sess_{i}", "detector": "JUNGFRAU_4M", "frame_count": 100 + i}
+        {
+            "session_id": f"train_sess_{i}",
+            "detector": "JUNGFRAU_4M",
+            "frame_count": 100 + i,
+        }
         for i in range(n_train)
     ]
     sessions += [
@@ -150,12 +151,17 @@ def test_split_test_detector_sessions_held_out():
 
 
 def test_split_train_sessions_get_three_way_split():
-    sessions = _make_sessions(n_train=10, n_test=3)
+    sessions = _make_sessions(n_train=30, n_test=3)
     artifact = build_session_stratified_split(sessions, test_detector="AGIPD", seed=42)
-    train_splits = {
-        split for sid, split in artifact["splits"].items() if sid.startswith("train_sess")
-    }
-    assert train_splits.issubset({SPLIT_TRAIN, SPLIT_VAL, SPLIT_IN_DOMAIN_TEST})
+    train_splits = [
+        split
+        for sid, split in artifact["splits"].items()
+        if sid.startswith("train_sess")
+    ]
+    split_set = set(train_splits)
+    assert SPLIT_TRAIN in split_set
+    assert SPLIT_VAL in split_set
+    assert SPLIT_IN_DOMAIN_TEST in split_set
 
 
 def test_split_ratios_approximate():
