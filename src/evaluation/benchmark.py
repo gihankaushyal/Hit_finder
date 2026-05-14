@@ -22,6 +22,9 @@ __all__ = [
     "build_session_stratified_split",
     "save_split_artifact",
     "load_split_artifact",
+    "run_on_loader",
+    "run_fold",
+    "run_benchmark",
 ]
 
 DETECTORS: list[str] = ["AGIPD", "JUNGFRAU_4M", "ePix10k", "Eiger4M"]
@@ -106,3 +109,78 @@ def load_split_artifact(path: str | Path) -> dict:
     """Load split artifact from a JSON file."""
     with open(path) as f:
         return json.load(f)
+
+
+def run_on_loader(
+    model: torch.nn.Module,
+    loader: DataLoader,
+    device: str = "cpu",
+) -> dict[str, float]:
+    """Run model on a DataLoader; return ap, auc_roc, f1, threshold.
+
+    Model must output logits (pre-sigmoid) with shape [batch, 1] or [batch].
+    """
+    model.to(device)
+    model.eval()
+    all_scores: list[np.ndarray] = []
+    all_labels: list[np.ndarray] = []
+
+    with torch.no_grad():
+        for images, labels in loader:
+            images = images.to(device)
+            logits = model(images).squeeze(-1)
+            scores = torch.sigmoid(logits).cpu().numpy()
+            all_scores.append(scores)
+            all_labels.append(labels.numpy())
+
+    y_score = np.concatenate(all_scores)
+    y_true = np.concatenate(all_labels)
+
+    best_f1, threshold = f1_at_optimal_threshold(y_true, y_score)
+    return {
+        "ap": average_precision(y_true, y_score),
+        "auc_roc": auc_roc(y_true, y_score),
+        "f1": best_f1,
+        "threshold": threshold,
+    }
+
+
+def run_fold(
+    model: torch.nn.Module,
+    split_artifact: dict,
+    dataloader_factory: Callable[[list[str]], DataLoader],
+    device: str = "cpu",
+) -> dict[str, float]:
+    """Evaluate model on the held-out test-detector sessions for one fold.
+
+    dataloader_factory(session_ids) must return a DataLoader over those sessions.
+    """
+    held_out_ids = [
+        sid
+        for sid, split in split_artifact["splits"].items()
+        if split == SPLIT_CROSS_DETECTOR
+    ]
+    loader = dataloader_factory(held_out_ids)
+    metrics = run_on_loader(model, loader, device)
+    metrics["test_detector"] = split_artifact["test_detector"]
+    return metrics
+
+
+def run_benchmark(
+    model: torch.nn.Module,
+    split_artifacts: list[dict],
+    dataloader_factory: Callable[[list[str]], DataLoader],
+    device: str = "cpu",
+) -> dict:
+    """Run all folds and return per-fold results plus mean_ap and std_ap."""
+    results: dict = {}
+    for artifact in split_artifacts:
+        fold_id = artifact["fold"]
+        results[f"fold_{fold_id}"] = run_fold(
+            model, artifact, dataloader_factory, device
+        )
+
+    ap_values = [v["ap"] for v in results.values()]
+    results["mean_ap"] = float(np.mean(ap_values))
+    results["std_ap"] = float(np.std(ap_values))
+    return results

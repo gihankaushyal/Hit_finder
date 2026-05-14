@@ -3,6 +3,8 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+import torch
+from torch.utils.data import DataLoader, TensorDataset
 
 from src.evaluation.benchmark import (
     DETECTORS,
@@ -13,6 +15,9 @@ from src.evaluation.benchmark import (
     build_lodo_folds,
     build_session_stratified_split,
     load_split_artifact,
+    run_benchmark,
+    run_fold,
+    run_on_loader,
     save_split_artifact,
 )
 from src.evaluation.metrics import average_precision, auc_roc, f1_at_optimal_threshold
@@ -204,3 +209,72 @@ def test_save_load_split_artifact(tmp_path):
     save_split_artifact(artifact, path)
     loaded = load_split_artifact(path)
     assert loaded == artifact
+
+
+def _make_perfect_loader() -> DataLoader:
+    """DataLoader where logits [2.197, 1.386, -1.386, -2.197] give AP=1.0."""
+    y_true = torch.tensor([1, 1, 0, 0], dtype=torch.long)
+    images = torch.zeros(4, 1, 4, 4)
+    return DataLoader(TensorDataset(images, y_true), batch_size=4)
+
+
+class _PerfectModel(torch.nn.Module):
+    """Returns logits whose sigmoid gives [0.9, 0.8, 0.2, 0.1]."""
+
+    _LOGITS = torch.tensor([2.197, 1.386, -1.386, -2.197])
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self._LOGITS[: x.shape[0]].unsqueeze(1)
+
+
+def test_run_on_loader_perfect_model():
+    result = run_on_loader(_PerfectModel(), _make_perfect_loader(), device="cpu")
+    assert abs(result["ap"] - 1.0) < 1e-4
+    assert abs(result["auc_roc"] - 1.0) < 1e-4
+    assert abs(result["f1"] - 1.0) < 1e-4
+    assert "threshold" in result
+
+
+def test_run_on_loader_keys():
+    result = run_on_loader(_PerfectModel(), _make_perfect_loader(), device="cpu")
+    assert set(result.keys()) == {"ap", "auc_roc", "f1", "threshold"}
+
+
+def _fixed_factory(loader: DataLoader):
+    return lambda session_ids: loader
+
+
+def test_run_fold_returns_metrics_and_detector():
+    artifact = {
+        "fold": 1,
+        "variant": "strict_lodo",
+        "test_detector": "AGIPD",
+        "splits": {"sess_a": SPLIT_CROSS_DETECTOR, "sess_b": SPLIT_TRAIN},
+    }
+    result = run_fold(
+        _PerfectModel(), artifact, _fixed_factory(_make_perfect_loader()), device="cpu"
+    )
+    assert result["test_detector"] == "AGIPD"
+    assert "ap" in result
+
+
+def test_run_benchmark_covers_all_folds():
+    sessions = [
+        {"session_id": f"sess_{d}_{i}", "detector": d, "frame_count": 100}
+        for d in ["AGIPD", "JUNGFRAU_4M", "ePix10k", "Eiger4M"]
+        for i in range(5)
+    ]
+    folds = build_lodo_folds()
+    artifacts = [
+        build_session_stratified_split(
+            sessions, test_detector=f["test_detector"], fold=f["fold_id"], seed=42
+        )
+        for f in folds
+    ]
+    results = run_benchmark(
+        _PerfectModel(), artifacts, _fixed_factory(_make_perfect_loader()), device="cpu"
+    )
+    for fold_id in range(1, 5):
+        assert f"fold_{fold_id}" in results
+    assert "mean_ap" in results
+    assert "std_ap" in results
