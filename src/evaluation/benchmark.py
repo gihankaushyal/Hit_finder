@@ -69,6 +69,12 @@ def build_session_stratified_split(
     frame_count. The ``seed`` parameter is accepted for API forward-compatibility
     but has no effect on the current implementation.
     """
+    if variant == "semi_supervised_lodo":
+        raise NotImplementedError(
+            "semi_supervised_lodo is not yet implemented. "
+            "Phase 5 will add unlabeled held-out frames to the MAE pretraining pool."
+        )
+
     held_out = [s for s in sessions if s["detector"] == test_detector]
     train_pool = sorted(
         [s for s in sessions if s["detector"] != test_detector],
@@ -134,6 +140,14 @@ def run_on_loader(
             all_scores.append(scores)
             all_labels.append(labels.numpy())
 
+    if not all_scores:
+        return {
+            "ap": float("nan"),
+            "auc_roc": float("nan"),
+            "f1": float("nan"),
+            "threshold": float("nan"),
+        }
+
     y_score = np.concatenate(all_scores)
     y_true = np.concatenate(all_labels)
 
@@ -176,14 +190,19 @@ def run_benchmark(
     """Run all folds and return per-fold results plus mean_ap and std_ap."""
     results: dict = {}
     for artifact in split_artifacts:
-        fold_id = artifact["fold"]
+        fold_id = artifact.get("fold")
+        if fold_id is None:
+            raise ValueError(
+                f"split_artifact for test_detector='{artifact.get('test_detector')}' "
+                "has fold=None. Pass fold=<int> to build_session_stratified_split."
+            )
         results[f"fold_{fold_id}"] = run_fold(
             model, artifact, dataloader_factory, device
         )
 
     ap_values = [v["ap"] for v in results.values()]
     results["mean_ap"] = float(np.mean(ap_values))
-    results["std_ap"] = float(np.std(ap_values))
+    results["std_ap"] = float(np.std(ap_values, ddof=1))
     return results
 
 

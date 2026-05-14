@@ -311,3 +311,111 @@ def test_format_results_table_with_oracle():
     assert "%" in table
     # AGIPD fold: oracle=0.95, model=0.85 -> rel gap = (0.95-0.85)/0.95*100 = 10.5%
     assert "10.5%" in table
+
+
+# ---------------------------------------------------------------------------
+# Issue 1: AP tie-breaking regression test (must match sklearn convention)
+# ---------------------------------------------------------------------------
+
+
+def test_average_precision_tie_breaking_matches_sklearn():
+    """Regression: AP on tied scores must match sklearn's pessimistic convention.
+
+    sklearn uses np.argsort(probas_pred, kind='stable')[::-1] internally, which
+    puts higher-indexed samples first when scores are equal (no positive promotion).
+    Our implementation must produce the identical result.
+
+    Known values verified against sklearn 1.x:
+      y_true  = [1, 0, 1, 0],  y_score = [0.8, 0.8, 0.5, 0.5]
+      sklearn AP = 0.5  (pessimistic: negatives win ties)
+    """
+    y_true = np.array([1, 0, 1, 0])
+    y_score = np.array([0.8, 0.8, 0.5, 0.5])
+    assert abs(average_precision(y_true, y_score) - 0.5) < 1e-6
+
+
+def test_average_precision_tie_breaking_all_same_score():
+    """When all scores are identical, AP should equal the positive rate (pessimistic)."""
+    y_true = np.array([1, 0, 1, 0, 0])
+    y_score = np.array([0.5, 0.5, 0.5, 0.5, 0.5])
+    # 2 positives out of 5 — all tied, so precision at each step = cumulative TP/rank
+    # sklearn convention: order by index descending (4,3,2,1,0) → labels [0,0,1,0,1]
+    # tp=[0,0,1,1,2], p=[0,0,1/3,1/4,2/5], recall=[0,0,0.5,0.5,1.0]
+    # recall_diff=[0,0,0.5,0,0.5], AP = 1/3*0.5 + 2/5*0.5 = 1/6 + 1/5 = 11/30
+    expected = 1 / 3 * 0.5 + 2 / 5 * 0.5
+    assert abs(average_precision(y_true, y_score) - expected) < 1e-6
+
+
+# ---------------------------------------------------------------------------
+# Issue 2: run_benchmark raises on fold=None
+# ---------------------------------------------------------------------------
+
+
+def test_run_benchmark_raises_on_none_fold():
+    artifact_no_fold = {
+        "fold": None,
+        "test_detector": "AGIPD",
+        "splits": {"sess_a": SPLIT_CROSS_DETECTOR},
+    }
+    with pytest.raises(ValueError, match="fold=None"):
+        run_benchmark(
+            _PerfectModel(), [artifact_no_fold], _fixed_factory(_make_perfect_loader())
+        )
+
+
+# ---------------------------------------------------------------------------
+# Issue 3: std_ap uses sample std (ddof=1)
+# ---------------------------------------------------------------------------
+
+
+def test_run_benchmark_std_ap_uses_sample_std():
+    """std_ap must use ddof=1 (sample std), not ddof=0 (population std)."""
+    sessions = [
+        {"session_id": f"sess_{d}_{i}", "detector": d, "frame_count": 100}
+        for d in ["AGIPD", "JUNGFRAU_4M", "ePix10k", "Eiger4M"]
+        for i in range(5)
+    ]
+    folds = build_lodo_folds()
+    artifacts = [
+        build_session_stratified_split(
+            sessions, test_detector=f["test_detector"], fold=f["fold_id"], seed=42
+        )
+        for f in folds
+    ]
+    results = run_benchmark(
+        _PerfectModel(), artifacts, _fixed_factory(_make_perfect_loader()), device="cpu"
+    )
+    ap_values = [results[f"fold_{i}"]["ap"] for i in range(1, 5)]
+    expected_std = float(np.std(ap_values, ddof=1))
+    assert abs(results["std_ap"] - expected_std) < 1e-9
+
+
+# ---------------------------------------------------------------------------
+# Issue 4: build_session_stratified_split raises for semi_supervised_lodo
+# ---------------------------------------------------------------------------
+
+
+def test_split_raises_for_semi_supervised():
+    sessions = _make_sessions(n_train=10, n_test=3)
+    with pytest.raises(NotImplementedError):
+        build_session_stratified_split(
+            sessions, test_detector="AGIPD", variant="semi_supervised_lodo"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Issue 5: run_on_loader returns NaN dict for empty DataLoader
+# ---------------------------------------------------------------------------
+
+
+def _make_empty_loader() -> DataLoader:
+    """DataLoader with zero samples."""
+    dataset = TensorDataset(torch.zeros(0, 1, 4, 4), torch.zeros(0, dtype=torch.long))
+    return DataLoader(dataset, batch_size=4)
+
+
+def test_run_on_loader_empty_returns_nan():
+    result = run_on_loader(_PerfectModel(), _make_empty_loader(), device="cpu")
+    assert set(result.keys()) == {"ap", "auc_roc", "f1", "threshold"}
+    for key in ("ap", "auc_roc", "f1", "threshold"):
+        assert np.isnan(result[key]), f"Expected NaN for '{key}', got {result[key]}"

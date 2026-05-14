@@ -10,12 +10,18 @@ __all__ = ["average_precision", "auc_roc", "f1_at_optimal_threshold"]
 def average_precision(y_true: np.ndarray, y_score: np.ndarray) -> float:
     """Area under the precision-recall curve (interpolation-free, sklearn-compatible).
 
+    Tie-breaking convention: ``np.argsort(y_score, kind='stable')[::-1]``, which
+    matches sklearn's ``average_precision_score``.  For equal scores, higher-indexed
+    samples appear first (pessimistic ordering — positives are NOT promoted to the
+    front of a tie group).  This is the same stable-sort reversal sklearn uses
+    internally in ``precision_recall_curve``.
+
     Returns 0.0 if there are no positive examples.
     """
     y_true = np.asarray(y_true, dtype=float)
     y_score = np.asarray(y_score, dtype=float)
 
-    sorted_idx = np.lexsort((-y_true, -y_score))
+    sorted_idx = np.argsort(y_score, kind="stable")[::-1]
     y_sorted = y_true[sorted_idx]
 
     n_pos = y_sorted.sum()
