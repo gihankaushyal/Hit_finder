@@ -70,3 +70,9 @@ def test_f1_at_optimal_threshold_known_value():
     f1, thresh = f1_at_optimal_threshold(y_true, y_score)
     assert abs(f1 - 1.0) < 1e-6
     assert thresh == pytest.approx(0.9)
+
+
+def test_f1_empty_input():
+    f1, thresh = f1_at_optimal_threshold(np.array([]), np.array([]))
+    assert f1 == 0.0
+    assert np.isnan(thresh)

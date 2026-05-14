@@ -61,11 +61,11 @@ def f1_at_optimal_threshold(
     y_true = np.asarray(y_true, dtype=float)
     y_score = np.asarray(y_score, dtype=float)
 
-    thresholds = np.unique(y_score)
-    best_f1, best_thresh = 0.0, float(thresholds[0])
-
     if y_true.sum() == 0:
         return 0.0, float("nan")
+
+    thresholds = np.unique(y_score)
+    best_f1, best_thresh = 0.0, float(thresholds[0])
 
     for t in thresholds:
         y_pred = (y_score >= t).astype(float)
