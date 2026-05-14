@@ -5,7 +5,7 @@
 - [x] Finalize NSF-style proposal draft
 - [x] Formalize cross-detector benchmark protocol (leave-one-detector-out)
 - [ ] Define synthetic data generation strategy
-- [ ] Verify Reborn handles all four target detector types
+- [x] Verify Reborn handles all four target detector types
 - [ ] Confirm Sol HPC CUDA version and validate environment
 
 Move to Phase 2 only when all five are checked.
