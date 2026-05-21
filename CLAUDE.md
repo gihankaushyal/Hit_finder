@@ -267,7 +267,15 @@ wandb offline
 
    Do not consider a PR ready to merge until both skills have run and any high-confidence issues are resolved.
 
-11. **Branch and PR discipline.** Follow this workflow exactly:
+11. **Feature planning workflow.** Before implementing any significant feature, follow this sequence in order:
+   1. Run `/superpowers:brainstorming` and `/feature-dev:feature-dev` to explore the design space and identify implementation options.
+   2. Use the `AskUserQuestion` tool to gather feedback — ask enough targeted questions to reach ≥95% task clarity before writing any code.
+   3. Run `/superpowers:writing-plans` to produce a concrete, confirmed plan based on the answers.
+   4. Run `/superpowers:executing-plans` to implement the plan step by step, updating `PLANNING.md` as each checklist item is completed.
+
+   Do not skip brainstorming for "small" features — the sequence applies to all non-trivial work within a phase.
+
+12. **Branch and PR discipline.** Follow this workflow exactly:
 
    - **Phase start:** Create a `phase-XX` branch from `main` when a new phase begins (e.g. `phase-03`). All phase work lands here first.
    - **Feature branches:** For any significant feature within a phase, cut a `phase-XX-feature-name` branch from `phase-XX` (e.g. `phase-03-normalize`, `phase-03-pipeline`). Small fixes and doc updates may land directly on `phase-XX`.
