@@ -250,6 +250,8 @@ wandb offline
 
 7. **Cross-detector splits must be clean.** Data from the same beamtime session must not appear in both training and evaluation sets.
 
+8. **Update README.md on every phase transition.** When a phase changes in `PLANNING.md` (status → COMPLETE or CURRENT), immediately update `README.md` to match: advance the phase badge (`![Phase](...)`) and the Project Status table (mark the completed phase ✅ Complete, bold and mark the new phase 🔄 **IN PROGRESS**).
+
 ---
 
 ## Out of Scope — Never Introduce
