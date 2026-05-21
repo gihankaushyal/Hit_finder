@@ -21,9 +21,9 @@
 - [x] `SFXDataset` scaffold for supervised training (label loading deferred)
 - [x] DataLoader factories (`ssl_pretrain_loader`, `supervised_loader`)
 - [x] GitHub Actions CI — formatting check + full pytest suite on every push/PR
-- [ ] Resolve label format: JSON sidecar vs. embedded HDF5 dataset
+- [x] Resolve label format: JSON sidecar (`labels.json`, absolute path → 0/1)
 
-Move to Phase 3 only when all six are checked.
+~~Move to Phase 3 only when all six are checked.~~ ✅ All complete — Phase 3 next.
 
 ---
 
@@ -32,8 +32,8 @@ Move to Phase 3 only when all six are checked.
 | Phase | Description | Status |
 |-------|-------------|--------|
 | 1 | Proposal & methodology finalization | COMPLETE |
-| 2 | Data infrastructure (real + synthetic) | CURRENT |
-| 3 | Preprocessing implementation | Pending |
+| 2 | Data infrastructure (real + synthetic) | COMPLETE |
+| 3 | Preprocessing implementation | CURRENT |
 | 4 | Supervised baseline (ResNet18 → ResNet50) | Pending |
 | 5 | SSL model (MAE pretraining → fine-tune) | Pending |
 | 6 | Ablations & cross-detector benchmarking | Pending |
@@ -46,7 +46,7 @@ Move to Phase 3 only when all six are checked.
 
 - [x] Synthetic data generation tool: real `.img` images used for SSL pretraining; nanoBragg deferred to Phase 4
 - [x] Formal definition of "detector-agnostic" as a measurable evaluation criterion
-- [ ] **Label format and storage convention for HDF5/CXI files** ← blocking Phase 3
+- [x] **Label format and storage convention for HDF5/CXI files** — JSON sidecar (`labels.json`)
 - [ ] ViT variant for SSL track: ViT-Base vs. ViT-Small (latency vs. capacity tradeoff)
 - [ ] LCN window size parameter (needs ablation in Phase 3)
 

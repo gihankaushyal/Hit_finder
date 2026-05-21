@@ -39,6 +39,7 @@ def ssl_pretrain_loader(
 
 def supervised_loader(
     split_file: str | Path,
+    labels_file: str | Path,
     batch_size: int,
     num_workers: int = 4,
     shuffle: bool = True,
@@ -47,6 +48,8 @@ def supervised_loader(
 
     Args:
         split_file: Plaintext file listing absolute image paths, one per line.
+        labels_file: JSON file mapping absolute path strings to int labels
+            (1 = hit, 0 = non-hit).
         batch_size: Number of images per batch.
         num_workers: Parallel worker processes for data loading.
         shuffle: Whether to shuffle the dataset each epoch.
@@ -54,7 +57,7 @@ def supervised_loader(
     Returns:
         DataLoader yielding (image, label) pairs; image shape (B, 1, H, W).
     """
-    dataset = SFXDataset(split_file)
+    dataset = SFXDataset(split_file, labels_file)
     return DataLoader(
         dataset,
         batch_size=batch_size,

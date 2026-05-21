@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import h5py
@@ -34,6 +35,13 @@ def _make_split_file(tmp_path: Path, paths: list[Path]) -> Path:
     return split
 
 
+def _make_labels_file(tmp_path: Path, paths: list[Path]) -> Path:
+    labels = {str(p): i % 2 for i, p in enumerate(paths)}
+    labels_file = tmp_path / "labels.json"
+    labels_file.write_text(json.dumps(labels))
+    return labels_file
+
+
 class TestUnlabeledDataset:
     def test_len(self, tmp_path: Path) -> None:
         paths = _make_h5_files(tmp_path)
@@ -56,8 +64,6 @@ class TestUnlabeledDataset:
         ds = UnlabeledDataset(paths)
         _ = ds[0]
         _ = ds[1]
-        # If HDF5 files are held open across calls this raises on Windows /
-        # causes deadlocks with multiprocessing; verify no exception here.
         with h5py.File(paths[0], "r") as f:
             assert "entry/data/data" in f
 
@@ -66,21 +72,48 @@ class TestSFXDataset:
     def test_len(self, tmp_path: Path) -> None:
         paths = _make_h5_files(tmp_path)
         split = _make_split_file(tmp_path, paths)
-        ds = SFXDataset(split)
+        labels = _make_labels_file(tmp_path, paths)
+        ds = SFXDataset(split, labels)
         assert len(ds) == _N
 
-    def test_label_loading_raises(self, tmp_path: Path) -> None:
-        paths = _make_h5_files(tmp_path, n=1)
+    def test_getitem_returns_tensor_and_label(self, tmp_path: Path) -> None:
+        paths = _make_h5_files(tmp_path, n=2)
         split = _make_split_file(tmp_path, paths)
-        ds = SFXDataset(split)
-        with pytest.raises(NotImplementedError):
-            _ = ds[0]
+        labels = _make_labels_file(tmp_path, paths)
+        ds = SFXDataset(split, labels)
+        tensor, label = ds[0]
+        assert tensor.shape == (1, _H, _W)
+        assert tensor.dtype == torch.float32
+        assert label in (0, 1)
+
+    def test_labels_correct(self, tmp_path: Path) -> None:
+        paths = _make_h5_files(tmp_path, n=4)
+        split = _make_split_file(tmp_path, paths)
+        labels_dict = {str(p): i % 2 for i, p in enumerate(paths)}
+        labels_file = tmp_path / "labels.json"
+        labels_file.write_text(json.dumps(labels_dict))
+        ds = SFXDataset(split, labels_file)
+        for i, p in enumerate(paths):
+            _, label = ds[i]
+            assert label == i % 2
+
+    def test_missing_label_raises_key_error(self, tmp_path: Path) -> None:
+        paths = _make_h5_files(tmp_path, n=2)
+        split = _make_split_file(tmp_path, paths)
+        # labels file only covers the first path
+        labels_file = tmp_path / "labels.json"
+        labels_file.write_text(json.dumps({str(paths[0]): 1}))
+        ds = SFXDataset(split, labels_file)
+        ds[0]  # should succeed
+        with pytest.raises(KeyError):
+            ds[1]  # missing label
 
     def test_blank_lines_in_split_ignored(self, tmp_path: Path) -> None:
         paths = _make_h5_files(tmp_path, n=2)
         split = tmp_path / "split.txt"
         split.write_text(f"{paths[0]}\n\n{paths[1]}\n")
-        ds = SFXDataset(split)
+        labels = _make_labels_file(tmp_path, paths)
+        ds = SFXDataset(split, labels)
         assert len(ds) == 2
 
 
@@ -99,8 +132,22 @@ class TestSSLPretrainLoader:
 
 
 class TestSupervisedLoader:
-    def test_loader_created(self, tmp_path: Path) -> None:
-        paths = _make_h5_files(tmp_path, n=2)
+    def test_batch_shape_and_labels(self, tmp_path: Path) -> None:
+        paths = _make_h5_files(tmp_path)
         split = _make_split_file(tmp_path, paths)
-        loader = supervised_loader(split, batch_size=2, num_workers=0)
-        assert len(loader.dataset) == 2
+        labels = _make_labels_file(tmp_path, paths)
+        loader = supervised_loader(
+            split, labels, batch_size=2, num_workers=0, shuffle=False
+        )
+        images, lbls = next(iter(loader))
+        assert images.shape == (2, 1, _H, _W)
+        assert lbls.shape == (2,)
+
+    def test_full_epoch(self, tmp_path: Path) -> None:
+        paths = _make_h5_files(tmp_path)
+        split = _make_split_file(tmp_path, paths)
+        labels = _make_labels_file(tmp_path, paths)
+        loader = supervised_loader(
+            split, labels, batch_size=2, num_workers=0, shuffle=False
+        )
+        assert len(list(loader)) == _N // 2

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import torch
@@ -29,23 +30,31 @@ class UnlabeledDataset(Dataset):
 
 
 class SFXDataset(Dataset):
-    """Dataset of labeled HDF5/CXI diffraction images for supervised training.
+    """Dataset of labeled diffraction images for supervised training.
 
-    Reads a plaintext split file listing one absolute image path per line.
+    Reads a plaintext split file (one absolute image path per line) and a
+    JSON labels file mapping absolute path strings to integer labels
+    (1 = hit, 0 = non-hit).
+
+    Labels file format (labels.json):
+        {
+            "/absolute/path/to/frame_001.h5": 1,
+            "/absolute/path/to/frame_002.h5": 0
+        }
+
     Detector type is always read from file metadata — never inferred.
-
-    Label loading is not yet implemented: label format (JSON sidecar vs.
-    embedded HDF5 dataset) is an open Phase 2 decision. Calling __getitem__
-    raises NotImplementedError until resolved.
+    HDF5 files are opened lazily in __getitem__ to support multiprocessing.
     """
 
-    def __init__(self, split_file: str | Path) -> None:
+    def __init__(self, split_file: str | Path, labels_file: str | Path) -> None:
         split_file = Path(split_file)
         self._paths = [
             Path(line.strip())
             for line in split_file.read_text().splitlines()
             if line.strip()
         ]
+        labels_file = Path(labels_file)
+        self._labels: dict[str, int] = json.loads(labels_file.read_text())
 
     def __len__(self) -> int:
         return len(self._paths)
@@ -57,7 +66,9 @@ class SFXDataset(Dataset):
         return tensor, label
 
     def _load_label(self, idx: int) -> int:
-        raise NotImplementedError(
-            "Label loading not yet implemented. "
-            "Resolve label format (JSON sidecar vs. embedded HDF5) before Phase 3."
-        )
+        key = str(self._paths[idx])
+        if key not in self._labels:
+            raise KeyError(
+                f"No label for '{key}'. Verify the path appears in labels_file."
+            )
+        return int(self._labels[key])
