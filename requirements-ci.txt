@@ -10,4 +10,7 @@ fabio
 black
 pytest
 PyQt5
+scipy
+matplotlib
+scikit-image
 git+https://gitlab.com/kirianlab/reborn.git@gihan
