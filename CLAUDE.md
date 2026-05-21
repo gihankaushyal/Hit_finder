@@ -261,7 +261,13 @@ wandb offline
    - **At phase start** (after creating the `phase-XX` branch) — catch any stale content from the previous phase before writing new code.
    - **At phase end** (before opening the `phase-XX` → `main` PR) — update directory tree, commands, and data conventions to reflect everything added during the phase.
 
-10. **Branch and PR discipline.** Follow this workflow exactly:
+10. **Automated code review on every PR.** Whenever a pull request is created, triggered, or generated, immediately run both:
+   - `/code-review:code-review` — multi-agent review for bugs, CLAUDE.md compliance, and historical context
+   - `/requesting-code-review` — secondary review pass
+
+   Do not consider a PR ready to merge until both skills have run and any high-confidence issues are resolved.
+
+11. **Branch and PR discipline.** Follow this workflow exactly:
 
    - **Phase start:** Create a `phase-XX` branch from `main` when a new phase begins (e.g. `phase-03`). All phase work lands here first.
    - **Feature branches:** For any significant feature within a phase, cut a `phase-XX-feature-name` branch from `phase-XX` (e.g. `phase-03-normalize`, `phase-03-pipeline`). Small fixes and doc updates may land directly on `phase-XX`.
