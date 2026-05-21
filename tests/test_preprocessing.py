@@ -3,7 +3,11 @@
 import numpy as np
 import pytest
 
-from src.preprocessing.geometry import DETECTOR_LOADERS, assemble_image, load_pad_geometry
+from src.preprocessing.geometry import (
+    DETECTOR_LOADERS,
+    assemble_image,
+    load_pad_geometry,
+)
 
 DETECTORS = ["AGIPD", "JUNGFRAU_4M", "ePix10k", "Eiger4M"]
 
@@ -39,7 +43,12 @@ def test_load_pad_geometry_unknown_detector_raises():
 
 
 def test_all_four_detectors_covered():
-    assert set(DETECTOR_LOADERS.keys()) == {"AGIPD", "JUNGFRAU_4M", "ePix10k", "Eiger4M"}
+    assert set(DETECTOR_LOADERS.keys()) == {
+        "AGIPD",
+        "JUNGFRAU_4M",
+        "ePix10k",
+        "Eiger4M",
+    }
 
 
 # ---------------------------------------------------------------------------

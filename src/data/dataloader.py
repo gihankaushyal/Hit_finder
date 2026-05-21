@@ -9,6 +9,7 @@ from torch.utils.data import DataLoader
 
 from src.data.dataset import SFXDataset, UnlabeledDataset
 
+
 def ssl_pretrain_loader(
     file_list: list[str | Path],
     batch_size: int,
