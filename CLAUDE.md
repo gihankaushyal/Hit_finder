@@ -252,6 +252,14 @@ wandb offline
 
 8. **Update README.md on every phase transition.** When a phase changes in `PLANNING.md` (status → COMPLETE or CURRENT), immediately update `README.md` to match: advance the phase badge (`![Phase](...)`) and the Project Status table (mark the completed phase ✅ Complete, bold and mark the new phase 🔄 **IN PROGRESS**).
 
+9. **Branch and PR discipline.** Follow this workflow exactly:
+
+   - **Phase start:** Create a `phase-XX` branch from `main` when a new phase begins (e.g. `phase-03`). All phase work lands here first.
+   - **Feature branches:** For any significant feature within a phase, cut a `phase-XX-feature-name` branch from `phase-XX` (e.g. `phase-03-normalize`, `phase-03-pipeline`). Small fixes and doc updates may land directly on `phase-XX`.
+   - **Feature PR:** Once all tests pass on a `phase-XX-feature-name` branch, open a PR targeting `phase-XX` (not `main`). Do not merge directly — always go through a PR.
+   - **Phase PR:** When all planned features for the phase are merged into `phase-XX` and the full test suite passes, open a PR from `phase-XX` → `main` to close out the phase.
+   - **Naming conventions:** Use lowercase kebab-case for feature names (e.g. `phase-03-lcn-ablation`, not `phase-3-LCN_Ablation`). Phase numbers are always zero-padded to two digits.
+
 ---
 
 ## Out of Scope — Never Introduce
