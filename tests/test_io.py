@@ -80,26 +80,27 @@ class TestErrorHandling:
 
 # Update paths to real detector files on your machine before running.
 _REAL_DETECTOR_FILES: dict[str, str] = {
-    "AGIPD": "/path/to/agipd_frame.h5",
-    "JUNGFRAU_4M": "/path/to/jungfrau_frame.cxi",
-    "ePix10k": "/path/to/epix_frame.h5",
-    "Eiger4M": "/path/to/eiger_frame.h5",
+    "AGIPD": "/Users/gketawal/Desktop/detector-images/AGIPD.cxi",
+    "JUNGFRAU_4M": "/Users/gketawal/Desktop/detector-images/JUNFRAU.h5",
+    "ePix10k": "/Users/gketawal/Desktop/detector-images/epix10k.cxi",
+    "Eiger4M": "/Users/gketawal/Desktop/detector-images/Eiger4M.h5",
 }
 
-# Update these after running scripts/probe_hdf5.py if any key differs from entry/data/data.
+# Confirmed by running scripts/probe_hdf5.py on each detector file.
 _CONFIRMED_KEYS: dict[str, str] = {
-    "AGIPD": "entry/data/data",
-    "JUNGFRAU_4M": "entry/data/data",
-    "ePix10k": "entry/data/data",
+    "AGIPD": "entry_1/data_1/data",
+    "JUNGFRAU_4M": "entry_0000/instrument/Simulator/data",
+    "ePix10k": "entry_1/data_1/data",
     "Eiger4M": "entry/data/data",
 }
 
-# Expected ndim per detector (pre-assembly raw data).
+# Expected ndim per detector (pre-assembly raw data, opened directly via h5py).
+# All files are (N, H, W) — io.py returns frame[0] as 2D, but tests open raw.
 _EXPECTED_NDIM: dict[str, int] = {
-    "AGIPD": 3,  # (16, 512, 128)
-    "JUNGFRAU_4M": 3,  # (8, 512, 1024)
-    "ePix10k": 2,  # varies, at least 2D
-    "Eiger4M": 2,  # (2162, 2068)
+    "AGIPD": 3,  # raw (41, 5632, 384) — io.py returns frame[0] as 2D
+    "JUNGFRAU_4M": 3,  # raw (1000, 2164, 2068) — io.py returns frame[0] as 2D
+    "ePix10k": 3,  # raw (76, 5632, 384) — io.py returns frame[0] as 2D
+    "Eiger4M": 3,  # raw (500, 2167, 2070) — io.py returns frame[0] as 2D
 }
 
 
