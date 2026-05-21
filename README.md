@@ -6,8 +6,9 @@
 
 [![Python](https://img.shields.io/badge/python-3.11-3776AB?style=flat&logo=python&logoColor=white)](https://www.python.org/)
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.x-EE4C2C?style=flat&logo=pytorch&logoColor=white)](https://pytorch.org/)
+[![CI](https://github.com/gihankaushyal/Hit_finder/actions/workflows/ci.yml/badge.svg)](https://github.com/gihankaushyal/Hit_finder/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-28a745?style=flat)](LICENSE)
-![Phase](https://img.shields.io/badge/phase-1%20--%20Proposal-6f42c1?style=flat)
+![Phase](https://img.shields.io/badge/phase-2%20--%20Data%20Infrastructure-6f42c1?style=flat)
 [![ASU Fromme Lab](https://img.shields.io/badge/institution-ASU%20Fromme%20Lab-8C1D40?style=flat)](https://biodesign.asu.edu/petra-fromme)
 
 </div>
@@ -79,8 +80,8 @@ The model must generalize across all four detectors without per-detector retrain
 
 | Phase | Description | Status |
 |-------|-------------|--------|
-| **1** | Proposal & methodology finalization | 🔄 **IN PROGRESS** |
-| 2 | Data infrastructure (real + synthetic) | ⏳ Pending |
+| 1 | Proposal & methodology finalization | ✅ Complete |
+| **2** | Data infrastructure (real + synthetic) | 🔄 **IN PROGRESS** |
 | 3 | Preprocessing implementation | ⏳ Pending |
 | 4 | Supervised baseline (ResNet18 → ResNet50) | ⏳ Pending |
 | 5 | SSL model (MAE pretraining → fine-tune) | ⏳ Pending |
@@ -90,10 +91,33 @@ The model must generalize across all four detectors without per-detector retrain
 
 ## Setup
 
-> ⚠️ **Environment setup and training instructions are coming in Phase 2.**
-> The conda environment definition (`environment.yml`) and SLURM job scripts will be finalized once the Sol HPC data pipeline is established.
->
-> **Compute:** ASU Sol HPC — 8× NVIDIA A100 (80 GB) · SLURM scheduler · Partition: `htc`
+**Compute:** ASU Sol HPC — 8× NVIDIA A100 (80 GB) · SLURM scheduler
+
+```bash
+# Create environment (first time)
+conda env create -f environment.yml -n sfx-hitfinder
+
+# Activate (always in this order on Sol)
+module load mamba/latest
+conda activate sfx-hitfinder
+
+# Verify imports
+python -c "import torch, h5py, reborn, timm, fabio; print('imports OK')"
+
+# Verify CUDA on a compute node
+srun --partition=<your-partition> --gpus=1 --pty bash
+python -c "import torch; print(torch.cuda.is_available(), torch.version.cuda)"
+```
+
+**Supported image formats:** `.h5` / `.cxi` (HDF5, multi-panel detectors via Reborn) and `.img` (ADSC/MAR, pre-assembled, read via fabio).
+
+```bash
+# Run tests
+pytest tests/ -v
+
+# Check formatting before committing
+black src/ tests/
+```
 
 ## Citation
 

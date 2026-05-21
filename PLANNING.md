@@ -8,9 +8,22 @@
 - [x] Verify Reborn handles all four target detector types
 - [x] Confirm Sol HPC CUDA version and validate environment
 
-Move to Phase 2 only when all five are checked.
+~~Move to Phase 2 only when all five are checked.~~ ✅ All complete — Phase 2 active.
 
 > **Note:** Synthetic data strategy resolved — real `.img` diffraction images available as unlabeled SSL pretraining data. nanoBragg/augmentation deferred to Phase 4.
+
+---
+
+## Phase 2 Checklist
+
+- [x] Unified image reader (`src/preprocessing/io.py`) — `.img` via fabio, `.h5`/`.cxi` via h5py
+- [x] `UnlabeledDataset` for SSL pretraining (`.img` files, no labels)
+- [x] `SFXDataset` scaffold for supervised training (label loading deferred)
+- [x] DataLoader factories (`ssl_pretrain_loader`, `supervised_loader`)
+- [x] GitHub Actions CI — formatting check + full pytest suite on every push/PR
+- [ ] Resolve label format: JSON sidecar vs. embedded HDF5 dataset
+
+Move to Phase 3 only when all six are checked.
 
 ---
 
@@ -29,12 +42,12 @@ Move to Phase 2 only when all five are checked.
 
 ---
 
-## Open Decisions (resolve before Phase 2)
+## Open Decisions
 
 - [x] Synthetic data generation tool: real `.img` images used for SSL pretraining; nanoBragg deferred to Phase 4
 - [x] Formal definition of "detector-agnostic" as a measurable evaluation criterion
+- [ ] **Label format and storage convention for HDF5/CXI files** ← blocking Phase 3
 - [ ] ViT variant for SSL track: ViT-Base vs. ViT-Small (latency vs. capacity tradeoff)
-- [ ] Label format and storage convention for HDF5/CXI files
 - [ ] LCN window size parameter (needs ablation in Phase 3)
 
 ---
@@ -47,7 +60,7 @@ Move to Phase 2 only when all five are checked.
 | B1 | 224×224 resize destroys sub-pixel Bragg peaks | Phase 3–4 |
 | A4 | Synthetic data too clean to reflect real facility data | Phase 4 |
 | C1 | Reborn coverage gaps for specific detector configurations | Phase 3 |
-| D1 | Multi-detector real data access not guaranteed | Phase 2 |
+| D1 | Multi-detector real data access not guaranteed | Phase 2 — partially mitigated (.img files available) |
 
 Full risk register: `PhD_Project_Gaps_and_Pitfalls.md`
 
