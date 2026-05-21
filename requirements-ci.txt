@@ -9,4 +9,5 @@ wandb
 fabio
 black
 pytest
+PyQt5
 git+https://gitlab.com/kirianlab/reborn.git@gihan
