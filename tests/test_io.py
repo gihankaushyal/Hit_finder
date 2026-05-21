@@ -72,3 +72,64 @@ class TestErrorHandling:
         path.write_bytes(b"dummy")
         with pytest.raises(ValueError, match="Unsupported file extension"):
             read_image(path)
+
+
+# ---------------------------------------------------------------------------
+# Real-data HDF5 key confirmation (skipped when files absent — CI safe)
+# ---------------------------------------------------------------------------
+
+# Update paths to real detector files on your machine before running.
+_REAL_DETECTOR_FILES: dict[str, str] = {
+    "AGIPD": "/Users/gketawal/Desktop/detector-images/AGIPD.cxi",
+    "JUNGFRAU_4M": "/Users/gketawal/Desktop/detector-images/JUNFRAU.h5",
+    "ePix10k": "/Users/gketawal/Desktop/detector-images/epix10k.cxi",
+    "Eiger4M": "/Users/gketawal/Desktop/detector-images/Eiger4M.h5",
+}
+
+# Confirmed by running scripts/probe_hdf5.py on each detector file.
+_CONFIRMED_KEYS: dict[str, str] = {
+    "AGIPD": "entry_1/data_1/data",
+    "JUNGFRAU_4M": "entry_0000/instrument/Simulator/data",
+    "ePix10k": "entry_1/data_1/data",
+    "Eiger4M": "entry/data/data",
+}
+
+# Expected ndim per detector (pre-assembly raw data, opened directly via h5py).
+# All files are (N, H, W) — io.py returns frame[0] as 2D, but tests open raw.
+_EXPECTED_NDIM: dict[str, int] = {
+    "AGIPD": 3,  # raw (41, 5632, 384) — io.py returns frame[0] as 2D
+    "JUNGFRAU_4M": 3,  # raw (1000, 2164, 2068) — io.py returns frame[0] as 2D
+    "ePix10k": 3,  # raw (76, 5632, 384) — io.py returns frame[0] as 2D
+    "Eiger4M": 3,  # raw (500, 2167, 2070) — io.py returns frame[0] as 2D
+}
+
+
+@pytest.mark.parametrize("detector", list(_REAL_DETECTOR_FILES.keys()))
+def test_real_hdf5_key_exists(detector: str) -> None:
+    path = Path(_REAL_DETECTOR_FILES[detector])
+    if not path.exists():
+        pytest.skip(f"Real data file not available: {path}")
+    key = _CONFIRMED_KEYS[detector]
+    with h5py.File(path, "r") as f:
+        assert key in f, (
+            f"Key '{key}' not found in {detector} file. "
+            f"Run scripts/probe_hdf5.py to find the correct key."
+        )
+
+
+@pytest.mark.parametrize("detector", list(_REAL_DETECTOR_FILES.keys()))
+def test_real_hdf5_data_shape(detector: str) -> None:
+    path = Path(_REAL_DETECTOR_FILES[detector])
+    if not path.exists():
+        pytest.skip(f"Real data file not available: {path}")
+    key = _CONFIRMED_KEYS[detector]
+    with h5py.File(path, "r") as f:
+        data = f[key][()]
+    expected_ndim = _EXPECTED_NDIM[detector]
+    assert data.ndim == expected_ndim, (
+        f"{detector}: expected {expected_ndim}D array, got {data.ndim}D "
+        f"with shape {data.shape}"
+    )
+    assert np.issubdtype(
+        data.dtype, np.number
+    ), f"{detector}: data dtype {data.dtype} is not numeric"
