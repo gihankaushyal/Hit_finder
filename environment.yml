@@ -19,3 +19,4 @@ dependencies:
     - git+https://gitlab.com/kirianlab/reborn.git@gihan
     - black
     - pytest
+    - fabio
