@@ -63,11 +63,12 @@ sfx-hitfinder/
 │   └── ssl/
 ├── src/
 │   ├── preprocessing/           # Reborn wrappers, GCN, LCN, resize
+│   │   ├── io.py                # unified reader: .img (fabio) / .h5 / .cxi (h5py)
 │   │   ├── geometry.py          # Reborn geometry handling
 │   │   ├── normalize.py         # GCN and LCN implementations
 │   │   └── pipeline.py          # full preprocessing pipeline
 │   ├── data/
-│   │   ├── dataset.py           # PyTorch Dataset for CXI/HDF5
+│   │   ├── dataset.py           # UnlabeledDataset (.img/SSL) + SFXDataset (labeled HDF5)
 │   │   ├── dataloader.py        # DataLoader factories
 │   │   └── synthetic.py         # synthetic data generation
 │   ├── models/
@@ -86,8 +87,10 @@ sfx-hitfinder/
 │   └── env_check.sh
 ├── tests/
 │   ├── test_preprocessing.py
+│   ├── test_io.py
 │   ├── test_dataset.py
-│   └── test_models.py
+│   ├── test_models.py
+│   └── test_evaluation.py
 ├── notebooks/                   # exploration only, never source of truth
 ├── docs/
 │   ├── architecture.md
@@ -151,8 +154,9 @@ python src/training/train_supervised.py --config configs/supervised/resnet18.yam
 ### File Formats
 
 - Raw detector images: HDF5 (`.h5`) or CXI (`.cxi`) — CXI is HDF5 with a defined schema
+- Assembled images (unlabeled SSL data): `.img` — ADSC/MAR format, read via `fabio`; **already assembled, skip Reborn geometry step**
 - Geometry files: Reborn-compatible, co-located with or referenced from image files
-- Labels: JSON sidecar files or embedded HDF5 datasets — decision TBD in Phase 2
+- Labels: JSON sidecar vs. embedded HDF5 dataset — open decision, label loading raises `NotImplementedError` until resolved
 - Train/val/test splits: plaintext `.txt` files listing absolute file paths, one per line
 
 ### Detector Types and Expected Image Dimensions (pre-assembly)
@@ -184,7 +188,7 @@ def __getitem__(self, idx):
 ```bash
 # Environment
 conda env create -f environment.yml -n sfx-hitfinder
-python -c "import torch, h5py, reborn, timm; print('imports OK')"
+python -c "import torch, h5py, reborn, timm, fabio; print('imports OK')"
 
 # Tests
 pytest tests/ -v                                      # full suite

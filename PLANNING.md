@@ -4,11 +4,13 @@
 
 - [x] Finalize NSF-style proposal draft
 - [x] Formalize cross-detector benchmark protocol (leave-one-detector-out)
-- [ ] Define synthetic data generation strategy
+- [x] Define synthetic data generation strategy
 - [x] Verify Reborn handles all four target detector types
 - [x] Confirm Sol HPC CUDA version and validate environment
 
 Move to Phase 2 only when all five are checked.
+
+> **Note:** Synthetic data strategy resolved — real `.img` diffraction images available as unlabeled SSL pretraining data. nanoBragg/augmentation deferred to Phase 4.
 
 ---
 
@@ -16,8 +18,8 @@ Move to Phase 2 only when all five are checked.
 
 | Phase | Description | Status |
 |-------|-------------|--------|
-| 1 | Proposal & methodology finalization | CURRENT |
-| 2 | Data infrastructure (real + synthetic) | Pending |
+| 1 | Proposal & methodology finalization | COMPLETE |
+| 2 | Data infrastructure (real + synthetic) | CURRENT |
 | 3 | Preprocessing implementation | Pending |
 | 4 | Supervised baseline (ResNet18 → ResNet50) | Pending |
 | 5 | SSL model (MAE pretraining → fine-tune) | Pending |
@@ -29,7 +31,7 @@ Move to Phase 2 only when all five are checked.
 
 ## Open Decisions (resolve before Phase 2)
 
-- [ ] Synthetic data generation tool: nanoBragg vs. simulated augmentation vs. other
+- [x] Synthetic data generation tool: real `.img` images used for SSL pretraining; nanoBragg deferred to Phase 4
 - [x] Formal definition of "detector-agnostic" as a measurable evaluation criterion
 - [ ] ViT variant for SSL track: ViT-Base vs. ViT-Small (latency vs. capacity tradeoff)
 - [ ] Label format and storage convention for HDF5/CXI files
