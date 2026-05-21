@@ -257,7 +257,11 @@ wandb offline
 
 8. **Update README.md on every phase transition.** When a phase changes in `PLANNING.md` (status → COMPLETE or CURRENT), immediately update `README.md` to match: advance the phase badge (`![Phase](...)`) and the Project Status table (mark the completed phase ✅ Complete, bold and mark the new phase 🔄 **IN PROGRESS**).
 
-9. **Branch and PR discipline.** Follow this workflow exactly:
+9. **CLAUDE.md audit at every phase boundary.** Run `/claude-md-management:claude-md-improver` twice per phase:
+   - **At phase start** (after creating the `phase-XX` branch) — catch any stale content from the previous phase before writing new code.
+   - **At phase end** (before opening the `phase-XX` → `main` PR) — update directory tree, commands, and data conventions to reflect everything added during the phase.
+
+10. **Branch and PR discipline.** Follow this workflow exactly:
 
    - **Phase start:** Create a `phase-XX` branch from `main` when a new phase begins (e.g. `phase-03`). All phase work lands here first.
    - **Feature branches:** For any significant feature within a phase, cut a `phase-XX-feature-name` branch from `phase-XX` (e.g. `phase-03-normalize`, `phase-03-pipeline`). Small fixes and doc updates may land directly on `phase-XX`.
