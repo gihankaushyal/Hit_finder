@@ -89,6 +89,8 @@ sfx-hitfinder/
 │   ├── test_preprocessing.py
 │   ├── test_io.py
 │   ├── test_dataset.py
+│   ├── test_normalize.py
+│   ├── test_pipeline.py
 │   ├── test_models.py
 │   └── test_evaluation.py
 ├── notebooks/                   # exploration only, never source of truth
@@ -156,7 +158,7 @@ python src/training/train_supervised.py --config configs/supervised/resnet18.yam
 - Raw detector images: HDF5 (`.h5`) or CXI (`.cxi`) — CXI is HDF5 with a defined schema
 - Assembled images (unlabeled SSL data): `.img` — ADSC/MAR format, read via `fabio`; **already assembled, skip Reborn geometry step**
 - Geometry files: Reborn-compatible, co-located with or referenced from image files
-- Labels: JSON sidecar vs. embedded HDF5 dataset — open decision, label loading raises `NotImplementedError` until resolved
+- Labels: JSON sidecar (`labels.json`) — keys are absolute file paths, values are 0 (non-hit) or 1 (hit)
 - Train/val/test splits: plaintext `.txt` files listing absolute file paths, one per line
 
 ### Detector Types and Expected Image Dimensions (pre-assembly)
@@ -191,12 +193,15 @@ conda env create -f environment.yml -n sfx-hitfinder
 python -c "import torch, h5py, reborn, timm, fabio; print('imports OK')"
 
 # Tests
-pytest tests/ -v                                      # full suite
-pytest tests/test_preprocessing.py -v                # single module
-pytest tests/test_preprocessing.py::test_gcn_order -v  # single test
+pytest tests/ -v                                                                      # full suite
+pytest tests/test_normalize.py -v                                                     # single module
+pytest tests/test_normalize.py::TestNormalizationOrder -v                             # single test class
 
 # Formatting (run before every commit)
 black src/ tests/
+
+# CI dependencies (also usable locally)
+pip install -r requirements-ci.txt
 
 # SLURM
 sbatch scripts/submit_supervised.sh
