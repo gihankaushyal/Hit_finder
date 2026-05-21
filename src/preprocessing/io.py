@@ -40,7 +40,8 @@ def read_image(path: str | Path) -> np.ndarray:
     if suffix == ".img":
         import fabio
 
-        return fabio.open(str(path)).data.astype(np.float32)
+        with fabio.open(str(path)) as img_file:
+            return img_file.data.astype(np.float32)
 
     with h5py.File(path, "r") as f:
         return f["entry/data/data"][()].astype(np.float32)

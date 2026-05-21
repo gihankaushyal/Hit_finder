@@ -9,9 +9,6 @@ from torch.utils.data import DataLoader
 
 from src.data.dataset import SFXDataset, UnlabeledDataset
 
-_PIN_MEMORY = torch.cuda.is_available()
-
-
 def ssl_pretrain_loader(
     file_list: list[str | Path],
     batch_size: int,
@@ -35,7 +32,7 @@ def ssl_pretrain_loader(
         batch_size=batch_size,
         shuffle=shuffle,
         num_workers=num_workers,
-        pin_memory=_PIN_MEMORY,
+        pin_memory=torch.cuda.is_available(),
     )
 
 
@@ -62,5 +59,5 @@ def supervised_loader(
         batch_size=batch_size,
         shuffle=shuffle,
         num_workers=num_workers,
-        pin_memory=_PIN_MEMORY,
+        pin_memory=torch.cuda.is_available(),
     )
