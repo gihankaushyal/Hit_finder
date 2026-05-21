@@ -17,14 +17,10 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-
-      - name: Install PyTorch (CPU-only)
-        run: pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+          cache-dependency-path: requirements-ci.txt
 
       - name: Install dependencies
-        run: |
-          pip install h5py numpy pyyaml timm wandb fabio black pytest
-          pip install git+https://gitlab.com/kirianlab/reborn.git@gihan
+        run: pip install -r requirements-ci.txt
 
       - name: Check formatting
         run: black --check src/ tests/
