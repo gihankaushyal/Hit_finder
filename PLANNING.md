@@ -34,6 +34,17 @@
 | 1 | Proposal & methodology finalization | COMPLETE |
 | 2 | Data infrastructure (real + synthetic) | COMPLETE |
 | 3 | Preprocessing implementation | CURRENT |
+
+## Phase 3 Checklist
+
+- [x] `normalize.py` — GCN and LCN implementations with ε-guarded denominators
+- [x] `pipeline.py` — full pipeline: assemble → `_to_2d` → GCN → LCN → resize 224×224
+- [x] `tests/test_normalize.py` — unit tests for GCN and LCN (including order enforcement)
+- [x] `tests/test_pipeline.py` — end-to-end tests for all four detectors
+- [ ] Ablate LCN window size (window=9 default; compare 3, 9, 15, 31 on validation set)
+- [ ] Confirm HDF5 key `entry/data/data` against real detector files
+
+Move to Phase 4 only when all six are checked.
 | 4 | Supervised baseline (ResNet18 → ResNet50) | Pending |
 | 5 | SSL model (MAE pretraining → fine-tune) | Pending |
 | 6 | Ablations & cross-detector benchmarking | Pending |

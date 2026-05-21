@@ -1,1 +1,87 @@
 """Full preprocessing pipeline: geometry → GCN → LCN → resize to 224×224."""
+
+from __future__ import annotations
+
+import numpy as np
+from skimage.transform import resize as sk_resize
+
+from src.preprocessing.geometry import assemble_image
+from src.preprocessing.normalize import LCN_WINDOW_DEFAULT, gcn, lcn
+
+TARGET_SIZE: tuple[int, int] = (224, 224)
+
+
+def _to_2d(
+    image: np.ndarray,
+    pad_ss: int | None = None,
+    pad_fs: int | None = None,
+) -> np.ndarray:
+    """Reshape any assembled detector output to 2D (H, W).
+
+    - 2D input: returned unchanged.
+    - 3D input (AGIPD modules): row-stacked → (n_modules * n_ss, n_fs).
+    - 1D input (Eiger4M monolithic): reshaped using pad_ss × pad_fs.
+
+    Args:
+        image: Assembled array from assemble_image().
+        pad_ss: Slow-scan dimension of a single Eiger4M panel (required for 1D).
+        pad_fs: Fast-scan dimension of a single Eiger4M panel (required for 1D).
+
+    Raises:
+        ValueError: If input is 1D and pad_ss/pad_fs are not provided.
+    """
+    if image.ndim == 2:
+        return image
+    if image.ndim == 3:
+        return image.reshape(-1, image.shape[-1])
+    if image.ndim == 1:
+        if pad_ss is None or pad_fs is None:
+            raise ValueError(
+                "pad_ss and pad_fs are required to reshape 1D (Eiger4M) output."
+            )
+        return image.reshape(pad_ss, pad_fs)
+    raise ValueError(f"Unexpected image ndim {image.ndim}; expected 1, 2, or 3.")
+
+
+def preprocess(
+    panel_data: list[np.ndarray],
+    pads: object,
+    lcn_window: int = LCN_WINDOW_DEFAULT,
+) -> np.ndarray:
+    """Full pipeline: assemble → GCN → LCN → resize to 224×224.
+
+    This pipeline is shared and identical for both Track 1 (supervised) and
+    Track 2 (SSL/MAE). Do not modify one track's preprocessing without
+    applying the same change to both.
+
+    Steps (order is non-negotiable):
+        1. Reborn geometry assembly (multi-panel → single array)
+        2. Flatten to 2D if needed (AGIPD 3D → 2D, Eiger4M 1D → 2D)
+        3. GCN: global mean/std normalization
+        4. LCN: local mean/std normalization
+        5. Resize to TARGET_SIZE (224 × 224), anti-aliased
+
+    Args:
+        panel_data: List of 2D arrays (one per detector panel).
+        pads: PADGeometryList from load_pad_geometry().
+        lcn_window: LCN neighbourhood size (ablation parameter, default 9).
+
+    Returns:
+        float32 array of shape (224, 224).
+    """
+    assembled = assemble_image(pads, panel_data)
+
+    pad_ss = pads[0].n_ss if len(pads) == 1 else None
+    pad_fs = pads[0].n_fs if len(pads) == 1 else None
+    image_2d = _to_2d(assembled, pad_ss=pad_ss, pad_fs=pad_fs)
+
+    image_gcn = gcn(image_2d)
+    image_lcn = lcn(image_gcn, window=lcn_window)
+
+    resized = sk_resize(
+        image_lcn,
+        TARGET_SIZE,
+        anti_aliasing=True,
+        preserve_range=True,
+    )
+    return resized.astype(np.float32)
