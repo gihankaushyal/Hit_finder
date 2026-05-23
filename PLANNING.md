@@ -42,7 +42,7 @@
 - [x] `tests/test_normalize.py` — unit tests for GCN and LCN (including order enforcement)
 - [x] `tests/test_pipeline.py` — end-to-end tests for all four detectors
 - [x] Ablate LCN window size — window=9 confirmed (window=31 shows panel-edge artifacts; 3/9/15 equivalent on non-hit frames; 9 is smallest safe choice)
-- [ ] Confirm HDF5 key `entry/data/data` against real detector files
+- [x] Confirm HDF5 key `entry/data/data` against real detector files — see `docs/data_spec.md`
 
 Move to Phase 4 only when all six are checked.
 | 4 | Supervised baseline (ResNet18 → ResNet50) | Pending |
