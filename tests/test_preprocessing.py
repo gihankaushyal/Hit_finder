@@ -6,6 +6,7 @@ import pytest
 from src.preprocessing.geometry import (
     DETECTOR_LOADERS,
     assemble_image,
+    jungfrau4m_crystfel_pad_geometry_list,
     load_pad_geometry,
 )
 
@@ -52,6 +53,40 @@ def test_all_four_detectors_covered():
 
 
 # ---------------------------------------------------------------------------
+# jungfrau4m_crystfel_pad_geometry_list
+# ---------------------------------------------------------------------------
+
+
+def test_jungfrau4m_crystfel_geometry_has_8_panels():
+    pads = jungfrau4m_crystfel_pad_geometry_list()
+    assert len(pads) == 8
+
+
+def test_jungfrau4m_crystfel_geometry_pixel_count():
+    pads = jungfrau4m_crystfel_pad_geometry_list()
+    assert pads.n_pixels == 8 * 514 * 1030
+
+
+def test_jungfrau4m_crystfel_geometry_default_distance_is_103mm():
+    """Default distance must be ~103 mm — matches the source .geom file."""
+    pads = jungfrau4m_crystfel_pad_geometry_list()
+    dist = pads.average_detector_distance(beam_vec=[0, 0, 1])
+    assert abs(dist - 0.103) < 1e-3
+
+
+def test_jungfrau4m_load_pad_geometry_default_distance_is_103mm():
+    """load_pad_geometry('JUNGFRAU_4M') with no explicit distance must use 103 mm."""
+    pads = load_pad_geometry("JUNGFRAU_4M")
+    dist = pads.average_detector_distance(beam_vec=[0, 0, 1])
+    assert abs(dist - 0.103) < 1e-3
+
+
+def test_jungfrau4m_crystfel_geometry_defines_slicing():
+    pads = jungfrau4m_crystfel_pad_geometry_list()
+    assert pads.defines_slicing()
+
+
+# ---------------------------------------------------------------------------
 # assemble_image
 # ---------------------------------------------------------------------------
 
@@ -65,12 +100,16 @@ def test_assemble_image_returns_numpy_array(detector_type):
 
 
 @pytest.mark.parametrize("detector_type", DETECTORS)
-def test_assemble_image_total_pixels_matches_pad_geometry(detector_type):
-    """Assembled array must contain exactly n_pixels elements."""
+def test_assemble_image_output_covers_all_pixels(detector_type):
+    """Assembled output must contain at least n_pixels elements.
+
+    PADAssembler-based geometries (e.g. JUNGFRAU_4M) produce a 2D lab-frame
+    grid that is larger than n_pixels because gap pixels are zero-filled.
+    """
     pads = load_pad_geometry(detector_type)
     panel_data = [np.ones((p.n_ss, p.n_fs)) for p in pads]
     img = assemble_image(pads, panel_data)
-    assert img.size == pads.n_pixels
+    assert img.size >= pads.n_pixels
 
 
 @pytest.mark.parametrize("detector_type", DETECTORS)
