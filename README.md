@@ -8,7 +8,7 @@
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.x-EE4C2C?style=flat&logo=pytorch&logoColor=white)](https://pytorch.org/)
 [![CI](https://github.com/gihankaushyal/Hit_finder/actions/workflows/ci.yml/badge.svg)](https://github.com/gihankaushyal/Hit_finder/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-28a745?style=flat)](LICENSE)
-![Phase](https://img.shields.io/badge/phase-3%20--%20Preprocessing-6f42c1?style=flat)
+![Phase](https://img.shields.io/badge/phase-4%20--%20Supervised%20Baseline-6f42c1?style=flat)
 [![ASU Fromme Lab](https://img.shields.io/badge/institution-ASU%20Fromme%20Lab-8C1D40?style=flat)](https://biodesign.asu.edu/petra-fromme)
 
 </div>
@@ -82,8 +82,8 @@ The model must generalize across all four detectors without per-detector retrain
 |-------|-------------|--------|
 | 1 | Proposal & methodology finalization | ✅ Complete |
 | 2 | Data infrastructure (real + synthetic) | ✅ Complete |
-| **3** | Preprocessing implementation | 🔄 **IN PROGRESS** |
-| 4 | Supervised baseline (ResNet18 → ResNet50) | ⏳ Pending |
+| 3 | Preprocessing implementation | ✅ Complete |
+| **4** | Supervised baseline (ResNet18 → ResNet50) | 🔄 **IN PROGRESS** |
 | 5 | SSL model (MAE pretraining → fine-tune) | ⏳ Pending |
 | 6 | Ablations & cross-detector benchmarking | ⏳ Pending |
 | 7 | Deployment preparation | 🔮 Future |

@@ -89,6 +89,8 @@ sfx-hitfinder/
 │   ├── test_preprocessing.py
 │   ├── test_io.py
 │   ├── test_dataset.py
+│   ├── test_normalize.py
+│   ├── test_pipeline.py
 │   ├── test_models.py
 │   └── test_evaluation.py
 ├── notebooks/                   # exploration only, never source of truth
@@ -156,7 +158,7 @@ python src/training/train_supervised.py --config configs/supervised/resnet18.yam
 - Raw detector images: HDF5 (`.h5`) or CXI (`.cxi`) — CXI is HDF5 with a defined schema
 - Assembled images (unlabeled SSL data): `.img` — ADSC/MAR format, read via `fabio`; **already assembled, skip Reborn geometry step**
 - Geometry files: Reborn-compatible, co-located with or referenced from image files
-- Labels: JSON sidecar vs. embedded HDF5 dataset — open decision, label loading raises `NotImplementedError` until resolved
+- Labels: JSON sidecar (`labels.json`) — keys are absolute file paths, values are 0 (non-hit) or 1 (hit)
 - Train/val/test splits: plaintext `.txt` files listing absolute file paths, one per line
 
 ### Detector Types and Expected Image Dimensions (pre-assembly)
@@ -191,12 +193,15 @@ conda env create -f environment.yml -n sfx-hitfinder
 python -c "import torch, h5py, reborn, timm, fabio; print('imports OK')"
 
 # Tests
-pytest tests/ -v                                      # full suite
-pytest tests/test_preprocessing.py -v                # single module
-pytest tests/test_preprocessing.py::test_gcn_order -v  # single test
+pytest tests/ -v                                                                      # full suite
+pytest tests/test_normalize.py -v                                                     # single module
+pytest tests/test_normalize.py::TestNormalizationOrder -v                             # single test class
 
 # Formatting (run before every commit)
 black src/ tests/
+
+# CI dependencies (also usable locally)
+pip install -r requirements-ci.txt
 
 # SLURM
 sbatch scripts/submit_supervised.sh
@@ -252,7 +257,25 @@ wandb offline
 
 8. **Update README.md on every phase transition.** When a phase changes in `PLANNING.md` (status → COMPLETE or CURRENT), immediately update `README.md` to match: advance the phase badge (`![Phase](...)`) and the Project Status table (mark the completed phase ✅ Complete, bold and mark the new phase 🔄 **IN PROGRESS**).
 
-9. **Branch and PR discipline.** Follow this workflow exactly:
+9. **CLAUDE.md audit at every phase boundary.** Run `/claude-md-management:claude-md-improver` twice per phase:
+   - **At phase start** (after creating the `phase-XX` branch) — catch any stale content from the previous phase before writing new code.
+   - **At phase end** (before opening the `phase-XX` → `main` PR) — update directory tree, commands, and data conventions to reflect everything added during the phase.
+
+10. **Automated code review on every PR.** Whenever a pull request is created, triggered, or generated, immediately run both:
+   - `/code-review:code-review` — multi-agent review for bugs, CLAUDE.md compliance, and historical context
+   - `/requesting-code-review` — secondary review pass
+
+   Do not consider a PR ready to merge until both skills have run and any high-confidence issues are resolved.
+
+11. **Feature planning workflow.** Before implementing any significant feature, follow this sequence in order:
+   1. Run `/superpowers:brainstorming` and `/feature-dev:feature-dev` to explore the design space and identify implementation options.
+   2. Use the `AskUserQuestion` tool to gather feedback — ask enough targeted questions to reach ≥95% task clarity before writing any code.
+   3. Run `/superpowers:writing-plans` to produce a concrete, confirmed plan based on the answers.
+   4. Run `/superpowers:executing-plans` to implement the plan step by step, updating `PLANNING.md` as each checklist item is completed.
+
+   Do not skip brainstorming for "small" features — the sequence applies to all non-trivial work within a phase.
+
+12. **Branch and PR discipline.** Follow this workflow exactly:
 
    - **Phase start:** Create a `phase-XX` branch from `main` when a new phase begins (e.g. `phase-03`). All phase work lands here first.
    - **Feature branches:** For any significant feature within a phase, cut a `phase-XX-feature-name` branch from `phase-XX` (e.g. `phase-03-normalize`, `phase-03-pipeline`). Small fixes and doc updates may land directly on `phase-XX`.
