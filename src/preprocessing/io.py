@@ -10,12 +10,14 @@ import numpy as np
 _SUPPORTED = {".img", ".h5", ".cxi"}
 
 # Keys tried in order for HDF5/CXI files. First match wins.
-# Confirmed against real detector files (2026-05-21):
-#   entry/data/data                      → Eiger4M (.h5)
-#   entry_1/data_1/data                  → AGIPD, ePix10k (.cxi, CrystFEL output)
-#   entry_0000/instrument/Simulator/data → JUNGFRAU 4M (.h5)
+# Confirmed against real detector files (2026-05-22):
+#   entry/data/data                                          → Eiger4M (.h5)
+#   entry_1/instrument_1/detector_1/detector_corrected/data → AGIPD (.cxi)
+#   entry_1/data_1/data                                     → ePix10k (.cxi)
+#   entry_0000/instrument/Simulator/data                    → JUNGFRAU 4M (.h5)
 _HDF5_CANDIDATE_KEYS = [
     "entry/data/data",
+    "entry_1/instrument_1/detector_1/detector_corrected/data",
     "entry_1/data_1/data",
     "entry_0000/instrument/Simulator/data",
 ]
