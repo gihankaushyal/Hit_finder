@@ -80,9 +80,9 @@ This must be confirmed against real detector files before Phase 3. Known variati
 
 | Detector | Facility | Likely key |
 |----------|----------|------------|
-| AGIPD | EuXFEL | `entry_1/data_1/data` |
-| JUNGFRAU 4M | LCLS | `entry/data/data` |
-| ePix10k | LCLS | `entry/data/data` |
+| AGIPD | EuXFEL | `entry_1/instrument_1/detector_1/detector_corrected/data` |
+| JUNGFRAU 4M | LCLS | `entry_0000/instrument/Simulator/data` |
+| ePix10k | LCLS | `entry_1/data_1/data` |
 | Eiger4M | Synchrotron | `entry/data/data` |
 
 Update `read_image()` in `src/preprocessing/io.py` once confirmed.
@@ -102,21 +102,20 @@ data/
 
 ---
 
-## Confirmed HDF5/CXI Keys (verified 2026-05-21)
+## Confirmed HDF5/CXI Keys (verified 2026-05-22, updated AGIPD file)
 
 Probed against real detector files in `/Users/gketawal/Desktop/detector-images/`.
 
-| Detector     | File            | Format | Confirmed key                              | Raw shape        |
-|--------------|-----------------|--------|--------------------------------------------|-----------------|
-| AGIPD        | AGIPD.cxi       | CXI    | `entry_1/data_1/data`                      | (N, 5632, 384)  |
-| JUNGFRAU 4M  | JUNFRAU.h5      | HDF5   | `entry_0000/instrument/Simulator/data`     | (N, 2164, 2068) |
-| ePix10k      | epix10k.cxi     | CXI    | `entry_1/data_1/data`                      | (N, 5632, 384)  |
-| Eiger4M      | Eiger4M.h5      | HDF5   | `entry/data/data`                          | (N, 2167, 2070) |
+| Detector     | File            | Format | Confirmed key                                                   | Raw shape        |
+|--------------|-----------------|--------|-----------------------------------------------------------------|-----------------|
+| AGIPD        | AGIPD.cxi       | CXI    | `entry_1/instrument_1/detector_1/detector_corrected/data`       | (N, 8192, 128)  |
+| JUNGFRAU 4M  | Jungfrau.h5     | HDF5   | `entry_0000/instrument/Simulator/data`                          | (N, 2164, 2068) |
+| ePix10k      | epix10k.cxi     | CXI    | `entry_1/data_1/data`                                           | (N, 5632, 384)  |
+| Eiger4M      | Eiger4M.h5      | HDF5   | `entry/data/data`                                               | (N, 2167, 2070) |
 
 **Notes:**
 - All files store N frames with a leading batch dimension — `io.py` returns `data[0]` (first frame).
-- AGIPD and ePix10k CXI files follow CrystFEL output convention (`entry_1/data_1/data`).
-- Data in these files is already assembled (2D per frame), not raw multi-panel.
-- `io.py` tries keys in this priority order: `entry/data/data` → `entry_1/data_1/data` → `entry_0000/instrument/Simulator/data`.
-- The JUNGFRAU file (`JUNFRAU.h5`) has a filename typo — missing one 'G'. This is the file as received.
+- AGIPD key updated 2026-05-22: original file (`entry_1/data_1/data`, shape N×5632×384) was replaced with a corrected file using `entry_1/instrument_1/detector_1/detector_corrected/data` (shape N×8192×128).
+- `io.py` tries keys in this priority order: `entry/data/data` → `entry_1/instrument_1/detector_1/detector_corrected/data` → `entry_1/data_1/data` → `entry_0000/instrument/Simulator/data`.
+- The JUNGFRAU file was renamed from `JUNFRAU.h5` to `Jungfrau.h5` when it was replaced.
 - The JUNGFRAU file also contains embedded hit labels at `entry_0000/processing/peakfinder/isHit` (shape: N×uint8) — useful for Phase 4 supervised training.
