@@ -41,7 +41,7 @@
 - [x] `pipeline.py` — full pipeline: assemble → `_to_2d` → GCN → LCN → resize 224×224
 - [x] `tests/test_normalize.py` — unit tests for GCN and LCN (including order enforcement)
 - [x] `tests/test_pipeline.py` — end-to-end tests for all four detectors
-- [ ] Ablate LCN window size (window=9 default; compare 3, 9, 15, 31 on validation set)
+- [x] Ablate LCN window size — window=9 confirmed (window=31 shows panel-edge artifacts; 3/9/15 equivalent on non-hit frames; 9 is smallest safe choice)
 - [ ] Confirm HDF5 key `entry/data/data` against real detector files
 
 Move to Phase 4 only when all six are checked.
@@ -59,7 +59,7 @@ Move to Phase 4 only when all six are checked.
 - [x] Formal definition of "detector-agnostic" as a measurable evaluation criterion
 - [x] **Label format and storage convention for HDF5/CXI files** — JSON sidecar (`labels.json`)
 - [ ] ViT variant for SSL track: ViT-Base vs. ViT-Small (latency vs. capacity tradeoff)
-- [ ] LCN window size parameter (needs ablation in Phase 3)
+- [x] LCN window size parameter — window=9 confirmed (Phase 3 ablation)
 
 ---
 

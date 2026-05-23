@@ -2,12 +2,31 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 from reborn import detector
 
+_JUNGFRAU_4M_GEOM_JSON = Path(__file__).parent / "data" / "jungfrau4m_jf4m_103mm.json"
+
+
+def jungfrau4m_crystfel_pad_geometry_list(
+    detector_distance: float = 0.103,
+) -> detector.PADGeometryList:
+    """Load JUNGFRAU 4M geometry derived from jf4m_103mm_20260408.geom.
+
+    parent_data_shape=[2164, 2068] and parent_data_slice values match the
+    pre-assembled canvas stored in Jungfrau.h5 so that panels can be extracted
+    manually before passing to PADAssembler.
+    """
+    pads = detector.load_pad_geometry_list(str(_JUNGFRAU_4M_GEOM_JSON))
+    pads.set_average_detector_distance(detector_distance, beam_vec=[0, 0, 1])
+    return pads
+
+
 DETECTOR_LOADERS = {
     "AGIPD": detector.agipd_pad_geometry_list,
-    "JUNGFRAU_4M": detector.jungfrau4m_pad_geometry_list,
+    "JUNGFRAU_4M": jungfrau4m_crystfel_pad_geometry_list,
     "ePix10k": detector.epix10k_pad_geometry_list,
     "Eiger4M": detector.eiger4M_pad_geometry_list,
 }
