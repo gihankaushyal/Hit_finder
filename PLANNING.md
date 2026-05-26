@@ -33,9 +33,16 @@
 |-------|-------------|--------|
 | 1 | Proposal & methodology finalization | COMPLETE |
 | 2 | Data infrastructure (real + synthetic) | COMPLETE |
-| 3 | Preprocessing implementation | CURRENT |
+| 3 | Preprocessing implementation | COMPLETE |
+| **4** | **Supervised baseline (ResNet18 → ResNet50)** | **CURRENT** |
+| 5 | SSL model (MAE pretraining → fine-tune) | Pending |
+| 6 | Ablations & cross-detector benchmarking | Pending |
+| 7 | Deployment preparation | Future |
+| 8 | Thesis writing | Future |
 
-## Phase 3 Checklist
+---
+
+## Phase 3 Checklist ✅ (complete, merged 2026-05-23)
 
 - [x] `normalize.py` — GCN and LCN implementations with ε-guarded denominators
 - [x] `pipeline.py` — full pipeline: assemble → `_to_2d` → GCN → LCN → resize 224×224
@@ -44,12 +51,18 @@
 - [x] Ablate LCN window size — window=9 confirmed (window=31 shows panel-edge artifacts; 3/9/15 equivalent on non-hit frames; 9 is smallest safe choice)
 - [x] Confirm HDF5 key `entry/data/data` against real detector files — see `docs/data_spec.md`
 
-Move to Phase 4 only when all six are checked.
-| 4 | Supervised baseline (ResNet18 → ResNet50) | Pending |
-| 5 | SSL model (MAE pretraining → fine-tune) | Pending |
-| 6 | Ablations & cross-detector benchmarking | Pending |
-| 7 | Deployment preparation | Future |
-| 8 | Thesis writing | Future |
+## Phase 4 Checklist
+
+- [ ] `src/data/dataset.py` — complete `SFXDataset` (labeled HDF5, lazy-load per `__getitem__`)
+- [ ] `configs/supervised/resnet18.yaml` — learning rate, batch size, weight decay, seed
+- [ ] `src/models/supervised.py` — ResNet18 fine-tune with `timm` pretrained weights
+- [ ] `src/training/train_supervised.py` — training loop with wandb logging
+- [ ] `tests/test_dataset.py` — unit tests for `SFXDataset` (lazy-load, label lookup, splits)
+- [ ] `tests/test_models.py` — unit tests for supervised model forward pass
+- [ ] Baseline run on Sol HPC: train on 3 detectors, eval on held-out 4th (leave-one-out)
+- [ ] `scripts/submit_supervised.sh` — SLURM job script for baseline training
+
+Move to Phase 5 only when all eight are checked.
 
 ---
 

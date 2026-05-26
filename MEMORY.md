@@ -1,6 +1,6 @@
 # Project Memory — SFX Hitfinder
 
-> Updated: 2026-05-23 | Read this at session start before anything else.
+> Updated: 2026-05-26 | Read this at session start before anything else.
 
 ---
 
@@ -10,12 +10,15 @@
 |------|-------|
 | Active branch | `main` (Phase 3 merged; Phase 4 branch not yet created) |
 | Current phase | **Phase 4 — Supervised Baseline** (starting) |
-| Last merge | PR #5 `phase-03 → main`, 2026-05-23 |
+| Last merge | PR #6 `docs/memory → main`, 2026-05-26 (MEMORY.md + CLAUDE.md session-start pointer) |
 | Test suite | 135 passed, 2 skipped (fabio absent), 1 pre-existing Eiger4M bitshuffle fail |
 
 ---
 
 ## Phase History
+
+### Docs update (2026-05-26)
+Added `MEMORY.md` (session-start context), updated `CLAUDE.md` with session-start pointer, fixed directory tree, corrected JUNGFRAU 4M dimensions, fixed HDF5 example to use `[0]` not `[()]`, added confirmed `lcn_window=9`. Fixed `PLANNING.md` roadmap table (Phase 3 → COMPLETE, Phase 4 → CURRENT) and added Phase 4 checklist.
 
 ### Phase 3 — Preprocessing (complete, 2026-05-23)
 Built the full shared preprocessing pipeline: Reborn geometry assembly for all four detectors → GCN → LCN → resize 224×224. Key outcomes:
@@ -48,7 +51,7 @@ Architecture fixed: Track 1 ResNet supervised, Track 2 MAE ViT SSL. Shared prepr
 ## Immediate Next Steps (Phase 4)
 
 1. **Create `phase-04` branch** from main: `git checkout -b phase-04 main`
-2. **Run CLAUDE.md audit** per constraint #9 (at phase start): `/claude-md-management:claude-md-improver`
+2. ~~Run CLAUDE.md audit~~ ✅ Done 2026-05-26
 3. **First feature**: `src/data/dataset.py` — `SFXDataset` (labeled HDF5, lazy-load) and update `UnlabeledDataset`
 4. **Config**: `configs/supervised/resnet18.yaml` — learning rate, batch size, weight decay
 5. **Training script**: `src/training/train_supervised.py` — ResNet18 fine-tune loop with wandb logging

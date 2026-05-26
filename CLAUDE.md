@@ -56,6 +56,7 @@ The comparison between Track 1 and Track 2 is itself a scientific contribution.
 ```
 sfx-hitfinder/
 ├── CLAUDE.md
+├── MEMORY.md                    # session-start context: current phase, gotchas, next steps
 ├── PLANNING.md                  # roadmap, open decisions, risks
 ├── SETUP.md                     # manual install steps (Reborn, SLURM modules)
 ├── environment.yml              # conda environment definition
@@ -68,7 +69,9 @@ sfx-hitfinder/
 │   │   ├── io.py                # unified reader: .img (fabio) / .h5 / .cxi (h5py)
 │   │   ├── geometry.py          # Reborn geometry handling
 │   │   ├── normalize.py         # GCN and LCN implementations
-│   │   └── pipeline.py          # full preprocessing pipeline
+│   │   ├── pipeline.py          # full preprocessing pipeline
+│   │   └── data/                # geometry JSON files for detectors
+│   │       └── jungfrau4m_jf4m_103mm.json
 │   ├── data/
 │   │   ├── dataset.py           # UnlabeledDataset (.img/SSL) + SFXDataset (labeled HDF5)
 │   │   ├── dataloader.py        # DataLoader factories
@@ -83,10 +86,11 @@ sfx-hitfinder/
 │   └── evaluation/
 │       ├── metrics.py           # accuracy, precision, recall, F1, AUC
 │       └── benchmark.py         # cross-detector evaluation protocol
-├── scripts/                     # SLURM job submission scripts
+├── scripts/                     # SLURM job submission + utility scripts
 │   ├── submit_supervised.sh
 │   ├── submit_ssl_pretrain.sh
-│   └── env_check.sh
+│   ├── env_check.sh
+│   └── probe_hdf5.py            # walk HDF5 key hierarchy for unknown files
 ├── tests/
 │   ├── test_preprocessing.py
 │   ├── test_io.py
@@ -96,10 +100,13 @@ sfx-hitfinder/
 │   ├── test_models.py
 │   └── test_evaluation.py
 ├── notebooks/                   # exploration only, never source of truth
+│   └── lcn_ablation.ipynb       # Phase 3 LCN window ablation study
 ├── docs/
 │   ├── architecture.md
-│   ├── data_spec.md
-│   └── eval_protocol.md
+│   ├── data_spec.md             # confirmed HDF5 keys per detector
+│   ├── eval_protocol.md
+│   └── figures/
+│       └── lcn_ablation/        # ablation comparison PNGs (all 4 detectors)
 └── data/                        # symlinks only — no actual data stored here
     ├── raw/                     # symlink → actual storage on Sol
     ├── processed/               # symlink → preprocessed tensor cache
@@ -168,11 +175,13 @@ python src/training/train_supervised.py --config configs/supervised/resnet18.yam
 | Detector | Facility | Raw Dimensions | Notes |
 |----------|----------|----------------|-------|
 | AGIPD | EuXFEL | 16 × 512 × 128 px | 16 modules |
-| JUNGFRAU 4M | LCLS CXI | 8 × 512 × 1024 px | 8 modules |
+| JUNGFRAU 4M | LCLS CXI | 2164×2068 px (pre-assembled canvas) | 8 modules of 514×1030; gap pixels present — use `jungfrau4m_crystfel_pad_geometry_list()` |
 | ePix10k | LCLS | varies | multiple configurations |
 | Eiger4M | Synchrotron/SSX | 2068 × 2162 px | monolithic |
 
 Post-assembly and post-resize: all images are 224 × 224 × 1 (single channel).
+
+**Confirmed preprocessing parameters (Phase 3):** `lcn_window=9` (window=31 causes panel-edge ringing artifacts; 3/9/15 equivalent on non-hit frames; 9 is the smallest safe choice).
 
 ### HDF5 Access Pattern
 
@@ -181,7 +190,7 @@ Post-assembly and post-resize: all images are 224 × 224 × 1 (single channel).
 ```python
 def __getitem__(self, idx):
     with h5py.File(self.paths[idx], 'r') as f:
-        image = f['entry/data/data'][()]   # adjust key to actual schema
+        image = f['entry/data/data'][0]    # [0] reads only one frame; [()] loads all N frames into RAM
     return image, label
 ```
 
