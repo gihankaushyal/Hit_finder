@@ -1,5 +1,7 @@
 # CLAUDE.md
 
+> **Session start:** Read `MEMORY.md` for current phase status, recent decisions, and known gotchas before doing anything else.
+
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Project Identity
