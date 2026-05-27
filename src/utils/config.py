@@ -32,8 +32,8 @@ def load_config(
     base_path = Path(base_path) if base_path is not None else _DEFAULT_BASE
 
     with open(base_path) as f:
-        base_cfg: dict = yaml.safe_load(f) or {}
+        base_cfg: dict[str, Any] = yaml.safe_load(f) or {}
     with open(config_path) as f:
-        model_cfg: dict = yaml.safe_load(f) or {}
+        model_cfg: dict[str, Any] = yaml.safe_load(f) or {}
 
     return _deep_merge(base_cfg, model_cfg)

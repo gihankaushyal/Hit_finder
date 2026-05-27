@@ -1,7 +1,6 @@
 """Tests for config loader."""
 
 import pytest
-from pathlib import Path
 from src.utils.config import load_config
 
 
@@ -45,3 +44,20 @@ def test_load_config_default_base_path(tmp_path, monkeypatch):
     model.write_text("model:\n  backbone: resnet18\n")
     cfg = load_config(model)
     assert cfg["seed"] == 99
+
+
+def test_load_config_missing_file_raises(tmp_path):
+    base = tmp_path / "base.yaml"
+    base.write_text("seed: 42\n")
+    missing = tmp_path / "does_not_exist.yaml"
+    with pytest.raises(FileNotFoundError):
+        load_config(missing, base_path=base)
+
+
+def test_load_config_malformed_yaml_raises(tmp_path):
+    base = tmp_path / "base.yaml"
+    base.write_text("seed: 42\n")
+    bad = tmp_path / "bad.yaml"
+    bad.write_text("key: [unclosed\n")
+    with pytest.raises(Exception):
+        load_config(bad, base_path=base)
