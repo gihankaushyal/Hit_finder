@@ -25,6 +25,6 @@ def build_supervised_model(
             in_chans=1,
             num_classes=num_classes,
         )
-    except Exception as e:
+    except (ValueError, RuntimeError, ImportError) as e:
         raise RuntimeError(f"timm could not create model '{backbone}': {e}") from e
     return model
