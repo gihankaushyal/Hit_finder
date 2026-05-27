@@ -1,6 +1,7 @@
 """Tests for config loader."""
 
 import pytest
+import yaml
 from src.utils.config import load_config
 
 
@@ -59,5 +60,5 @@ def test_load_config_malformed_yaml_raises(tmp_path):
     base.write_text("seed: 42\n")
     bad = tmp_path / "bad.yaml"
     bad.write_text("key: [unclosed\n")
-    with pytest.raises(Exception):
+    with pytest.raises(yaml.YAMLError):
         load_config(bad, base_path=base)

@@ -10,7 +10,7 @@ import yaml
 _DEFAULT_BASE = Path(__file__).parents[2] / "configs" / "base.yaml"
 
 
-def _deep_merge(base: dict, override: dict) -> dict:
+def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
     merged = dict(base)
     for key, val in override.items():
         if key in merged and isinstance(merged[key], dict) and isinstance(val, dict):
