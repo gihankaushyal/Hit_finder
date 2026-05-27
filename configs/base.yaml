@@ -2,7 +2,7 @@ seed: 42
 
 preprocessing:
   gcn_eps: 1.0e-5
-  lcn_window_size: null  # TBD — ablation in Phase 3
+  lcn_window_size: 9
   lcn_eps: 1.0e-5
   output_size: 224
 
