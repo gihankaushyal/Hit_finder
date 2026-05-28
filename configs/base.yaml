@@ -11,8 +11,8 @@ training:
   num_workers: 8
   learning_rate: 1.0e-4
   epochs: 50
-  optimizer: adamw
   weight_decay: 1.0e-4
+  # optimizer: AdamW (fixed for Phase 4; make configurable in Phase 5 if needed)
 
 wandb:
   project: sfx-hitfinder

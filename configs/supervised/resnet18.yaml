@@ -1,6 +1,3 @@
-defaults:
-  - base
-
 model:
   backbone: resnet18
   pretrained: true
