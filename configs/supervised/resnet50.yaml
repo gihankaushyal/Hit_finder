@@ -1,6 +1,3 @@
-defaults:
-  - base
-
 model:
   backbone: resnet50
   pretrained: true
@@ -12,3 +9,8 @@ training:
 
 wandb:
   tags: [supervised, resnet50]
+
+data:
+  train_split: data/splits/train.txt
+  val_split: data/splits/val.txt
+  labels_file: data/labels.json

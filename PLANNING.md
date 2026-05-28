@@ -53,12 +53,12 @@
 
 ## Phase 4 Checklist
 
-- [ ] `src/data/dataset.py` — complete `SFXDataset` (labeled HDF5, lazy-load per `__getitem__`)
-- [ ] `configs/supervised/resnet18.yaml` — learning rate, batch size, weight decay, seed
-- [ ] `src/models/supervised.py` — ResNet18 fine-tune with `timm` pretrained weights
-- [ ] `src/training/train_supervised.py` — training loop with wandb logging
-- [ ] `tests/test_dataset.py` — unit tests for `SFXDataset` (lazy-load, label lookup, splits)
-- [ ] `tests/test_models.py` — unit tests for supervised model forward pass
+- [x] `src/data/dataset.py` — complete `SFXDataset` (labeled HDF5, lazy-load per `__getitem__`)
+- [x] `configs/supervised/resnet18.yaml` — learning rate, batch size, weight decay, seed
+- [x] `src/models/supervised.py` — ResNet18 fine-tune with `timm` pretrained weights
+- [x] `src/training/train_supervised.py` — training loop with wandb logging
+- [x] `tests/test_dataset.py` — unit tests for `SFXDataset` (lazy-load, label lookup, splits)
+- [x] `tests/test_models.py` — unit tests for supervised model forward pass
 - [ ] Baseline run on Sol HPC: train on 3 detectors, eval on held-out 4th (leave-one-out)
 - [ ] `scripts/submit_supervised.sh` — SLURM job script for baseline training
 
