@@ -34,8 +34,8 @@
 | 1 | Proposal & methodology finalization | COMPLETE |
 | 2 | Data infrastructure (real + synthetic) | COMPLETE |
 | 3 | Preprocessing implementation | COMPLETE |
-| **4** | **Supervised baseline (ResNet18 → ResNet50)** | **CURRENT** |
-| 5 | SSL model (MAE pretraining → fine-tune) | Pending |
+| 4 | Supervised baseline (ResNet18 → ResNet50) | COMPLETE |
+| **5** | **SSL model (MAE pretraining → fine-tune)** | **CURRENT** |
 | 6 | Ablations & cross-detector benchmarking | Pending |
 | 7 | Deployment preparation | Future |
 | 8 | Thesis writing | Future |
@@ -51,18 +51,38 @@
 - [x] Ablate LCN window size — window=9 confirmed (window=31 shows panel-edge artifacts; 3/9/15 equivalent on non-hit frames; 9 is smallest safe choice)
 - [x] Confirm HDF5 key `entry/data/data` against real detector files — see `docs/data_spec.md`
 
-## Phase 4 Checklist
+## Phase 4 Checklist ✅ (complete, merged 2026-05-28)
 
 - [x] `src/data/dataset.py` — complete `SFXDataset` (labeled HDF5, lazy-load per `__getitem__`)
 - [x] `configs/supervised/resnet18.yaml` — learning rate, batch size, weight decay, seed
+- [x] `src/utils/config.py` — `load_config()` YAML deep-merge utility
 - [x] `src/models/supervised.py` — ResNet18 fine-tune with `timm` pretrained weights
 - [x] `src/training/train_supervised.py` — training loop with wandb logging
 - [x] `tests/test_dataset.py` — unit tests for `SFXDataset` (lazy-load, label lookup, splits)
+- [x] `tests/test_config.py` — unit tests for config loader
 - [x] `tests/test_models.py` — unit tests for supervised model forward pass
+- [x] `tests/test_train_supervised.py` — smoke tests for training loop
 - [ ] Baseline run on Sol HPC: train on 3 detectors, eval on held-out 4th (leave-one-out)
-- [ ] `scripts/submit_supervised.sh` — SLURM job script for baseline training
+- [ ] `scripts/submit_supervised.sh` — check off when first HPC run launches
 
-Move to Phase 5 only when all eight are checked.
+> **Note:** HPC baseline run carries forward as a parallel task during Phase 5 — does not block SSL track development.
+
+---
+
+## Phase 5 Checklist
+
+- [ ] ViT variant decision: ViT-Base vs. ViT-Small (decide before writing any model code)
+- [ ] `src/models/ssl.py` — MAE encoder + classification head
+- [ ] `src/training/train_ssl_pretrain.py` — masked image pretraining loop
+- [ ] `src/training/train_ssl_finetune.py` — fine-tune SSL encoder with classification head
+- [ ] `configs/ssl/mae_pretrain.yaml` — pretraining hyperparameters
+- [ ] `configs/ssl/mae_finetune.yaml` — fine-tuning hyperparameters
+- [ ] `tests/test_ssl_model.py` — unit tests for MAE encoder and classification head
+- [ ] `tests/test_train_ssl.py` — smoke tests for pretraining and fine-tuning loops
+- [ ] Pretraining run on Sol HPC (unlabeled `.img` files)
+- [ ] Fine-tuning run on Sol HPC (labeled HDF5 splits)
+
+Move to Phase 6 only when all ten are checked.
 
 ---
 
