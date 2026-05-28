@@ -77,14 +77,16 @@ sfx-hitfinder/
 │   │   ├── dataloader.py        # DataLoader factories
 │   │   └── synthetic.py         # synthetic data generation
 │   ├── models/
-│   │   ├── supervised.py        # ResNet18/50 fine-tuning
+│   │   ├── supervised.py        # ResNet18/50 fine-tuning (build_supervised_model via timm)
 │   │   └── ssl.py               # MAE encoder + classification head
 │   ├── training/
 │   │   ├── train_supervised.py
 │   │   ├── train_ssl_pretrain.py
 │   │   └── train_ssl_finetune.py
+│   ├── utils/
+│   │   └── config.py            # load_config(): YAML deep-merge (model values win over base.yaml)
 │   └── evaluation/
-│       ├── metrics.py           # accuracy, precision, recall, F1, AUC
+│       ├── metrics.py           # average_precision, auc_roc, f1_at_optimal_threshold
 │       └── benchmark.py         # cross-detector evaluation protocol
 ├── scripts/                     # SLURM job submission + utility scripts
 │   ├── submit_supervised.sh
@@ -94,10 +96,12 @@ sfx-hitfinder/
 ├── tests/
 │   ├── test_preprocessing.py
 │   ├── test_io.py
+│   ├── test_config.py
 │   ├── test_dataset.py
 │   ├── test_normalize.py
 │   ├── test_pipeline.py
 │   ├── test_models.py
+│   ├── test_train_supervised.py
 │   └── test_evaluation.py
 ├── notebooks/                   # exploration only, never source of truth
 │   └── lcn_ablation.ipynb       # Phase 3 LCN window ablation study
@@ -217,6 +221,9 @@ pip install -r requirements-ci.txt
 # SLURM
 sbatch scripts/submit_supervised.sh
 squeue -u $USER
+
+# Training (local or interactive node)
+python src/training/train_supervised.py --config configs/supervised/resnet18.yaml
 ```
 
 ---
@@ -244,6 +251,7 @@ wandb offline
 - **Python 3.11**, type hints on all public functions
 - **Black** for formatting — run before every commit
 - Config files in YAML, loaded via a single `load_config()` utility — no hardcoded hyperparameters in training scripts
+- `load_config()` (`src/utils/config.py`) always deep-merges `configs/base.yaml` automatically — model values win. Do NOT add `defaults: [base]` to model YAMLs (that is Hydra syntax and pollutes the config dict under plain PyYAML).
 - All random seeds set explicitly: `torch.manual_seed`, `numpy.random.seed`, `random.seed`
 - No magic numbers in source files — named constants or config values only
 - Preprocessing steps are individual functions with unit tests, not one monolithic transform
