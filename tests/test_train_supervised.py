@@ -29,8 +29,19 @@ def test_evaluate_returns_metrics(tiny_loader):
     from src.models.supervised import build_supervised_model
 
     model = build_supervised_model("resnet18", pretrained=False)
-    model.train(False)
-    metrics = evaluate(model, tiny_loader, device="cpu")
+    criterion = torch.nn.CrossEntropyLoss()
+    metrics = evaluate(model, tiny_loader, criterion, device="cpu")
     assert set(metrics.keys()) >= {"loss", "ap", "auc", "f1"}
     assert 0.0 <= metrics["ap"] <= 1.0
     assert 0.0 <= metrics["auc"] <= 1.0
+
+
+def test_train_one_epoch_updates_weights(tiny_loader):
+    from src.models.supervised import build_supervised_model
+
+    model = build_supervised_model("resnet18", pretrained=False)
+    params_before = [p.clone() for p in model.parameters()]
+    optimizer = torch.optim.SGD(model.parameters(), lr=1e-3)
+    criterion = torch.nn.CrossEntropyLoss()
+    train_one_epoch(model, tiny_loader, optimizer, criterion, device="cpu")
+    assert any(not torch.equal(a, b) for a, b in zip(params_before, model.parameters()))

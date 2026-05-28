@@ -23,6 +23,8 @@ def _set_seeds(seed: int) -> None:
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
 
 def train_one_epoch(
@@ -48,10 +50,10 @@ def train_one_epoch(
 def evaluate(
     model: nn.Module,
     loader: torch.utils.data.DataLoader,
+    criterion: nn.Module,
     device: str | torch.device,
 ) -> dict[str, float]:
     model.train(False)
-    criterion = nn.CrossEntropyLoss()
     total_loss, n = 0.0, 0
     all_scores: list[float] = []
     all_labels: list[int] = []
@@ -128,7 +130,7 @@ def main(config_path: str | Path) -> None:
 
     for epoch in range(1, cfg["training"]["epochs"] + 1):
         train_m = train_one_epoch(model, train_dl, optimizer, criterion, device)
-        val_m = evaluate(model, val_dl, device)
+        val_m = evaluate(model, val_dl, criterion, device)
         wandb.log(
             {
                 "epoch": epoch,
