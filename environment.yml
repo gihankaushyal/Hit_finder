@@ -8,7 +8,11 @@ dependencies:
   - python=3.11
   - pytorch
   - torchvision
-  - pytorch-cuda=12.6
+  - pytorch-cuda=12.4
+  - pyqt
+  - meson
+  - compilers
+  - scikit-image
   - h5py
   - numpy
   - pyyaml

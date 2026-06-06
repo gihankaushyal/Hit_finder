@@ -62,10 +62,13 @@
 - [x] `tests/test_config.py` — unit tests for config loader
 - [x] `tests/test_models.py` — unit tests for supervised model forward pass
 - [x] `tests/test_train_supervised.py` — smoke tests for training loop
-- [ ] Baseline run on Sol HPC: train on 3 detectors, eval on held-out 4th (leave-one-out)
+- [x] Synthetic baseline run: `resnet18-10k-full-seed42` — 10k frames, early stop epoch 22, best val F1=1.0000 (2026-06-05)
+- [x] `scripts/evaluate_supervised.py` — evaluate checkpoint on held-out test set; reports AP/AUC/F1/confusion matrix
+- [x] Held-out evaluation on `hitfinder_val` (2000 frames): AP=0.9998, AUC=0.9998, F1=0.9995, Precision=1.0, Recall=0.999 (2026-06-05)
+- [ ] Baseline run on Sol HPC with real detector data: train on 3 detectors, eval on held-out 4th (leave-one-out)
 - [ ] `scripts/submit_supervised.sh` — check off when first HPC run launches
 
-> **Note:** HPC baseline run carries forward as a parallel task during Phase 5 — does not block SSL track development.
+> **Note:** Synthetic baseline complete. Real-detector LODO HPC run carries forward as a parallel task during Phase 5 — does not block SSL track development.
 
 ---
 
