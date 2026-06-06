@@ -60,6 +60,8 @@ sfx-hitfinder/
 ├── PLANNING.md                  # roadmap, open decisions, risks
 ├── SETUP.md                     # manual install steps (Reborn, SLURM modules)
 ├── environment.yml              # conda environment definition
+├── requirements-ci.txt          # CPU-only deps for GitHub Actions (no CUDA, no Reborn from PyPI)
+├── conftest.py                  # inserts project root into sys.path so tests import as `from src.*`
 ├── configs/                     # YAML config files for experiments
 │   ├── base.yaml
 │   ├── supervised/
@@ -111,6 +113,9 @@ sfx-hitfinder/
 │   ├── eval_protocol.md
 │   └── figures/
 │       └── lcn_ablation/        # ablation comparison PNGs (all 4 detectors)
+├── checkpoints/                 # created at runtime by train_supervised.py; one sub-dir per run name
+│   └── <backbone>-seed<N>/
+│       └── best.pt              # saved when val F1 improves; keys: epoch, model_state_dict, val_f1
 └── data/                        # symlinks only — no actual data stored here
     ├── raw/                     # symlink → actual storage on Sol
     ├── processed/               # symlink → preprocessed tensor cache
@@ -127,7 +132,7 @@ sfx-hitfinder/
 
 ```bash
 # Create environment (first time)
-conda env create -f environment.yml -n sfx-hitfinder
+mamba env create -f environment.yml -n sfx-hitfinder
 
 # Activate (always in this order)
 module load mamba/latest
@@ -207,7 +212,7 @@ def __getitem__(self, idx):
 conda env create -f environment.yml -n sfx-hitfinder
 python -c "import torch, h5py, reborn, timm, fabio; print('imports OK')"
 
-# Tests
+# Tests (conftest.py adds src/ to sys.path automatically — no PYTHONPATH needed)
 pytest tests/ -v                                                                      # full suite
 pytest tests/test_normalize.py -v                                                     # single module
 pytest tests/test_normalize.py::TestNormalizationOrder -v                             # single test class
@@ -215,7 +220,7 @@ pytest tests/test_normalize.py::TestNormalizationOrder -v                       
 # Formatting (run before every commit)
 black src/ tests/
 
-# CI dependencies (also usable locally)
+# CI dependencies — CPU-only, no Reborn wheel; for local use when full env unavailable
 pip install -r requirements-ci.txt
 
 # SLURM

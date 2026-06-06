@@ -1,6 +1,6 @@
 # Project Memory — SFX Hitfinder
 
-> Updated: 2026-05-26 | Read this at session start before anything else.
+> Updated: 2026-05-30 | Read this at session start before anything else.
 
 ---
 
@@ -8,14 +8,17 @@
 
 | Item | Value |
 |------|-------|
-| Active branch | `main` (Phase 3 merged; Phase 4 branch not yet created) |
-| Current phase | **Phase 4 — Supervised Baseline** (starting) |
-| Last merge | PR #6 `docs/memory → main`, 2026-05-26 (MEMORY.md + CLAUDE.md session-start pointer) |
+| Active branch | `main` (Phase 4 merged 2026-05-28) |
+| Current phase | **Phase 5 — SSL Model (MAE pretraining → fine-tune)** |
+| Last merge | Phase 4 supervised baseline — ResNet18/50 training loop + wandb |
 | Test suite | 135 passed, 2 skipped (fabio absent), 1 pre-existing Eiger4M bitshuffle fail |
 
 ---
 
 ## Phase History
+
+### Phase 4 — Supervised Baseline (complete, 2026-05-28)
+Full ResNet18/50 supervised track implemented: `SFXDataset` (lazy HDF5 load), `load_config()` YAML deep-merge, `build_supervised_model()` via timm (in_chans=1), training loop with AdamW + CrossEntropyLoss, wandb logging (loss/AP/AUC/F1 per epoch), checkpoint saved on best val F1. HPC baseline run (leave-one-out across 4 detectors) still pending — carries forward as parallel task during Phase 5.
 
 ### Docs update (2026-05-26)
 Added `MEMORY.md` (session-start context), updated `CLAUDE.md` with session-start pointer, fixed directory tree, corrected JUNGFRAU 4M dimensions, fixed HDF5 example to use `[0]` not `[()]`, added confirmed `lcn_window=9`. Fixed `PLANNING.md` roadmap table (Phase 3 → COMPLETE, Phase 4 → CURRENT) and added Phase 4 checklist.
@@ -44,18 +47,18 @@ Architecture fixed: Track 1 ResNet supervised, Track 2 MAE ViT SSL. Shared prepr
 | 3 | Eiger4M real-data tests raise `OSError: Can't find plugin` (bitshuffle HDF5 filter) | Pre-existing; needs `hdf5plugin` import before `h5py.File()`. CI is safe (file absent → skip). |
 | 4 | GitHub ruleset `protect_main` had wrong required check name `"CI / test"` — actual name is `"test"` | Fixed 2026-05-23. If CI gating breaks again, check ruleset at repo Settings → Rules. |
 | 5 | `notebooks/lcn_ablation_executed.ipynb` is untracked — intentional executed artifact | Do not commit. The source notebook `lcn_ablation.ipynb` is the committed version. |
-| 6 | `anaconda_projects/` directory is untracked in working directory | Investigate before Phase 4 branch; determine if it's active setup or legacy artifact. |
+| 6 | `anaconda_projects/` directory is untracked in working directory | Status unresolved through Phase 4 — determine if active setup or legacy artifact before Phase 5 branch. |
 
 ---
 
-## Immediate Next Steps (Phase 4)
+## Immediate Next Steps (Phase 5)
 
-1. **Create `phase-04` branch** from main: `git checkout -b phase-04 main`
-2. ~~Run CLAUDE.md audit~~ ✅ Done 2026-05-26
-3. **First feature**: `src/data/dataset.py` — `SFXDataset` (labeled HDF5, lazy-load) and update `UnlabeledDataset`
-4. **Config**: `configs/supervised/resnet18.yaml` — learning rate, batch size, weight decay
-5. **Training script**: `src/training/train_supervised.py` — ResNet18 fine-tune loop with wandb logging
-6. **ViT variant decision** (Base vs. Small) needed before Phase 5 SSL track — defer until Phase 5 start
+1. **Create `phase-05` branch** from main: `git checkout -b phase-05 main`
+2. **ViT variant decision**: ViT-Base vs. ViT-Small — decide before writing any model code (open decision below)
+3. **First feature**: `src/models/ssl.py` — MAE encoder + classification head (currently a stub/docstring only)
+4. **Training scripts**: `train_ssl_pretrain.py` and `train_ssl_finetune.py`
+5. **Configs**: `configs/ssl/mae_pretrain.yaml` and `configs/ssl/mae_finetune.yaml`
+6. **HPC baseline run for Phase 4** still pending — runs in parallel with Phase 5 development (does not block)
 
 ---
 
@@ -64,4 +67,4 @@ Architecture fixed: Track 1 ResNet supervised, Track 2 MAE ViT SSL. Shared prepr
 | Decision | Status | Notes |
 |----------|--------|-------|
 | ViT variant (Base vs. Small) | Open | Latency vs. capacity; decide at Phase 5 start |
-| nanoBragg synthetic data | Deferred to Phase 4 | Real `.img` files used for Phase 3 |
+| nanoBragg synthetic data | Deferred past Phase 4 | Real `.img` files used for Phase 3; not addressed in Phase 4 either — revisit if augmentation needed in Phase 6 |
