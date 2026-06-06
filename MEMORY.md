@@ -1,6 +1,6 @@
 # Project Memory — SFX Hitfinder
 
-> Updated: 2026-05-30 | Read this at session start before anything else.
+> Updated: 2026-06-05 | Read this at session start before anything else.
 
 ---
 
@@ -18,7 +18,13 @@
 ## Phase History
 
 ### Phase 4 — Supervised Baseline (complete, 2026-05-28)
-Full ResNet18/50 supervised track implemented: `SFXDataset` (lazy HDF5 load), `load_config()` YAML deep-merge, `build_supervised_model()` via timm (in_chans=1), training loop with AdamW + CrossEntropyLoss, wandb logging (loss/AP/AUC/F1 per epoch), checkpoint saved on best val F1. HPC baseline run (leave-one-out across 4 detectors) still pending — carries forward as parallel task during Phase 5.
+Full ResNet18/50 supervised track implemented: `SFXDataset` (lazy HDF5 load), `load_config()` YAML deep-merge, `build_supervised_model()` via timm (in_chans=1), training loop with AdamW + CrossEntropyLoss, wandb logging (loss/AP/AUC/F1 per epoch), checkpoint saved on best val F1.
+
+**Synthetic baseline results (2026-06-05):** `resnet18-10k-full-seed42` trained on 10k synthetic frames (`hitfinder_10k_merged.h5`). Early stopped epoch 22/200. Evaluated on 2000 held-out frames (`hitfinder_val`): AP=0.9998, AUC=0.9998, F1=0.9995, Precision=1.0, Recall=0.999 (1 miss, 0 false alarms). Checkpoint at `checkpoints/resnet18-10k-full-seed42/best.pt`. Evaluation script: `scripts/evaluate_supervised.py`.
+
+Label encoding (both train and val): `labels[:, -1]` is `bg_only`; value `1.0` → non-hit (class 0), value `0.0` → hit (class 1). Images pre-assembled 512×512 uint16; Reborn geometry step skipped.
+
+Real-detector LODO HPC run still pending — carries forward as parallel task during Phase 5.
 
 ### Docs update (2026-05-26)
 Added `MEMORY.md` (session-start context), updated `CLAUDE.md` with session-start pointer, fixed directory tree, corrected JUNGFRAU 4M dimensions, fixed HDF5 example to use `[0]` not `[()]`, added confirmed `lcn_window=9`. Fixed `PLANNING.md` roadmap table (Phase 3 → COMPLETE, Phase 4 → CURRENT) and added Phase 4 checklist.

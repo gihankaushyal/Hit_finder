@@ -89,13 +89,29 @@ The model must generalize across all four detectors without per-detector retrain
 | 7 | Deployment preparation | 🔮 Future |
 | 8 | Thesis writing | 🔮 Future |
 
+## Preliminary Results — Phase 4 Supervised Baseline
+
+ResNet18 trained on 10,000 synthetic SFX frames (`hitfinder_10k`), evaluated on 2,000 held-out frames (`hitfinder_val`). Both sets are pre-assembled 512×512 synthetic Eiger-like images; preprocessing: GCN → LCN (window=9) → resize 224×224.
+
+| Metric | Score |
+|--------|-------|
+| Average Precision | **0.9998** |
+| AUC-ROC | **0.9998** |
+| F1 (optimal threshold) | **0.9995** |
+| Precision | **1.0000** |
+| Recall | **0.9990** |
+
+Confusion matrix (2000 frames, 50/50 hit rate): TP=989 · FP=0 · FN=1 · TN=1010. Model early-stopped at epoch 22/200 (patience=20). Checkpoint: `checkpoints/resnet18-10k-full-seed42/best.pt`.
+
+> These results are in-domain (train and test from the same synthetic distribution). Cross-detector generalization on real detector data is the Phase 6 scientific benchmark.
+
 ## Setup
 
 **Compute:** ASU Sol HPC — 8× NVIDIA A100 (80 GB) · SLURM scheduler
 
 ```bash
 # Create environment (first time)
-conda env create -f environment.yml -n sfx-hitfinder
+mamba env create -f environment.yml -n sfx-hitfinder
 
 # Activate (always in this order on Sol)
 module load mamba/latest
