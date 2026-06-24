@@ -12,6 +12,7 @@ training:
   learning_rate: 1.0e-4
   epochs: 50
   weight_decay: 1.0e-4
+  early_stopping_patience: 10  # stop if val F1 does not improve for this many epochs
   # optimizer: AdamW (fixed for Phase 4; make configurable in Phase 5 if needed)
 
 wandb:

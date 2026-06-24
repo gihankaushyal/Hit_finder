@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from pathlib import Path
 
+import numpy as np
 import torch
 from torch.utils.data import Dataset
 
-from src.preprocessing.io import read_image
+from src.preprocessing.io import count_frames, read_embedded_labels, read_frame, read_image
+from src.preprocessing.pipeline import preprocess_assembled
 
 
 class UnlabeledDataset(Dataset):
@@ -72,3 +75,55 @@ class SFXDataset(Dataset):
                 f"No label for '{key}'. Verify the path appears in labels_file."
             )
         return int(self._labels[key])
+
+
+class MultiFrameCXIDataset(Dataset):
+    """Dataset over multi-frame CXI files with embedded hit labels.
+
+    Each CXI file contributes N frames. The dataset expands all files into a
+    flat (file_path, frame_idx) index so a DataLoader can iterate frames
+    individually.
+
+    Label convention: embedded float32 value 1.0 → hit (class 1),
+                      0.0 → non-hit (class 0).
+
+    HDF5 files are opened lazily in __getitem__ (multiprocessing safe).
+
+    Args:
+        cxi_paths: List of paths to multi-frame CXI/HDF5 files.
+        label_key: HDF5 key for the per-frame label array in each file.
+        preprocess_fn: Optional callable applied to each raw (H, W) float32
+            frame before converting to a tensor. Defaults to
+            preprocess_assembled (GCN → LCN → resize 224×224). Pass None to
+            return raw frames.
+    """
+
+    def __init__(
+        self,
+        cxi_paths: list[str | Path],
+        label_key: str = "entry_1/labels/hit",
+        preprocess_fn: Callable[[np.ndarray], np.ndarray] | None = preprocess_assembled,
+    ) -> None:
+        self._preprocess_fn = preprocess_fn
+
+        # Build flat index and cache labels eagerly — label arrays are small
+        # and reading them per __getitem__ caused O(N) file opens per epoch.
+        self._index: list[tuple[Path, int]] = []
+        self._labels: list[int] = []
+        for p in cxi_paths:
+            p = Path(p)
+            arr = read_embedded_labels(p, label_key)
+            for i, raw in enumerate(arr):
+                self._index.append((p, i))
+                self._labels.append(int(round(float(raw))))
+
+    def __len__(self) -> int:
+        return len(self._index)
+
+    def __getitem__(self, idx: int) -> tuple[torch.Tensor, int]:
+        path, frame_idx = self._index[idx]
+        frame = read_frame(path, frame_idx)
+        if self._preprocess_fn is not None:
+            frame = self._preprocess_fn(frame)
+        tensor = torch.from_numpy(frame).unsqueeze(0)
+        return tensor, self._labels[idx]

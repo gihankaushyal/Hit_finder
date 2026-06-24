@@ -34,8 +34,8 @@
 | 1 | Proposal & methodology finalization | COMPLETE |
 | 2 | Data infrastructure (real + synthetic) | COMPLETE |
 | 3 | Preprocessing implementation | COMPLETE |
-| 4 | Supervised baseline (ResNet18 → ResNet50) | COMPLETE |
-| **5** | **SSL model (MAE pretraining → fine-tune)** | **CURRENT** |
+| **4** | **Supervised baseline (ResNet18 → ResNet50)** | **CURRENT** |
+| 5 | SSL model (MAE pretraining → fine-tune) | Pending |
 | 6 | Ablations & cross-detector benchmarking | Pending |
 | 7 | Deployment preparation | Future |
 | 8 | Thesis writing | Future |
@@ -51,7 +51,7 @@
 - [x] Ablate LCN window size — window=9 confirmed (window=31 shows panel-edge artifacts; 3/9/15 equivalent on non-hit frames; 9 is smallest safe choice)
 - [x] Confirm HDF5 key `entry/data/data` against real detector files — see `docs/data_spec.md`
 
-## Phase 4 Checklist ✅ (complete, merged 2026-05-28)
+## Phase 4 Checklist 🔄 (current — in progress)
 
 - [x] `src/data/dataset.py` — complete `SFXDataset` (labeled HDF5, lazy-load per `__getitem__`)
 - [x] `configs/supervised/resnet18.yaml` — learning rate, batch size, weight decay, seed
@@ -65,10 +65,20 @@
 - [x] Synthetic baseline run: `resnet18-10k-full-seed42` — 10k frames, early stop epoch 22, best val F1=1.0000 (2026-06-05)
 - [x] `scripts/evaluate_supervised.py` — evaluate checkpoint on held-out test set; reports AP/AUC/F1/confusion matrix
 - [x] Held-out evaluation on `hitfinder_val` (2000 frames): AP=0.9998, AUC=0.9998, F1=0.9995, Precision=1.0, Recall=0.999 (2026-06-05)
+- [x] `src/data/dataset.py` — `MultiFrameCXIDataset` for multi-frame CXI files with embedded labels (`entry_1/labels/hit`)
+- [x] `src/preprocessing/geometry.py` — `eiger_resonet_pad_geometry_list()`, `extract_panels_from_canvas()`; EigerRESoNeT added to `DETECTOR_LOADERS`
+- [x] `src/preprocessing/pipeline.py` — `preprocess_assembled()` geometry-bypass path for already-assembled detectors (Eiger/Resonet)
+- [x] `src/preprocessing/io.py` — `count_frames()`, `read_frame()`, `read_embedded_labels()` for CXI multi-frame files
+- [x] `scripts/train_resonet_cxi.py` — training script for Resonet CXI data with 70/20/10 split and test evaluation
+- [x] `scripts/evaluate_resonet_cxi.py` — inference + metrics script for Resonet CXI files
+- [x] `scripts/submit_resonet_train.sh` — SLURM job script for Resonet CXI training
+- [x] `configs/supervised/resnet18_resonet.yaml` — config for Resonet CXI training (early_stopping_patience=10, test_fraction=0.1)
+- [x] Resonet CXI domain investigation: confirmed `cxi_merged_25k.cxi` and `cxi_1k/` are in same intensity regime; `cxi_100/` is anomalous low-intensity distribution (2026-06-12)
+- [ ] Resonet CXI training run: `resnet18-resonet-seed42` on `cxi_merged_25k.cxi` (70/20/10 split), SLURM job 55337893 — in progress (2026-06-12)
 - [ ] Baseline run on Sol HPC with real detector data: train on 3 detectors, eval on held-out 4th (leave-one-out)
 - [ ] `scripts/submit_supervised.sh` — check off when first HPC run launches
 
-> **Note:** Synthetic baseline complete. Real-detector LODO HPC run carries forward as a parallel task during Phase 5 — does not block SSL track development.
+> **Note:** Synthetic baseline complete. Remaining Phase 4 work: Resonet CXI training run, real-detector validation with actual data, and leave-one-detector-out (LODO) evaluation with synthetic data. Phase 5 (SSL) does not begin until these are complete.
 
 ---
 

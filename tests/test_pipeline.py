@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 from src.preprocessing.geometry import load_pad_geometry
-from src.preprocessing.pipeline import TARGET_SIZE, _to_2d, preprocess
+from src.preprocessing.pipeline import TARGET_SIZE, _to_2d, preprocess, preprocess_assembled
 
 DETECTORS = ["AGIPD", "JUNGFRAU_4M", "ePix10k", "Eiger4M"]
 
@@ -85,6 +85,47 @@ class TestPreprocess:
 # ---------------------------------------------------------------------------
 # Pipeline order: normalization before resize
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# preprocess_assembled — geometry-bypass path
+# ---------------------------------------------------------------------------
+
+
+class TestPreprocessAssembled:
+    def test_output_shape_is_target_size(self) -> None:
+        img = np.random.default_rng(0).integers(0, 1000, (5632, 384), dtype=np.uint16).astype(np.float32)
+        out = preprocess_assembled(img)
+        assert out.shape == TARGET_SIZE
+
+    def test_output_dtype_float32(self) -> None:
+        img = np.ones((64, 64), dtype=np.float32)
+        assert preprocess_assembled(img).dtype == np.float32
+
+    def test_output_is_finite(self) -> None:
+        img = np.random.default_rng(1).random((128, 96)).astype(np.float32)
+        assert np.isfinite(preprocess_assembled(img)).all()
+
+    def test_custom_lcn_window_accepted(self) -> None:
+        img = np.ones((64, 64), dtype=np.float32)
+        out = preprocess_assembled(img, lcn_window=15)
+        assert out.shape == TARGET_SIZE
+
+    def test_non_2d_input_raises(self) -> None:
+        with pytest.raises(ValueError, match="2D"):
+            preprocess_assembled(np.ones((4, 64, 64)))
+
+    def test_different_inputs_give_different_outputs(self) -> None:
+        rng = np.random.default_rng(42)
+        a = rng.integers(0, 500, (64, 64)).astype(np.float32)
+        b = rng.integers(500, 1000, (64, 64)).astype(np.float32)
+        assert not np.array_equal(preprocess_assembled(a), preprocess_assembled(b))
+
+    def test_uniform_image_produces_finite_output(self) -> None:
+        # Constant images have σ=0; eps prevents division by zero.
+        img = np.full((64, 64), 500.0, dtype=np.float32)
+        out = preprocess_assembled(img)
+        assert np.isfinite(out).all()
 
 
 class TestPipelineOrder:

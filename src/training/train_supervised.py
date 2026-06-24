@@ -127,6 +127,8 @@ def main(config_path: str | Path) -> None:
     ckpt_dir = Path("checkpoints") / run_name
     ckpt_dir.mkdir(parents=True, exist_ok=True)
     best_f1 = -1.0
+    patience = cfg["training"].get("early_stopping_patience", 10)
+    epochs_without_improvement = 0
 
     for epoch in range(1, cfg["training"]["epochs"] + 1):
         train_m = train_one_epoch(model, train_dl, optimizer, criterion, device)
@@ -143,6 +145,7 @@ def main(config_path: str | Path) -> None:
         )
         if val_m["f1"] > best_f1:
             best_f1 = val_m["f1"]
+            epochs_without_improvement = 0
             torch.save(
                 {
                     "epoch": epoch,
@@ -151,6 +154,11 @@ def main(config_path: str | Path) -> None:
                 },
                 ckpt_dir / "best.pt",
             )
+        else:
+            epochs_without_improvement += 1
+            if epochs_without_improvement >= patience:
+                print(f"Early stopping at epoch {epoch} (no improvement for {patience} epochs)")
+                break
 
     wandb.finish()
 

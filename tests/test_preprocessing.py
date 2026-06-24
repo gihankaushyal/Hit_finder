@@ -6,6 +6,8 @@ import pytest
 from src.preprocessing.geometry import (
     DETECTOR_LOADERS,
     assemble_image,
+    eiger_resonet_pad_geometry_list,
+    extract_panels_from_canvas,
     jungfrau4m_crystfel_pad_geometry_list,
     load_pad_geometry,
 )
@@ -43,12 +45,13 @@ def test_load_pad_geometry_unknown_detector_raises():
         load_pad_geometry("CSPAD")
 
 
-def test_all_four_detectors_covered():
+def test_all_detectors_covered():
     assert set(DETECTOR_LOADERS.keys()) == {
         "AGIPD",
         "JUNGFRAU_4M",
         "ePix10k",
         "Eiger4M",
+        "EigerRESoNeT",
     }
 
 
@@ -152,3 +155,63 @@ def test_eiger4m_assembly_is_flat_monolithic():
     panel_data = [np.ones((p.n_ss, p.n_fs)) for p in pads]
     img = assemble_image(pads, panel_data)
     assert img.ndim == 1, f"Expected Eiger4M flat output, got shape {img.shape}"
+
+
+# ---------------------------------------------------------------------------
+# EigerRESoNeT geometry and extract_panels_from_canvas
+# ---------------------------------------------------------------------------
+
+
+def test_eiger_resonet_geometry_loads():
+    pads = eiger_resonet_pad_geometry_list()
+    assert len(pads) == 64
+
+
+def test_eiger_resonet_geometry_panel_dimensions():
+    pads = eiger_resonet_pad_geometry_list()
+    for pad in pads:
+        assert pad.n_ss == 176
+        assert pad.n_fs == 192
+
+
+def test_eiger_resonet_geometry_total_pixels():
+    pads = eiger_resonet_pad_geometry_list()
+    assert pads.n_pixels == 5632 * 384
+
+
+def test_eiger_resonet_geometry_defines_slicing():
+    pads = eiger_resonet_pad_geometry_list()
+    assert pads.defines_slicing()
+
+
+def test_eiger_resonet_load_via_detector_loaders():
+    pads = load_pad_geometry("EigerRESoNeT")
+    assert len(pads) == 64
+
+
+def test_extract_panels_from_canvas_count():
+    pads = eiger_resonet_pad_geometry_list()
+    canvas = np.zeros((5632, 384), dtype=np.float32)
+    panels = extract_panels_from_canvas(canvas, pads)
+    assert len(panels) == 64
+
+
+def test_extract_panels_from_canvas_shape():
+    pads = eiger_resonet_pad_geometry_list()
+    canvas = np.zeros((5632, 384), dtype=np.float32)
+    panels = extract_panels_from_canvas(canvas, pads)
+    for panel in panels:
+        assert panel.shape == (176, 192)
+
+
+def test_extract_panels_from_canvas_preserves_values():
+    pads = eiger_resonet_pad_geometry_list()
+    canvas = np.ones((5632, 384), dtype=np.float32) * 42.0
+    panels = extract_panels_from_canvas(canvas, pads)
+    assert all(p.max() == pytest.approx(42.0) for p in panels)
+
+
+def test_extract_panels_non_slicing_geometry_raises():
+    pads = load_pad_geometry("Eiger4M")  # monolithic — does not define slicing
+    with pytest.raises(ValueError, match="does not define parent_data_slice"):
+        extract_panels_from_canvas(np.zeros((100, 100)), pads)

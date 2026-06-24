@@ -1,0 +1,18 @@
+model:
+  backbone: resnet18
+  pretrained: true
+  num_classes: 2
+
+training:
+  epochs: 100
+  learning_rate: 1.0e-4
+  early_stopping_patience: 10
+
+wandb:
+  tags: [supervised, resnet18, resonet-cxi]
+
+data:
+  cxi_file: /data/bioxfel/user/gihan/Resonet/cxi_merged_25k.cxi
+  val_fraction: 0.2
+  test_fraction: 0.1
+  label_key: entry_1/labels/hit

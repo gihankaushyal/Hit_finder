@@ -43,6 +43,42 @@ def _to_2d(
     raise ValueError(f"Unexpected image ndim {image.ndim}; expected 1, 2, or 3.")
 
 
+def preprocess_assembled(
+    image_2d: np.ndarray,
+    lcn_window: int = LCN_WINDOW_DEFAULT,
+) -> np.ndarray:
+    """GCN → LCN → resize on a pre-assembled 2D image, skipping geometry.
+
+    Use for formats where the stored array is already a spatial image:
+    Resonet Eiger CXI (5632×384 stacked panels), .img files, or any case
+    where Reborn geometry assembly has already been applied externally.
+
+    Pipeline order is identical to preprocess() from step 3 onward, so both
+    paths produce comparable outputs after normalization.
+
+    Args:
+        image_2d: 2D float32 array of any (H, W) shape.
+        lcn_window: LCN neighbourhood size (default 9, from Phase 3 ablation).
+
+    Returns:
+        float32 array of shape (224, 224).
+    """
+    if image_2d.ndim != 2:
+        raise ValueError(
+            f"Expected a 2D array, got shape {image_2d.shape}. "
+            "Use preprocess() for multi-panel data requiring geometry assembly."
+        )
+    image_gcn = gcn(image_2d.astype(np.float32))
+    image_lcn = lcn(image_gcn, window=lcn_window)
+    resized = sk_resize(
+        image_lcn,
+        TARGET_SIZE,
+        anti_aliasing=True,
+        preserve_range=True,
+    )
+    return resized.astype(np.float32)
+
+
 def preprocess(
     panel_data: list[np.ndarray],
     pads: object,
