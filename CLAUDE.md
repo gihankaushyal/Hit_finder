@@ -2,6 +2,24 @@
 
 > **Session start:** Read `MEMORY.md` for current phase status, recent decisions, and known gotchas before doing anything else.
 
+## Knowledge Graph
+
+Graph exists at `graphify-out/graph.json` (501 nodes, 1009 edges, 46 communities — built 2026-06-24).
+
+```bash
+graphify query "how does the preprocessing pipeline work"
+graphify path "SFXDataset" "build_supervised_model"
+graphify explain "preprocess_assembled"
+graphify update .   # after modifying code — AST-only, no API cost
+```
+
+- Prefer `query`/`path`/`explain` over reading raw source for navigation questions.
+- If `graphify-out/wiki/index.md` exists, use it for broad architecture review.
+- Read `graphify-out/GRAPH_REPORT.md` only for full architecture overview.
+- **Subagent write quirk:** spawned subagents cannot write to the project directory — main session must write chunk JSON files manually when running `/graphify` extraction.
+
+---
+
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Project Identity
@@ -92,9 +110,15 @@ sfx-hitfinder/
 │       └── benchmark.py         # cross-detector evaluation protocol
 ├── scripts/                     # SLURM job submission + utility scripts
 │   ├── submit_supervised.sh
+│   ├── submit_resonet_train.sh
 │   ├── submit_ssl_pretrain.sh
 │   ├── env_check.sh
-│   └── probe_hdf5.py            # walk HDF5 key hierarchy for unknown files
+│   ├── probe_hdf5.py            # walk HDF5 key hierarchy for unknown files
+│   ├── evaluate_supervised.py   # eval checkpoint on held-out test set (AP/AUC/F1/confusion)
+│   ├── evaluate_resonet_cxi.py  # inference + metrics for Resonet CXI files
+│   ├── train_resonet_cxi.py     # training script for Resonet CXI data (70/20/10 split)
+│   ├── train_synthetic_full.py  # full synthetic baseline training run
+│   └── smoke_test_synthetic.py  # quick smoke test for synthetic pipeline
 ├── tests/
 │   ├── test_preprocessing.py
 │   ├── test_io.py
@@ -229,6 +253,11 @@ squeue -u $USER
 
 # Training (local or interactive node)
 python src/training/train_supervised.py --config configs/supervised/resnet18.yaml
+python scripts/train_resonet_cxi.py --config configs/supervised/resnet18_resonet.yaml
+
+# Evaluation (Phase 4)
+python scripts/evaluate_supervised.py --checkpoint checkpoints/<run>/best.pt --config configs/supervised/resnet18.yaml
+python scripts/evaluate_resonet_cxi.py --checkpoint checkpoints/<run>/best.pt
 ```
 
 ---
@@ -285,11 +314,11 @@ wandb offline
    - **At phase start** (after creating the `phase-XX` branch) — catch any stale content from the previous phase before writing new code.
    - **At phase end** (before opening the `phase-XX` → `main` PR) — update directory tree, commands, and data conventions to reflect everything added during the phase.
 
-10. **Automated code review on every PR.** Whenever a pull request is created, triggered, or generated, immediately run both:
-   - `/code-review:code-review` — multi-agent review for bugs, CLAUDE.md compliance, and historical context
-   - `/requesting-code-review` — secondary review pass
+10. **Automated code review on every PR.** Whenever a pull request is created, triggered, or generated, run:
+   - `/code-review high` — for feature PRs
+   - `/code-review ultra` — for phase-closing PRs (`phase-XX` → `main`)
 
-   Do not consider a PR ready to merge until both skills have run and any high-confidence issues are resolved.
+   Do not consider a PR ready to merge until `/code-review` has run and any high-confidence issues are resolved.
 
 11. **Feature planning workflow.** Before implementing any significant feature, follow this sequence in order:
    1. Run `/superpowers:brainstorming` and `/feature-dev:feature-dev` to explore the design space and identify implementation options.
@@ -315,3 +344,4 @@ wandb offline
 - Real-time pipeline integration as a current deliverable
 - Learned detector-type identification (metadata provides this)
 - Crystallographic resolution estimation (separate problem from hit finding)
+

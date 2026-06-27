@@ -111,9 +111,15 @@ class TestPreprocessAssembled:
         out = preprocess_assembled(img, lcn_window=15)
         assert out.shape == TARGET_SIZE
 
-    def test_non_2d_input_raises(self) -> None:
-        with pytest.raises(ValueError, match="2D"):
-            preprocess_assembled(np.ones((4, 64, 64)))
+    def test_3d_agipd_modules_row_stacked(self) -> None:
+        # AGIPD: (16, 512, 128) per frame — row-stacked to (8192, 128) then resized
+        img = np.random.default_rng(0).random((4, 32, 32)).astype(np.float32)
+        out = preprocess_assembled(img)
+        assert out.shape == TARGET_SIZE
+
+    def test_4d_input_raises(self) -> None:
+        with pytest.raises(ValueError):
+            preprocess_assembled(np.ones((2, 4, 64, 64)))
 
     def test_different_inputs_give_different_outputs(self) -> None:
         rng = np.random.default_rng(42)

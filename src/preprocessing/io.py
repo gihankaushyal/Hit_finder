@@ -91,7 +91,7 @@ def read_frame(path: str | Path, frame_idx: int = 0) -> np.ndarray:
     with h5py.File(path, "r") as f:
         key = _find_hdf5_data_key(f)
         dataset = f[key]
-        if dataset.ndim == 3:
+        if dataset.ndim >= 3:
             if frame_idx >= dataset.shape[0]:
                 raise IndexError(
                     f"frame_idx {frame_idx} out of range for dataset with "

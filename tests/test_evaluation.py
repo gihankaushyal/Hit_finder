@@ -228,12 +228,32 @@ class _PerfectModel(torch.nn.Module):
         return self._LOGITS[: x.shape[0]].unsqueeze(1)
 
 
+class _PerfectModel2Class(torch.nn.Module):
+    """2-class head (num_classes=2): softmax col-1 gives [0.9, 0.8, 0.2, 0.1]."""
+
+    # col-0 logits are just negatives; col-1 logits match _PerfectModel
+    _LOGITS = torch.tensor(
+        [[-2.197, 2.197], [-1.386, 1.386], [1.386, -1.386], [2.197, -2.197]]
+    )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self._LOGITS[: x.shape[0]]
+
+
 def test_run_on_loader_perfect_model():
     result = run_on_loader(_PerfectModel(), _make_perfect_loader(), device="cpu")
     assert abs(result["ap"] - 1.0) < 1e-4
     assert abs(result["auc_roc"] - 1.0) < 1e-4
     assert abs(result["f1"] - 1.0) < 1e-4
     assert "threshold" in result
+
+
+def test_run_on_loader_two_class_head():
+    """num_classes=2 model (LODO config) must produce 1-D scores via softmax[:,1]."""
+    result = run_on_loader(_PerfectModel2Class(), _make_perfect_loader(), device="cpu")
+    assert abs(result["ap"] - 1.0) < 1e-4
+    assert abs(result["auc_roc"] - 1.0) < 1e-4
+    assert abs(result["f1"] - 1.0) < 1e-4
 
 
 def test_run_on_loader_keys():
