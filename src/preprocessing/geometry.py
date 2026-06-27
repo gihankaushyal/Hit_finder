@@ -33,6 +33,22 @@ def jungfrau4m_crystfel_pad_geometry_list(
     return pads
 
 
+def eiger4m_crystfel_pad_geometry_list(
+    detector_distance: float | None = None,
+) -> detector.PADGeometryList:
+    """Load Eiger4M geometry from the CrystFEL .geom file in src/preprocessing/data/.
+
+    Uses geometry_file_to_pad_geometry_list so that parent_data_slice is set on
+    every panel, enabling extract_panels_from_canvas() and PADAssembler to work
+    correctly. Reborn's built-in eiger4M_pad_geometry_list() does NOT set
+    parent_data_slice and must not be used in the assembly pipeline.
+    """
+    pads = geometry_file_to_pad_geometry_list(str(_EIGER4M_GEOM))
+    if detector_distance is not None:
+        pads.set_average_detector_distance(detector_distance, beam_vec=[0, 0, 1])
+    return pads
+
+
 def eiger_resonet_pad_geometry_list() -> detector.PADGeometryList:
     """Load Eiger geometry from the Resonet CrystFEL .geom file.
 
@@ -105,7 +121,7 @@ DETECTOR_LOADERS = {
     "AGIPD": detector.agipd_pad_geometry_list,
     "JUNGFRAU_4M": jungfrau4m_crystfel_pad_geometry_list,
     "ePix10k": detector.epix10k_pad_geometry_list,
-    "Eiger4M": detector.eiger4M_pad_geometry_list,
+    "Eiger4M": eiger4m_crystfel_pad_geometry_list,
     "EigerRESoNeT": eiger_resonet_pad_geometry_list,
 }
 

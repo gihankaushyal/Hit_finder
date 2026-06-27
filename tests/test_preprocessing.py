@@ -129,7 +129,7 @@ def test_assemble_image_preserves_pixel_values(detector_type):
 # AGIPD:      assembled.ndim == 3  (16 modules × module_ss × module_fs)
 # JUNGFRAU_4M: assembled.ndim == 2  (tiled 2D image)
 # ePix10k:    assembled.ndim == 2  (tiled 2D image)
-# Eiger4M:    assembled.ndim == 1  (monolithic — no tiling needed)
+# Eiger4M:    assembled.ndim == 2  (64-panel CrystFEL geom → PADAssembler → 2D)
 # Phase 3 preprocessing will normalize all detectors to 2D 224×224.
 # ---------------------------------------------------------------------------
 
@@ -149,12 +149,14 @@ def test_jungfrau_and_epix_assembly_shape_is_2d():
         assert img.ndim == 2, f"Expected {det} to assemble to 2D, got shape {img.shape}"
 
 
-def test_eiger4m_assembly_is_flat_monolithic():
+def test_eiger4m_crystfel_geometry_properties():
+    # CrystFEL-backed loader: 64 panels, defines parent_data_slice, assembles to 2D.
     pads = load_pad_geometry("Eiger4M")
-    assert len(pads) == 1, "Eiger4M must have exactly 1 panel"
+    assert len(pads) == 64, f"Eiger4M CrystFEL geom must have 64 panels, got {len(pads)}"
+    assert pads.defines_slicing(), "Eiger4M CrystFEL geom must define parent_data_slice"
     panel_data = [np.ones((p.n_ss, p.n_fs)) for p in pads]
     img = assemble_image(pads, panel_data)
-    assert img.ndim == 1, f"Expected Eiger4M flat output, got shape {img.shape}"
+    assert img.ndim == 2, f"Expected Eiger4M PADAssembler output to be 2D, got shape {img.shape}"
 
 
 # ---------------------------------------------------------------------------
@@ -212,6 +214,13 @@ def test_extract_panels_from_canvas_preserves_values():
 
 
 def test_extract_panels_non_slicing_geometry_raises():
-    pads = load_pad_geometry("Eiger4M")  # monolithic — does not define slicing
+    from reborn import detector as reborn_detector
+
+    pad = reborn_detector.PADGeometry()
+    pad.n_ss = 10
+    pad.n_fs = 10
+    pad.parent_data_slice = None
+    pads = reborn_detector.PADGeometryList([pad])
+    assert not pads.defines_slicing()
     with pytest.raises(ValueError, match="does not define parent_data_slice"):
         extract_panels_from_canvas(np.zeros((100, 100)), pads)
