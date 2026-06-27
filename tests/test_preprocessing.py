@@ -129,7 +129,7 @@ def test_assemble_image_preserves_pixel_values(detector_type):
 # AGIPD:      assembled.ndim == 3  (16 modules × module_ss × module_fs)
 # JUNGFRAU_4M: assembled.ndim == 2  (tiled 2D image)
 # ePix10k:    assembled.ndim == 2  (tiled 2D image)
-# Eiger4M:    assembled.ndim == 2  (64-panel CrystFEL geom → PADAssembler → 2D)
+# Eiger4M:    assembled.ndim == 2  (64-panel CrystFEL geom, stacked 5632×384 canvas → PADAssembler → 2D)
 # Phase 3 preprocessing will normalize all detectors to 2D 224×224.
 # ---------------------------------------------------------------------------
 
@@ -150,7 +150,7 @@ def test_jungfrau_and_epix_assembly_shape_is_2d():
 
 
 def test_eiger4m_crystfel_geometry_properties():
-    # CrystFEL-backed loader: 64 panels, defines parent_data_slice, assembles to 2D.
+    # Eiger4M uses CrystFEL geom (stacked 5632×384 canvas): 64 panels, defines slicing, assembles to 2D.
     pads = load_pad_geometry("Eiger4M")
     assert len(pads) == 64, f"Eiger4M CrystFEL geom must have 64 panels, got {len(pads)}"
     assert pads.defines_slicing(), "Eiger4M CrystFEL geom must define parent_data_slice"

@@ -36,12 +36,12 @@ def jungfrau4m_crystfel_pad_geometry_list(
 def eiger4m_crystfel_pad_geometry_list(
     detector_distance: float | None = None,
 ) -> detector.PADGeometryList:
-    """Load Eiger4M geometry from the CrystFEL .geom file in src/preprocessing/data/.
+    """Load Eiger4M geometry from the CrystFEL .geom file.
 
-    Uses geometry_file_to_pad_geometry_list so that parent_data_slice is set on
-    every panel, enabling extract_panels_from_canvas() and PADAssembler to work
-    correctly. Reborn's built-in eiger4M_pad_geometry_list() does NOT set
-    parent_data_slice and must not be used in the assembly pipeline.
+    Our Eiger4M data is stored as a stacked LCLS canvas (5632×384), 64 panels of
+    176×192 px each. Reborn's built-in eiger4M_pad_geometry_list() expects a
+    different pixel count and cannot be used. This loader sets parent_data_slice
+    on every panel so extract_panels_from_canvas() and PADAssembler work correctly.
     """
     pads = geometry_file_to_pad_geometry_list(str(_EIGER4M_GEOM))
     if detector_distance is not None:
@@ -97,7 +97,7 @@ def get_geometry(detector_desc: str) -> detector.PADGeometryList:
             _GEOM_CACHE[detector_desc] = detector.agipd_pad_geometry_list()
         elif detector_desc == "ePix10k 2.2M":
             _GEOM_CACHE[detector_desc] = detector.epix10k_pad_geometry_list()
-        else:  # EIGER 4M
+        else:  # EIGER 4M — stacked LCLS canvas (5632×384), 64 panels via CrystFEL geom
             _GEOM_CACHE[detector_desc] = geometry_file_to_pad_geometry_list(
                 str(_EIGER4M_GEOM)
             )

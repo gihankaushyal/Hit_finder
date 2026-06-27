@@ -59,13 +59,15 @@ def assemble_raw(cxi_path: Path, frame_idx: int) -> tuple[np.ndarray, str]:
     pads = get_geometry(desc)
     asm  = get_assembler(desc)
 
-    if desc in ("AGIPD 1M", "ePix10k 2.2M"):
-        # Reborn standard pads: raw ravel matches PADAssembler's flat_indices order.
-        flat = raw.ravel()
-    else:
-        # EIGER 4M: CrystFEL geom, extract panels via parent_data_slice.
+    if pads.defines_slicing():
+        # Canvas-based detectors (e.g. EigerRESoNeT, JUNGFRAU_4M): extract panels
+        # via parent_data_slice before passing to PADAssembler.
         panels = extract_panels_from_canvas(raw, pads)
         flat = np.concatenate([p.ravel() for p in panels])
+    else:
+        # Reborn standard pads (AGIPD, ePix10k, Eiger4M): raw ravel matches
+        # PADAssembler's flat_indices order directly.
+        flat = raw.ravel()
 
     assembled = asm.assemble_data(flat)
     return assembled.astype(np.float32), desc
