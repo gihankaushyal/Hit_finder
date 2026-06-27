@@ -81,8 +81,11 @@ def save_image(
     vmax: float | None,
 ) -> None:
     pos = image[image > 0]
-    p_low  = np.percentile(pos, 1)  if len(pos) else 0.0
-    p_high = np.percentile(pos, 99) if len(pos) else 1.0
+    # Use 99.9th percentile so Bragg spots (top ~0.1% of pixels) are not
+    # saturated. 99th percentile clips at background scatter for sparse
+    # multi-panel layouts (e.g. Eiger4M 4-quadrant with large dead zones).
+    p_low  = np.percentile(pos, 1)   if len(pos) else 0.0
+    p_high = np.percentile(pos, 99.9) if len(pos) else 1.0
     vmin_auto = max(0.0, float(p_low))
     vmax_auto = float(p_high) if vmax is None else vmax
 
