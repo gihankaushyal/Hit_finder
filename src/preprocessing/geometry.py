@@ -11,6 +11,13 @@ from reborn.external.crystfel import geometry_file_to_pad_geometry_list
 _JUNGFRAU_4M_GEOM_JSON = Path(__file__).parent / "data" / "jungfrau4m_jf4m_103mm.json"
 _EIGER_RESONET_GEOM = Path(__file__).parent / "data" / "eiger_resonet.geom"
 
+# CrystFEL geom file for Eiger4M — only detector that needs it.
+# AGIPD and ePix10k use Reborn's built-in standard loaders instead.
+_EIGER4M_GEOM = Path(__file__).parent / "data" / "eiger4m.geom"
+
+_GEOM_CACHE: dict[str, detector.PADGeometryList] = {}
+_ASSEMBLER_CACHE: dict[str, detector.PADAssembler] = {}
+
 
 def jungfrau4m_crystfel_pad_geometry_list(
     detector_distance: float = 0.103,
@@ -38,6 +45,60 @@ def eiger_resonet_pad_geometry_list() -> detector.PADGeometryList:
     src/preprocessing/data/eiger_resonet.geom for reproducibility).
     """
     return geometry_file_to_pad_geometry_list(str(_EIGER_RESONET_GEOM))
+
+
+_KNOWN_DESCS = {"AGIPD 1M", "ePix10k 2.2M", "EIGER 4M"}
+
+
+def get_geometry(detector_desc: str) -> detector.PADGeometryList:
+    """Load and cache PADGeometryList for the given CXI detector description.
+
+    AGIPD 1M and ePix10k 2.2M use Reborn's built-in standard geometry loaders.
+    EIGER 4M uses the CrystFEL .geom file in src/preprocessing/data/eiger4m.geom.
+
+    Args:
+        detector_desc: Value of entry_1/instrument_1/detector_1/description,
+            e.g. 'AGIPD 1M', 'ePix10k 2.2M', 'EIGER 4M'.
+
+    Returns:
+        PADGeometryList, cached in _GEOM_CACHE so it is loaded only once per process.
+
+    Raises:
+        ValueError: If detector_desc is 'Jungfrau 4M' (pre-assembled — use
+            preprocess_assembled() instead) or an unrecognised string.
+    """
+    if detector_desc == "Jungfrau 4M":
+        raise ValueError(
+            "Jungfrau 4M arrives pre-assembled. Use preprocess_assembled() directly."
+        )
+    if detector_desc not in _KNOWN_DESCS:
+        raise ValueError(
+            f"Unknown detector description '{detector_desc}'. "
+            f"Known: {sorted(_KNOWN_DESCS)} (plus 'Jungfrau 4M' which is pre-assembled)."
+        )
+    if detector_desc not in _GEOM_CACHE:
+        if detector_desc == "AGIPD 1M":
+            _GEOM_CACHE[detector_desc] = detector.agipd_pad_geometry_list()
+        elif detector_desc == "ePix10k 2.2M":
+            _GEOM_CACHE[detector_desc] = detector.epix10k_pad_geometry_list()
+        else:  # EIGER 4M
+            _GEOM_CACHE[detector_desc] = geometry_file_to_pad_geometry_list(
+                str(_EIGER4M_GEOM)
+            )
+    return _GEOM_CACHE[detector_desc]
+
+
+def get_assembler(detector_desc: str) -> detector.PADAssembler:
+    """Return a cached PADAssembler for the given detector description.
+
+    PADAssembler computes flat_indices once on construction; caching avoids
+    recomputing them on every frame.
+    """
+    if detector_desc not in _ASSEMBLER_CACHE:
+        _ASSEMBLER_CACHE[detector_desc] = detector.PADAssembler(
+            pad_geometry=get_geometry(detector_desc)
+        )
+    return _ASSEMBLER_CACHE[detector_desc]
 
 
 DETECTOR_LOADERS = {

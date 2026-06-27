@@ -135,6 +135,39 @@ def read_embedded_labels(
         return f[label_key][()].astype(np.float32)
 
 
+_DETECTOR_DESCRIPTION_KEY = "entry_1/instrument_1/detector_1/description"
+
+
+def read_detector_description(path: str | Path) -> str:
+    """Return the detector description string from CXI metadata.
+
+    Reads entry_1/instrument_1/detector_1/description.
+
+    Args:
+        path: Path to a CXI file.
+
+    Returns:
+        Detector description string (e.g. 'AGIPD 1M', 'Jungfrau 4M').
+
+    Raises:
+        FileNotFoundError: If the file does not exist.
+        ValueError: If the description key is absent from the file.
+    """
+    path = Path(path)
+    if not path.exists():
+        raise FileNotFoundError(f"Image file not found: {path}")
+    with h5py.File(path, "r") as f:
+        if _DETECTOR_DESCRIPTION_KEY not in f:
+            raise ValueError(
+                f"Detector description key '{_DETECTOR_DESCRIPTION_KEY}' not found in {path}. "
+                "Run scripts/probe_hdf5.py to inspect available keys."
+            )
+        value = f[_DETECTOR_DESCRIPTION_KEY][()]
+        if isinstance(value, bytes):
+            return value.decode()
+        return str(value)
+
+
 def _read_hdf5_frame(f: h5py.File) -> np.ndarray:
     key = _find_hdf5_data_key(f)
     data = f[key][()]

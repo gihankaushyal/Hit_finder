@@ -10,8 +10,15 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
-from src.preprocessing.io import count_frames, read_embedded_labels, read_frame, read_image
-from src.preprocessing.pipeline import preprocess_assembled
+from src.preprocessing.geometry import get_assembler, get_geometry
+from src.preprocessing.io import (
+    count_frames,
+    read_detector_description,
+    read_embedded_labels,
+    read_frame,
+    read_image,
+)
+from src.preprocessing.pipeline import preprocess_assembled, preprocess_with_geometry
 
 
 class UnlabeledDataset(Dataset):
@@ -106,6 +113,23 @@ class MultiFrameCXIDataset(Dataset):
     ) -> None:
         self._preprocess_fn = preprocess_fn
 
+        # Read detector descriptions and pre-load geometries before DataLoader
+        # workers fork — PADGeometryList objects are not picklable after fork.
+        unique_paths = {Path(p) for p in cxi_paths}
+        self._path_to_desc: dict[Path, str] = {}
+        self._desc_to_pads: dict[str, object] = {}
+        self._desc_to_assembler: dict[str, object] = {}
+        for p in unique_paths:
+            try:
+                desc = read_detector_description(p)
+                self._path_to_desc[p] = desc
+                if desc not in self._desc_to_pads and desc != "Jungfrau 4M":
+                    self._desc_to_pads[desc] = get_geometry(desc)
+                    self._desc_to_assembler[desc] = get_assembler(desc)
+            except (ValueError, KeyError):
+                # File lacks description key — falls back to preprocess_assembled
+                pass
+
         # Build flat index and cache labels eagerly — label arrays are small
         # and reading them per __getitem__ caused O(N) file opens per epoch.
         self._index: list[tuple[Path, int]] = []
@@ -124,6 +148,18 @@ class MultiFrameCXIDataset(Dataset):
         path, frame_idx = self._index[idx]
         frame = read_frame(path, frame_idx)
         if self._preprocess_fn is not None:
-            frame = self._preprocess_fn(frame)
+            if self._preprocess_fn is preprocess_assembled and path in self._path_to_desc:
+                desc = self._path_to_desc[path]
+                if desc in self._desc_to_pads:
+                    frame = preprocess_with_geometry(
+                        frame,
+                        self._desc_to_pads[desc],
+                        desc,
+                        assembler=self._desc_to_assembler.get(desc),
+                    )
+                else:
+                    frame = preprocess_assembled(frame)  # Jungfrau 4M — already assembled
+            else:
+                frame = self._preprocess_fn(frame)
         tensor = torch.from_numpy(frame).unsqueeze(0)
         return tensor, self._labels[idx]
