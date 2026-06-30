@@ -112,22 +112,25 @@ class MultiFrameCXIDataset(Dataset):
         preprocess_fn: Callable[[np.ndarray], np.ndarray] | None = preprocess_assembled,
     ) -> None:
         self._preprocess_fn = preprocess_fn
+        # Checked once at init so __getitem__ does not use `is` identity, which
+        # breaks for any wrapped/partial version of preprocess_assembled.
+        self._use_geometry = preprocess_fn is preprocess_assembled
 
-        # Read detector descriptions and pre-load geometries before DataLoader
-        # workers fork — PADGeometryList objects are not picklable after fork.
+        # Read detector descriptions eagerly so __getitem__ can route to
+        # geometry-aware preprocessing. Geometry objects (PADGeometryList,
+        # PADAssembler) are NOT stored as instance attributes — they are not
+        # picklable under spawn/forkserver DataLoader workers. Instead we call
+        # get_geometry/get_assembler lazily in __getitem__; both functions use
+        # a module-level cache that is process-local and safe under any start method.
         unique_paths = {Path(p) for p in cxi_paths}
         self._path_to_desc: dict[Path, str] = {}
-        self._desc_to_pads: dict[str, object] = {}
-        self._desc_to_assembler: dict[str, object] = {}
         for p in unique_paths:
             try:
                 desc = read_detector_description(p)
                 self._path_to_desc[p] = desc
-                if desc not in self._desc_to_pads and desc != "Jungfrau 4M":
-                    self._desc_to_pads[desc] = get_geometry(desc)
-                    self._desc_to_assembler[desc] = get_assembler(desc)
-            except (ValueError, KeyError):
-                # File lacks description key — falls back to preprocess_assembled
+            except (ValueError, KeyError, OSError):
+                # File lacks description key or is unreadable — falls back to
+                # preprocess_assembled.
                 pass
 
         # Build flat index and cache labels eagerly — label arrays are small
@@ -148,17 +151,14 @@ class MultiFrameCXIDataset(Dataset):
         path, frame_idx = self._index[idx]
         frame = read_frame(path, frame_idx)
         if self._preprocess_fn is not None:
-            if self._preprocess_fn is preprocess_assembled and path in self._path_to_desc:
+            if self._use_geometry and path in self._path_to_desc:
                 desc = self._path_to_desc[path]
-                if desc in self._desc_to_pads:
-                    frame = preprocess_with_geometry(
-                        frame,
-                        self._desc_to_pads[desc],
-                        desc,
-                        assembler=self._desc_to_assembler.get(desc),
-                    )
-                else:
-                    frame = preprocess_assembled(frame)  # Jungfrau 4M — already assembled
+                try:
+                    pads = get_geometry(desc)
+                    assembler = get_assembler(desc)
+                    frame = preprocess_with_geometry(frame, pads, desc, assembler=assembler)
+                except (ValueError, KeyError):
+                    frame = preprocess_assembled(frame)  # e.g. Jungfrau 4M — already assembled
             else:
                 frame = self._preprocess_fn(frame)
         tensor = torch.from_numpy(frame).unsqueeze(0)

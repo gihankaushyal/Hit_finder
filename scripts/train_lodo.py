@@ -88,13 +88,14 @@ def _make_loader(
     batch_size: int,
     num_workers: int,
     shuffle: bool,
+    label_key: str = "entry_1/labels/hit",
 ):
     ids = [
         sid
         for sid, s in split_artifact["splits"].items()
         if s == split_name
     ]
-    return cxi_session_loader(session_map, ids, batch_size, num_workers, shuffle)
+    return cxi_session_loader(session_map, ids, batch_size, num_workers, shuffle, label_key=label_key)
 
 
 def _train_fold(
@@ -116,10 +117,11 @@ def _train_fold(
     patience = cfg["training"].get("early_stopping_patience", 10)
     run_name = f"{backbone}-lodo-fold{fold_id}-seed{seed}"
 
-    train_dl     = _make_loader(split_artifact, SPLIT_TRAIN,          session_map, batch_size, num_workers, shuffle=True)
-    val_dl       = _make_loader(split_artifact, SPLIT_VAL,            session_map, batch_size, num_workers, shuffle=False)
-    in_domain_dl = _make_loader(split_artifact, SPLIT_IN_DOMAIN_TEST, session_map, batch_size, num_workers, shuffle=False)
-    cross_dl     = _make_loader(split_artifact, SPLIT_CROSS_DETECTOR, session_map, batch_size, num_workers, shuffle=False)
+    label_key = cfg["lodo"].get("label_key", "entry_1/labels/hit")
+    train_dl     = _make_loader(split_artifact, SPLIT_TRAIN,          session_map, batch_size, num_workers, shuffle=True,  label_key=label_key)
+    val_dl       = _make_loader(split_artifact, SPLIT_VAL,            session_map, batch_size, num_workers, shuffle=False, label_key=label_key)
+    in_domain_dl = _make_loader(split_artifact, SPLIT_IN_DOMAIN_TEST, session_map, batch_size, num_workers, shuffle=False, label_key=label_key)
+    cross_dl     = _make_loader(split_artifact, SPLIT_CROSS_DETECTOR, session_map, batch_size, num_workers, shuffle=False, label_key=label_key)
 
     n_train   = len(train_dl.dataset)
     n_val     = len(val_dl.dataset)
@@ -149,6 +151,7 @@ def _train_fold(
     wandb.init(
         project=cfg["wandb"]["project"],
         entity=cfg["wandb"].get("entity"),
+        id=run_name,        # deterministic ID so resume="allow" finds the same run
         name=run_name,
         config={**cfg, "fold_id": fold_id, "test_detector": fold["test_detector"]},
         tags=cfg["wandb"].get("tags", []),
@@ -191,7 +194,13 @@ def _train_fold(
                 best_f1 = val_m["f1"]
                 epochs_no_improve = 0
                 torch.save(
-                    {"epoch": epoch, "model_state_dict": model.state_dict(), "val_f1": best_f1},
+                    {
+                        "epoch": epoch,
+                        "model_state_dict": model.state_dict(),
+                        "val_f1": best_f1,
+                        "backbone": backbone,
+                        "num_classes": cfg["model"]["num_classes"],
+                    },
                     ckpt_path,
                 )
                 print(f"    → checkpoint saved (val F1={best_f1:.4f})")
@@ -203,6 +212,18 @@ def _train_fold(
 
     # Evaluate best checkpoint on in-domain and cross-detector test sets
     ckpt = torch.load(ckpt_path, map_location=device, weights_only=True)
+    ckpt_backbone = ckpt.get("backbone")
+    ckpt_num_classes = ckpt.get("num_classes")
+    if ckpt_backbone is not None and ckpt_backbone != backbone:
+        raise RuntimeError(
+            f"Checkpoint backbone={ckpt_backbone!r} does not match config backbone={backbone!r}. "
+            "Delete the checkpoint or update the config."
+        )
+    if ckpt_num_classes is not None and ckpt_num_classes != cfg["model"]["num_classes"]:
+        raise RuntimeError(
+            f"Checkpoint num_classes={ckpt_num_classes} does not match config "
+            f"num_classes={cfg['model']['num_classes']}. Delete the checkpoint or update the config."
+        )
     model.load_state_dict(ckpt["model_state_dict"])
 
     in_domain_m = run_on_loader(model, in_domain_dl, device)
@@ -272,6 +293,18 @@ def main(config_path: str | Path, folds: list[int] | None = None) -> None:
     all_folds = build_lodo_folds()
     if folds is not None:
         all_folds = [f for f in all_folds if f["fold_id"] in folds]
+
+    # Guard: detector names in build_lodo_folds() must match the keys in
+    # lodo.detector_dirs, otherwise build_session_stratified_split silently
+    # produces an empty cross-detector split and metrics are meaningless.
+    known_detectors = {s["detector"] for s in sessions}
+    for fold in all_folds:
+        if fold["test_detector"] not in known_detectors:
+            raise ValueError(
+                f"Fold {fold['fold_id']} test_detector={fold['test_detector']!r} "
+                f"not found in sessions (have: {sorted(known_detectors)}). "
+                "Ensure lodo.detector_dirs keys in the YAML match DETECTORS in benchmark.py."
+            )
 
     # Save split artifacts alongside checkpoints for reproducibility
     artifacts_dir = Path("checkpoints") / "lodo_splits"

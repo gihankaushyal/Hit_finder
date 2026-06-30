@@ -63,7 +63,8 @@ def main(checkpoints_dir: Path) -> None:
 
     print("\n" + format_results_table(results_for_table))
 
-    missing = {1, 2, 3, 4} - {json.load(open(p))["fold_id"] for p in result_files}
+    seen_fold_ids = {int(k.split("_")[1]) for k in fold_results}
+    missing = {1, 2, 3, 4} - seen_fold_ids
     if missing:
         print(f"  Note: folds {sorted(missing)} not yet complete.")
 

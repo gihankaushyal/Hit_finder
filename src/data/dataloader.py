@@ -43,6 +43,7 @@ def cxi_session_loader(
     batch_size: int,
     num_workers: int = 4,
     shuffle: bool = True,
+    label_key: str = "entry_1/labels/hit",
 ) -> DataLoader:
     """DataLoader over a subset of CXI sessions identified by session_id.
 
@@ -54,12 +55,14 @@ def cxi_session_loader(
         batch_size: Number of frames per batch.
         num_workers: Parallel worker processes.
         shuffle: Whether to shuffle each epoch.
+        label_key: HDF5 key for per-frame labels; must match the key used
+            in build_sessions() so frame counts and label reads are consistent.
 
     Returns:
         DataLoader yielding (image, label) pairs; image shape (B, 1, 224, 224).
     """
     paths = [session_map[sid] for sid in session_ids]
-    dataset = MultiFrameCXIDataset(paths)
+    dataset = MultiFrameCXIDataset(paths, label_key=label_key)
     return DataLoader(
         dataset,
         batch_size=batch_size,
