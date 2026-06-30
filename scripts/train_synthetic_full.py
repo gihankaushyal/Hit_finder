@@ -30,20 +30,22 @@ from src.models.supervised import build_supervised_model
 from src.preprocessing.normalize import LCN_WINDOW_DEFAULT, gcn, lcn
 from src.training.train_supervised import evaluate, train_one_epoch
 
-DATA_FILE    = Path("/data/bioxfel/user/gihan/Resonet/hitfinder_10k/hitfinder_10k_merged.h5")
-BG_ONLY_COL  = -1        # labels[:, -1] is `bg_only`: 1.0 → non-hit, 0.0 → hit
-TRAIN_FRAC   = 0.8
-BATCH_SIZE   = 32
-LR           = 1e-4
+DATA_FILE = Path(
+    "/data/bioxfel/user/gihan/Resonet/hitfinder_10k/hitfinder_10k_merged.h5"
+)
+BG_ONLY_COL = -1  # labels[:, -1] is `bg_only`: 1.0 → non-hit, 0.0 → hit
+TRAIN_FRAC = 0.8
+BATCH_SIZE = 32
+LR = 1e-4
 WEIGHT_DECAY = 1e-2
-MAX_EPOCHS   = 200
-PATIENCE     = 20        # early-stop: epochs without val F1 improvement
-MIN_DELTA    = 1e-4      # minimum improvement to reset patience counter
-SEED         = 42
-TARGET_SIZE  = (224, 224)
+MAX_EPOCHS = 200
+PATIENCE = 20  # early-stop: epochs without val F1 improvement
+MIN_DELTA = 1e-4  # minimum improvement to reset patience counter
+SEED = 42
+TARGET_SIZE = (224, 224)
 WANDB_PROJECT = "sfx-hitfinder"
-RUN_NAME     = f"resnet18-10k-full-seed{SEED}"
-CKPT_DIR     = Path("checkpoints") / RUN_NAME
+RUN_NAME = f"resnet18-10k-full-seed{SEED}"
+CKPT_DIR = Path("checkpoints") / RUN_NAME
 
 
 def _set_seeds(seed: int) -> None:
@@ -74,7 +76,7 @@ class SyntheticHitDataset(Dataset):
     def __getitem__(self, idx: int) -> tuple[torch.Tensor, int]:
         real_idx = self._indices[idx]
         with h5py.File(self._h5_path, "r") as f:
-            frame  = f["images"][real_idx].astype(np.float32)
+            frame = f["images"][real_idx].astype(np.float32)
             bg_only = float(f["labels"][real_idx, BG_ONLY_COL])
         label = 0 if bg_only == 1.0 else 1
         tensor = torch.from_numpy(_preprocess(frame)).unsqueeze(0)  # (1, 224, 224)
@@ -102,7 +104,7 @@ def main() -> None:
 
     with h5py.File(DATA_FILE, "r") as f:
         all_bg = f["labels"][:, BG_ONLY_COL]
-    n_hits   = int((all_bg != 1.0).sum())
+    n_hits = int((all_bg != 1.0).sum())
     n_nonhits = n_frames - n_hits
     print(f"Label balance — hits: {n_hits}  non-hits: {n_nonhits}\n")
 
@@ -168,26 +170,32 @@ def main() -> None:
 
     for epoch in range(1, MAX_EPOCHS + 1):
         train_m = train_one_epoch(model, train_dl, optimizer, criterion, device)
-        val_m   = evaluate(model, val_dl, criterion, device)
+        val_m = evaluate(model, val_dl, criterion, device)
 
         print(
             f"{epoch:>5}  {train_m['loss']:>10.4f}  {val_m['loss']:>8.4f}"
             f"  {val_m['ap']:>6.4f}  {val_m['auc']:>6.4f}  {val_m['f1']:>6.4f}  {epochs_no_improve:>6}"
         )
-        wandb.log({
-            "epoch": epoch,
-            "train/loss": train_m["loss"],
-            "val/loss":   val_m["loss"],
-            "val/ap":     val_m["ap"],
-            "val/auc":    val_m["auc"],
-            "val/f1":     val_m["f1"],
-        })
+        wandb.log(
+            {
+                "epoch": epoch,
+                "train/loss": train_m["loss"],
+                "val/loss": val_m["loss"],
+                "val/ap": val_m["ap"],
+                "val/auc": val_m["auc"],
+                "val/f1": val_m["f1"],
+            }
+        )
 
         if val_m["f1"] > best_f1 + MIN_DELTA:
             best_f1 = val_m["f1"]
             epochs_no_improve = 0
             torch.save(
-                {"epoch": epoch, "model_state_dict": model.state_dict(), "val_f1": best_f1},
+                {
+                    "epoch": epoch,
+                    "model_state_dict": model.state_dict(),
+                    "val_f1": best_f1,
+                },
                 ckpt_path,
             )
         else:
@@ -195,10 +203,12 @@ def main() -> None:
 
         if epochs_no_improve >= PATIENCE:
             stopped_epoch = epoch
-            print(f"\nEarly stop at epoch {epoch} — no improvement for {PATIENCE} epochs.")
+            print(
+                f"\nEarly stop at epoch {epoch} — no improvement for {PATIENCE} epochs."
+            )
             break
 
-    wandb.run.summary["best_val_f1"]  = best_f1
+    wandb.run.summary["best_val_f1"] = best_f1
     wandb.run.summary["stopped_epoch"] = stopped_epoch
     wandb.finish()
 

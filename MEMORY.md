@@ -9,8 +9,8 @@
 | Item | Value |
 |------|-------|
 | Active branch | `main` (Phase 4 merged 2026-05-28) |
-| Current phase | **Phase 5 — SSL Model (MAE pretraining → fine-tune)** |
-| Last merge | Phase 4 supervised baseline — ResNet18/50 training loop + wandb |
+| Current phase | **Phase 4 extended — supervised baseline testing** |
+| Last merge | PR #15 — evaluation script + synthetic baseline results (2026-06-05) |
 | Test suite | 135 passed, 2 skipped (fabio absent), 1 pre-existing Eiger4M bitshuffle fail |
 
 ---
@@ -54,17 +54,37 @@ Architecture fixed: Track 1 ResNet supervised, Track 2 MAE ViT SSL. Shared prepr
 | 4 | GitHub ruleset `protect_main` had wrong required check name `"CI / test"` — actual name is `"test"` | Fixed 2026-05-23. If CI gating breaks again, check ruleset at repo Settings → Rules. |
 | 5 | `notebooks/lcn_ablation_executed.ipynb` is untracked — intentional executed artifact | Do not commit. The source notebook `lcn_ablation.ipynb` is the committed version. |
 | 6 | `anaconda_projects/` directory is untracked in working directory | Status unresolved through Phase 4 — determine if active setup or legacy artifact before Phase 5 branch. |
+| 7 | Resonet geometry file is named `Eigar.geom` (typo for "Eiger") | Copied to `src/preprocessing/data/eiger_resonet.geom` — use that path, not the original. |
+| 8 | Resonet 25k file is `cxi_merged_25k.cxi` not `cxi_25k.cxi` | Full path: `/data/bioxfel/user/gihan/Resonet/cxi_merged_25k.cxi` |
+| 9 | `geometry_file_to_pad_geometry_list()` is in `reborn.external.crystfel`, not `reborn.detector` | Always import from `reborn.external.crystfel` |
 
 ---
 
-## Immediate Next Steps (Phase 5)
+## Resonet CXI Integration (2026-06-11)
 
-1. **Create `phase-05` branch** from main: `git checkout -b phase-05 main`
-2. **ViT variant decision**: ViT-Base vs. ViT-Small — decide before writing any model code (open decision below)
-3. **First feature**: `src/models/ssl.py` — MAE encoder + classification head (currently a stub/docstring only)
-4. **Training scripts**: `train_ssl_pretrain.py` and `train_ssl_finetune.py`
-5. **Configs**: `configs/ssl/mae_pretrain.yaml` and `configs/ssl/mae_finetune.yaml`
-6. **HPC baseline run for Phase 4** still pending — runs in parallel with Phase 5 development (does not block)
+New multi-frame CXI format (Resonet-generated) now fully supported. Key additions:
+
+- `src/preprocessing/io.py` — `count_frames()`, `read_frame(idx)`, `read_embedded_labels()`
+- `src/preprocessing/pipeline.py` — `preprocess_assembled()` (geometry-bypass)
+- `src/preprocessing/geometry.py` — `eiger_resonet_pad_geometry_list()`, `extract_panels_from_canvas()`, `"EigerRESoNeT"` in `DETECTOR_LOADERS`; geometry file at `src/preprocessing/data/eiger_resonet.geom`
+- `src/data/dataset.py` — `MultiFrameCXIDataset` (multi-frame CXI + embedded labels)
+- `scripts/evaluate_resonet_cxi.py`, `scripts/train_resonet_cxi.py`, `scripts/submit_resonet_train.sh`
+- `configs/supervised/resnet18_resonet.yaml`
+
+**Key finding:** Reborn geometry assembly is NOT needed for Resonet Eiger normalization — `preprocess_assembled()` is identical in output (canvas_size == n_pixels → assembly is identity). Reborn geometry only matters for AGIPD and JUNGFRAU_4M.
+
+**Training job:** SLURM job 55223044 submitted — ResNet18 on `cxi_merged_25k.cxi` (20k train / 5k val, 100 epochs). Checkpoint → `checkpoints/resnet18-resonet-seed42/best.pt`.
+
+**Inference baseline (resnet18-10k-full-seed42 on Resonet CXI):** AUC=0.59, AP=0.61, F1=0.68 — domain shift from synthetic hitfinder_10k data.
+
+## Immediate Next Steps
+
+> **Phase 5 on hold (2026-06-05):** Continuing to test and validate the supervised baseline before starting SSL work. Do not begin Phase 5 until explicitly instructed.
+
+1. **Wait for job 55223044** — evaluate `resnet18-resonet-seed42` on `cxi_100/` once complete
+2. Real-detector LODO HPC run still pending (train on 3 detectors, eval on held-out 4th)
+3. `scripts/submit_supervised.sh` — needed before first real-detector HPC run
+4. **Phase 5 starts only when user says testing is complete**
 
 ---
 

@@ -18,6 +18,9 @@ wandb/
 # Logs
 logs/
 
+# Checkpoints and run artefacts (large binaries — not committed)
+checkpoints/
+
 # Data (actual data lives on Sol — only symlinks committed)
 data/raw/*
 data/processed/*

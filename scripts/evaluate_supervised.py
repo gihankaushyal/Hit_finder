@@ -91,7 +91,9 @@ def run_evaluation(data_dir: Path, checkpoint: Path) -> None:
     model.load_state_dict(ckpt["model_state_dict"])
     model.to(device)
     model.eval()
-    print(f"Checkpoint: {checkpoint}  (saved at epoch {ckpt['epoch']}, val F1={ckpt['val_f1']:.4f})\n")
+    print(
+        f"Checkpoint: {checkpoint}  (saved at epoch {ckpt['epoch']}, val F1={ckpt['val_f1']:.4f})\n"
+    )
 
     all_scores: list[np.ndarray] = []
     all_labels: list[np.ndarray] = []
@@ -137,7 +139,9 @@ def run_evaluation(data_dir: Path, checkpoint: Path) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Evaluate supervised hitfinder on test data")
+    parser = argparse.ArgumentParser(
+        description="Evaluate supervised hitfinder on test data"
+    )
     parser.add_argument(
         "--data-dir",
         type=Path,

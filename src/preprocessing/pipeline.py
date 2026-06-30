@@ -5,7 +5,9 @@ from __future__ import annotations
 import numpy as np
 from skimage.transform import resize as sk_resize
 
-from src.preprocessing.geometry import assemble_image
+from reborn.detector import PADAssembler, PADGeometryList
+
+from src.preprocessing.geometry import assemble_image, extract_panels_from_canvas
 from src.preprocessing.normalize import LCN_WINDOW_DEFAULT, gcn, lcn
 
 TARGET_SIZE: tuple[int, int] = (224, 224)
@@ -43,6 +45,39 @@ def _to_2d(
     raise ValueError(f"Unexpected image ndim {image.ndim}; expected 1, 2, or 3.")
 
 
+def preprocess_assembled(
+    image_2d: np.ndarray,
+    lcn_window: int = LCN_WINDOW_DEFAULT,
+) -> np.ndarray:
+    """GCN → LCN → resize on a pre-assembled image, skipping geometry.
+
+    Use for formats where the stored array is already a spatial image:
+    Resonet Eiger/ePix10k CXI (5632×384 stacked panels), .img files, or any
+    case where Reborn geometry assembly has already been applied externally.
+    3D input (AGIPD modules, shape N×ss×fs) is row-stacked to 2D via _to_2d.
+
+    Pipeline order is identical to preprocess() from step 3 onward, so both
+    paths produce comparable outputs after normalization.
+
+    Args:
+        image_2d: float32 array, shape (H, W) or (N, ss, fs) for AGIPD modules.
+        lcn_window: LCN neighbourhood size (default 9, from Phase 3 ablation).
+
+    Returns:
+        float32 array of shape (224, 224).
+    """
+    image_2d = _to_2d(image_2d)
+    image_gcn = gcn(image_2d.astype(np.float32))
+    image_lcn = lcn(image_gcn, window=lcn_window)
+    resized = sk_resize(
+        image_lcn,
+        TARGET_SIZE,
+        anti_aliasing=True,
+        preserve_range=True,
+    )
+    return resized.astype(np.float32)
+
+
 def preprocess(
     panel_data: list[np.ndarray],
     pads: object,
@@ -78,6 +113,64 @@ def preprocess(
     image_gcn = gcn(image_2d)
     image_lcn = lcn(image_gcn, window=lcn_window)
 
+    resized = sk_resize(
+        image_lcn,
+        TARGET_SIZE,
+        anti_aliasing=True,
+        preserve_range=True,
+    )
+    return resized.astype(np.float32)
+
+
+def preprocess_with_geometry(
+    frame: np.ndarray,
+    pads: PADGeometryList,
+    detector_desc: str,
+    lcn_window: int = LCN_WINDOW_DEFAULT,
+    assembler: PADAssembler | None = None,
+) -> np.ndarray:
+    """Geometry-aware preprocessing: flatten pixels → PADAssembler → GCN → LCN → resize.
+
+    Assembly strategy (confirmed by visual inspection 2026-06-26):
+      - AGIPD 1M:     Reborn standard pads + PADAssembler(frame.ravel())
+      - ePix10k 2.2M: Reborn standard pads + PADAssembler(frame.ravel())
+      - EIGER 4M:     CrystFEL geom pads  + PADAssembler(concat panel ravels)
+
+    Jungfrau 4M is pre-assembled — use preprocess_assembled() for that detector.
+
+    Args:
+        frame: Raw frame read from CXI file (float32 array, detector-native shape).
+        pads: PADGeometryList loaded via get_geometry(detector_desc).
+        detector_desc: Detector description string from CXI metadata
+            (entry_1/instrument_1/detector_1/description).
+        lcn_window: LCN neighbourhood size (default 9, from Phase 3 ablation).
+        assembler: Optional pre-constructed PADAssembler (pass get_assembler() result
+            to avoid recreating flat_indices on every call in tight loops).
+
+    Returns:
+        float32 array of shape (224, 224).
+
+    Raises:
+        ValueError: If detector_desc is unrecognised.
+    """
+    if detector_desc in ("AGIPD 1M", "ePix10k 2.2M"):
+        # Reborn standard pads — flat pixel order matches raw array ravel.
+        flat = frame.ravel().astype(np.float32)
+    elif detector_desc == "EIGER 4M":
+        # CrystFEL geom — extract panels via parent_data_slice, then flatten.
+        panels = extract_panels_from_canvas(frame.astype(np.float32), pads)
+        flat = np.concatenate([p.ravel() for p in panels])
+    else:
+        raise ValueError(
+            f"preprocess_with_geometry: unrecognised detector_desc '{detector_desc}'. "
+            "Use preprocess_assembled() for Jungfrau 4M."
+        )
+
+    if assembler is None:
+        assembler = PADAssembler(pad_geometry=pads)
+    assembled = assembler.assemble_data(flat)  # always 2D
+    image_gcn = gcn(assembled.astype(np.float32))
+    image_lcn = lcn(image_gcn, window=lcn_window)
     resized = sk_resize(
         image_lcn,
         TARGET_SIZE,

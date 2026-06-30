@@ -125,7 +125,9 @@ def run_on_loader(
 ) -> dict[str, float]:
     """Run model on a DataLoader; return ap, auc_roc, f1, threshold.
 
-    Model must output logits (pre-sigmoid) with shape [batch, 1] or [batch].
+    Model must output logits with shape [batch, 1], [batch], or [batch, 2].
+    For [batch, 2], softmax is applied and the positive-class (index 1) column
+    is used as the score. For [batch, 1] or [batch], sigmoid is applied.
     """
     model.to(device)
     model.eval()
@@ -135,8 +137,11 @@ def run_on_loader(
     with torch.no_grad():
         for images, labels in loader:
             images = images.to(device)
-            logits = model(images).squeeze(-1)
-            scores = torch.sigmoid(logits).cpu().numpy()
+            logits = model(images)
+            if logits.ndim == 2 and logits.shape[1] == 2:
+                scores = torch.softmax(logits, dim=1)[:, 1].cpu().numpy()
+            else:
+                scores = torch.sigmoid(logits.squeeze(-1)).cpu().numpy()
             all_scores.append(scores)
             all_labels.append(labels.numpy())
 
