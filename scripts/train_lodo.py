@@ -90,12 +90,10 @@ def _make_loader(
     shuffle: bool,
     label_key: str = "entry_1/labels/hit",
 ):
-    ids = [
-        sid
-        for sid, s in split_artifact["splits"].items()
-        if s == split_name
-    ]
-    return cxi_session_loader(session_map, ids, batch_size, num_workers, shuffle, label_key=label_key)
+    ids = [sid for sid, s in split_artifact["splits"].items() if s == split_name]
+    return cxi_session_loader(
+        session_map, ids, batch_size, num_workers, shuffle, label_key=label_key
+    )
 
 
 def _train_fold(
@@ -118,15 +116,47 @@ def _train_fold(
     run_name = f"{backbone}-lodo-fold{fold_id}-seed{seed}"
 
     label_key = cfg["lodo"].get("label_key", "entry_1/labels/hit")
-    train_dl     = _make_loader(split_artifact, SPLIT_TRAIN,          session_map, batch_size, num_workers, shuffle=True,  label_key=label_key)
-    val_dl       = _make_loader(split_artifact, SPLIT_VAL,            session_map, batch_size, num_workers, shuffle=False, label_key=label_key)
-    in_domain_dl = _make_loader(split_artifact, SPLIT_IN_DOMAIN_TEST, session_map, batch_size, num_workers, shuffle=False, label_key=label_key)
-    cross_dl     = _make_loader(split_artifact, SPLIT_CROSS_DETECTOR, session_map, batch_size, num_workers, shuffle=False, label_key=label_key)
+    train_dl = _make_loader(
+        split_artifact,
+        SPLIT_TRAIN,
+        session_map,
+        batch_size,
+        num_workers,
+        shuffle=True,
+        label_key=label_key,
+    )
+    val_dl = _make_loader(
+        split_artifact,
+        SPLIT_VAL,
+        session_map,
+        batch_size,
+        num_workers,
+        shuffle=False,
+        label_key=label_key,
+    )
+    in_domain_dl = _make_loader(
+        split_artifact,
+        SPLIT_IN_DOMAIN_TEST,
+        session_map,
+        batch_size,
+        num_workers,
+        shuffle=False,
+        label_key=label_key,
+    )
+    cross_dl = _make_loader(
+        split_artifact,
+        SPLIT_CROSS_DETECTOR,
+        session_map,
+        batch_size,
+        num_workers,
+        shuffle=False,
+        label_key=label_key,
+    )
 
-    n_train   = len(train_dl.dataset)
-    n_val     = len(val_dl.dataset)
+    n_train = len(train_dl.dataset)
+    n_val = len(val_dl.dataset)
     n_indomain = len(in_domain_dl.dataset)
-    n_cross   = len(cross_dl.dataset)
+    n_cross = len(cross_dl.dataset)
 
     print(
         f"\n{'='*60}\n"
@@ -151,7 +181,7 @@ def _train_fold(
     wandb.init(
         project=cfg["wandb"]["project"],
         entity=cfg["wandb"].get("entity"),
-        id=run_name,        # deterministic ID so resume="allow" finds the same run
+        id=run_name,  # deterministic ID so resume="allow" finds the same run
         name=run_name,
         config={**cfg, "fold_id": fold_id, "test_detector": fold["test_detector"]},
         tags=cfg["wandb"].get("tags", []),
@@ -159,7 +189,9 @@ def _train_fold(
     )
 
     if resume_eval_only:
-        print(f"  Checkpoint found at {ckpt_path} — skipping training, resuming from evaluation.")
+        print(
+            f"  Checkpoint found at {ckpt_path} — skipping training, resuming from evaluation."
+        )
     else:
         optimizer = torch.optim.AdamW(
             model.parameters(),
@@ -181,14 +213,16 @@ def _train_fold(
                 f"val_loss={val_m['loss']:.4f}  "
                 f"val_AP={val_m['ap']:.4f}  val_F1={val_m['f1']:.4f}"
             )
-            wandb.log({
-                "epoch": epoch,
-                "train/loss": train_m["loss"],
-                "val/loss": val_m["loss"],
-                "val/ap": val_m["ap"],
-                "val/auc": val_m["auc"],
-                "val/f1": val_m["f1"],
-            })
+            wandb.log(
+                {
+                    "epoch": epoch,
+                    "train/loss": train_m["loss"],
+                    "val/loss": val_m["loss"],
+                    "val/ap": val_m["ap"],
+                    "val/auc": val_m["auc"],
+                    "val/f1": val_m["f1"],
+                }
+            )
 
             if val_m["f1"] > best_f1:
                 best_f1 = val_m["f1"]
@@ -207,7 +241,9 @@ def _train_fold(
             else:
                 epochs_no_improve += 1
                 if epochs_no_improve >= patience:
-                    print(f"  Early stopping at epoch {epoch} (no improvement for {patience} epochs)")
+                    print(
+                        f"  Early stopping at epoch {epoch} (no improvement for {patience} epochs)"
+                    )
                     break
 
     # Evaluate best checkpoint on in-domain and cross-detector test sets
@@ -236,29 +272,31 @@ def _train_fold(
         f"  Cross-detector:    AP={cross_m['ap']:.4f}  AUC={cross_m['auc_roc']:.4f}  F1={cross_m['f1']:.4f}"
     )
 
-    wandb.log({
-        "in_domain/ap":    in_domain_m["ap"],
-        "in_domain/auc":   in_domain_m["auc_roc"],
-        "in_domain/f1":    in_domain_m["f1"],
-        "cross/ap":        cross_m["ap"],
-        "cross/auc":       cross_m["auc_roc"],
-        "cross/f1":        cross_m["f1"],
-    })
+    wandb.log(
+        {
+            "in_domain/ap": in_domain_m["ap"],
+            "in_domain/auc": in_domain_m["auc_roc"],
+            "in_domain/f1": in_domain_m["f1"],
+            "cross/ap": cross_m["ap"],
+            "cross/auc": cross_m["auc_roc"],
+            "cross/f1": cross_m["f1"],
+        }
+    )
     wandb.finish()
 
     result = {
         "fold_id": fold_id,
         "test_detector": fold["test_detector"],
         "cross": {
-            "ap":      cross_m["ap"],
+            "ap": cross_m["ap"],
             "auc_roc": cross_m["auc_roc"],
-            "f1":      cross_m["f1"],
+            "f1": cross_m["f1"],
             "threshold": cross_m["threshold"],
         },
         "in_domain": {
-            "ap":      in_domain_m["ap"],
+            "ap": in_domain_m["ap"],
             "auc_roc": in_domain_m["auc_roc"],
-            "f1":      in_domain_m["f1"],
+            "f1": in_domain_m["f1"],
             "threshold": in_domain_m["threshold"],
         },
     }

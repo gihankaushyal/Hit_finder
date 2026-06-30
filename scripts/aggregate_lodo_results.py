@@ -37,10 +37,10 @@ def main(checkpoints_dir: Path) -> None:
         key = f"fold_{r['fold_id']}"
         fold_results[key] = {
             "test_detector": r["test_detector"],
-            "ap":            r["cross"]["ap"],
-            "auc_roc":       r["cross"]["auc_roc"],
-            "f1":            r["cross"]["f1"],
-            "in_domain_ap":  r["in_domain"]["ap"],
+            "ap": r["cross"]["ap"],
+            "auc_roc": r["cross"]["auc_roc"],
+            "f1": r["cross"]["f1"],
+            "in_domain_ap": r["in_domain"]["ap"],
         }
         ap_values.append(r["cross"]["ap"])
         print(
@@ -51,8 +51,10 @@ def main(checkpoints_dir: Path) -> None:
             f"in-domain AP={r['in_domain']['ap']:.4f}"
         )
 
-    results_for_table: dict = {k: {"ap": v["ap"], "test_detector": v["test_detector"]}
-                                for k, v in fold_results.items()}
+    results_for_table: dict = {
+        k: {"ap": v["ap"], "test_detector": v["test_detector"]}
+        for k, v in fold_results.items()
+    }
 
     if len(ap_values) > 1:
         results_for_table["mean_ap"] = float(np.mean(ap_values))

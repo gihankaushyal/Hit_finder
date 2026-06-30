@@ -156,9 +156,13 @@ class MultiFrameCXIDataset(Dataset):
                 try:
                     pads = get_geometry(desc)
                     assembler = get_assembler(desc)
-                    frame = preprocess_with_geometry(frame, pads, desc, assembler=assembler)
+                    frame = preprocess_with_geometry(
+                        frame, pads, desc, assembler=assembler
+                    )
                 except (ValueError, KeyError):
-                    frame = preprocess_assembled(frame)  # e.g. Jungfrau 4M — already assembled
+                    frame = preprocess_assembled(
+                        frame
+                    )  # e.g. Jungfrau 4M — already assembled
             else:
                 frame = self._preprocess_fn(frame)
         tensor = torch.from_numpy(frame).unsqueeze(0)
