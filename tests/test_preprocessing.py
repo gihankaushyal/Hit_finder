@@ -152,11 +152,15 @@ def test_jungfrau_and_epix_assembly_shape_is_2d():
 def test_eiger4m_crystfel_geometry_properties():
     # Eiger4M uses CrystFEL geom (stacked 5632×384 canvas): 64 panels, defines slicing, assembles to 2D.
     pads = load_pad_geometry("Eiger4M")
-    assert len(pads) == 64, f"Eiger4M CrystFEL geom must have 64 panels, got {len(pads)}"
+    assert (
+        len(pads) == 64
+    ), f"Eiger4M CrystFEL geom must have 64 panels, got {len(pads)}"
     assert pads.defines_slicing(), "Eiger4M CrystFEL geom must define parent_data_slice"
     panel_data = [np.ones((p.n_ss, p.n_fs)) for p in pads]
     img = assemble_image(pads, panel_data)
-    assert img.ndim == 2, f"Expected Eiger4M PADAssembler output to be 2D, got shape {img.shape}"
+    assert (
+        img.ndim == 2
+    ), f"Expected Eiger4M PADAssembler output to be 2D, got shape {img.shape}"
 
 
 # ---------------------------------------------------------------------------

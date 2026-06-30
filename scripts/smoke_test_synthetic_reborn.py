@@ -22,12 +22,14 @@ from src.preprocessing.pipeline import preprocess
 DATA_FILE = Path("/data/bioxfel/user/gihan/Resonet/hitfinder_10k/compressed0.h5")
 
 # geom column indices (from commandline --randDist --randWave --randCent)
-_GEOM_DIST_MM = 0   # detector distance in mm
-_GEOM_WAVE_AA = 1   # wavelength in Ångströms (unused here)
-_GEOM_PIX_MM  = 2   # pixel size in mm (always 0.075 for Eiger)
+_GEOM_DIST_MM = 0  # detector distance in mm
+_GEOM_WAVE_AA = 1  # wavelength in Ångströms (unused here)
+_GEOM_PIX_MM = 2  # pixel size in mm (always 0.075 for Eiger)
 
 
-def build_pad(distance_m: float, pixel_size_m: float, n_ss: int, n_fs: int) -> PADGeometry:
+def build_pad(
+    distance_m: float, pixel_size_m: float, n_ss: int, n_fs: int
+) -> PADGeometry:
     """Build a flat, on-axis PADGeometry for a monolithic single-panel detector."""
     return PADGeometry(
         distance=distance_m,
@@ -47,8 +49,12 @@ def main() -> None:
     distance_m = float(geom_row[_GEOM_DIST_MM]) * 1e-3
     pixel_size_m = float(geom_row[_GEOM_PIX_MM]) * 1e-3
 
-    print(f"Input  — shape: {frame.shape}  dtype: {frame.dtype}  min: {frame.min():.1f}  max: {frame.max():.1f}")
-    print(f"Geometry — n_ss: {n_ss}  n_fs: {n_fs}  pixel_size: {pixel_size_m*1e6:.1f} μm  distance: {distance_m*1e3:.1f} mm")
+    print(
+        f"Input  — shape: {frame.shape}  dtype: {frame.dtype}  min: {frame.min():.1f}  max: {frame.max():.1f}"
+    )
+    print(
+        f"Geometry — n_ss: {n_ss}  n_fs: {n_fs}  pixel_size: {pixel_size_m*1e6:.1f} μm  distance: {distance_m*1e3:.1f} mm"
+    )
 
     pad = build_pad(distance_m, pixel_size_m, n_ss, n_fs)
     pads = PADGeometryList([pad])
@@ -56,7 +62,9 @@ def main() -> None:
     output = preprocess(panel_data=[frame], pads=pads)
 
     finite = np.isfinite(output).all()
-    print(f"Output — shape: {output.shape}  dtype: {output.dtype}  min: {output.min():.4f}  max: {output.max():.4f}  mean: {output.mean():.4f}  all_finite: {finite}")
+    print(
+        f"Output — shape: {output.shape}  dtype: {output.dtype}  min: {output.min():.4f}  max: {output.max():.4f}  mean: {output.mean():.4f}  all_finite: {finite}"
+    )
 
     if not finite:
         print("FAIL: output contains NaN or Inf")

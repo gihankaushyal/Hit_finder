@@ -30,8 +30,10 @@ from src.models.supervised import build_supervised_model
 from src.preprocessing.normalize import LCN_WINDOW_DEFAULT, gcn, lcn
 from src.training.train_supervised import evaluate, train_one_epoch
 
-DATA_FILE = Path("/data/bioxfel/user/gihan/Resonet/hitfinder_10k/hitfinder_10k_merged.h5")
-BG_ONLY_COL = -1       # labels[:, -1] is `bg_only`: 1.0 → non-hit, 0.0 → hit
+DATA_FILE = Path(
+    "/data/bioxfel/user/gihan/Resonet/hitfinder_10k/hitfinder_10k_merged.h5"
+)
+BG_ONLY_COL = -1  # labels[:, -1] is `bg_only`: 1.0 → non-hit, 0.0 → hit
 TRAIN_FRAC = 0.8
 BATCH_SIZE = 32
 LR = 1e-4
@@ -162,14 +164,16 @@ def main() -> None:
             f"{epoch:>5}  {train_m['loss']:>10.4f}  {val_m['loss']:>8.4f}"
             f"  {val_m['ap']:>6.4f}  {val_m['auc']:>6.4f}  {val_m['f1']:>6.4f}"
         )
-        wandb.log({
-            "epoch": epoch,
-            "train/loss": train_m["loss"],
-            "val/loss": val_m["loss"],
-            "val/ap": val_m["ap"],
-            "val/auc": val_m["auc"],
-            "val/f1": val_m["f1"],
-        })
+        wandb.log(
+            {
+                "epoch": epoch,
+                "train/loss": train_m["loss"],
+                "val/loss": val_m["loss"],
+                "val/ap": val_m["ap"],
+                "val/auc": val_m["auc"],
+                "val/f1": val_m["f1"],
+            }
+        )
 
     wandb.finish()
     print("\nDone.")

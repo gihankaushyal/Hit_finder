@@ -53,15 +53,19 @@ def run_normalization_preview(cxi_paths: list[Path], n_frames: int = 5) -> None:
     print("  Normalization pipeline preview")
     print(f"  File: {cxi_paths[0]}")
     print(f"{'='*50}")
-    print(f"  {'Frame':<6} {'Raw shape':<14} {'Raw min':<10} {'Raw max':<10} "
-          f"{'Norm min':<10} {'Norm max':<10} {'Finite'}")
+    print(
+        f"  {'Frame':<6} {'Raw shape':<14} {'Raw min':<10} {'Raw max':<10} "
+        f"{'Norm min':<10} {'Norm max':<10} {'Finite'}"
+    )
     print(f"  {'-'*72}")
 
     for i in range(min(n_frames, 50)):
         raw = read_frame(cxi_paths[0], i)
         norm = preprocess_assembled(raw)
-        print(f"  {i:<6} {str(raw.shape):<14} {raw.min():<10.1f} {raw.max():<10.1f} "
-              f"{norm.min():<10.4f} {norm.max():<10.4f} {np.isfinite(norm).all()}")
+        print(
+            f"  {i:<6} {str(raw.shape):<14} {raw.min():<10.1f} {raw.max():<10.1f} "
+            f"{norm.min():<10.4f} {norm.max():<10.4f} {np.isfinite(norm).all()}"
+        )
 
     print(f"  → Output shape: (224, 224) float32\n")
 
@@ -76,7 +80,9 @@ def run_model_evaluation(
     print(f"  Supervised model evaluation")
     print(f"  Device: {device}")
     print(f"  Files:  {len(cxi_paths)} CXI file(s)")
-    print(f"  Geometry assembly: {'EigerRESoNeT' if use_geometry else 'preprocess_assembled bypass'}")
+    print(
+        f"  Geometry assembly: {'EigerRESoNeT' if use_geometry else 'preprocess_assembled bypass'}"
+    )
     print(f"{'='*50}")
 
     preprocess_fn = _preprocess_with_geometry if use_geometry else None
@@ -109,7 +115,9 @@ def run_model_evaluation(
             logits = model(images)
             scores = torch.softmax(logits, dim=1)[:, 1].cpu().numpy()
             all_scores.append(scores)
-            all_labels.append(labels.numpy() if hasattr(labels, "numpy") else np.array(labels))
+            all_labels.append(
+                labels.numpy() if hasattr(labels, "numpy") else np.array(labels)
+            )
             if (batch_idx + 1) % 5 == 0 or (batch_idx + 1) * BATCH_SIZE >= n_total:
                 done = min((batch_idx + 1) * BATCH_SIZE, n_total)
                 print(f"  Processed {done}/{n_total} frames...")

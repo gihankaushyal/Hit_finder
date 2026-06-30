@@ -86,9 +86,13 @@ def main(config_path: str | Path) -> None:
 
     print(f"Run:      {run_name}")
     print(f"Device:   {device}")
-    print(f"Data:     {cxi_path.name}  —  {n_train} train / {n_val} val / {n_test} test frames")
+    print(
+        f"Data:     {cxi_path.name}  —  {n_train} train / {n_val} val / {n_test} test frames"
+    )
     print(f"Backbone: {backbone}  pretrained={cfg['model']['pretrained']}")
-    print(f"Epochs:   {cfg['training']['epochs']}  lr={cfg['training']['learning_rate']}")
+    print(
+        f"Epochs:   {cfg['training']['epochs']}  lr={cfg['training']['learning_rate']}"
+    )
 
     wandb.init(
         project=cfg["wandb"]["project"],
@@ -153,7 +157,9 @@ def main(config_path: str | Path) -> None:
         else:
             epochs_without_improvement += 1
             if epochs_without_improvement >= patience:
-                print(f"Early stopping at epoch {epoch} (no improvement for {patience} epochs)")
+                print(
+                    f"Early stopping at epoch {epoch} (no improvement for {patience} epochs)"
+                )
                 break
 
     # Final evaluation on held-out test set using best checkpoint
@@ -167,12 +173,14 @@ def main(config_path: str | Path) -> None:
         f"Test results (epoch {ckpt['epoch']})  "
         f"AP={test_m['ap']:.4f}  AUC={test_m['auc']:.4f}  F1={test_m['f1']:.4f}"
     )
-    wandb.log({
-        "test/ap": test_m["ap"],
-        "test/auc": test_m["auc"],
-        "test/f1": test_m["f1"],
-        "test/loss": test_m["loss"],
-    })
+    wandb.log(
+        {
+            "test/ap": test_m["ap"],
+            "test/auc": test_m["auc"],
+            "test/f1": test_m["f1"],
+            "test/loss": test_m["loss"],
+        }
+    )
 
     wandb.finish()
     print(f"\nDone. Best val F1={best_f1:.4f}  checkpoint: {ckpt_dir}/best.pt")

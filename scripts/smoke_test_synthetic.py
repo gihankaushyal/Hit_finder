@@ -29,14 +29,20 @@ def main() -> None:
     with h5py.File(DATA_FILE, "r") as f:
         raw = f["images"][0].astype(np.float32)
 
-    print(f"Input  — shape: {raw.shape}  dtype: {raw.dtype}  min: {raw.min():.1f}  max: {raw.max():.1f}")
+    print(
+        f"Input  — shape: {raw.shape}  dtype: {raw.dtype}  min: {raw.min():.1f}  max: {raw.max():.1f}"
+    )
 
     image_gcn = gcn(raw)
     image_lcn = lcn(image_gcn, window=LCN_WINDOW_DEFAULT)
-    output = sk_resize(image_lcn, TARGET_SIZE, anti_aliasing=True, preserve_range=True).astype(np.float32)
+    output = sk_resize(
+        image_lcn, TARGET_SIZE, anti_aliasing=True, preserve_range=True
+    ).astype(np.float32)
 
     finite = np.isfinite(output).all()
-    print(f"Output — shape: {output.shape}  dtype: {output.dtype}  min: {output.min():.4f}  max: {output.max():.4f}  mean: {output.mean():.4f}  all_finite: {finite}")
+    print(
+        f"Output — shape: {output.shape}  dtype: {output.dtype}  min: {output.min():.4f}  max: {output.max():.4f}  mean: {output.mean():.4f}  all_finite: {finite}"
+    )
 
     if not finite:
         print("FAIL: output contains NaN or Inf")

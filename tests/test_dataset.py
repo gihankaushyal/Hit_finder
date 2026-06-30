@@ -19,7 +19,9 @@ _N_FRAMES = 6
 _LABEL_KEY = "entry_1/labels/hit"
 
 
-def _make_multiframe_cxi(tmp_path: Path, n_frames: int = _N_FRAMES, filename: str = "test.cxi") -> Path:
+def _make_multiframe_cxi(
+    tmp_path: Path, n_frames: int = _N_FRAMES, filename: str = "test.cxi"
+) -> Path:
     """Create a Resonet-style multi-frame CXI file with embedded labels."""
     path = tmp_path / filename
     rng = np.random.default_rng(77)

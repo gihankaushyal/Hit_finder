@@ -26,6 +26,7 @@ import sys
 from pathlib import Path
 
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
@@ -34,17 +35,21 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from reborn.detector import PADAssembler
 
-from src.preprocessing.geometry import extract_panels_from_canvas, get_assembler, get_geometry
+from src.preprocessing.geometry import (
+    extract_panels_from_canvas,
+    get_assembler,
+    get_geometry,
+)
 from src.preprocessing.io import read_detector_description, read_frame
 from src.preprocessing.pipeline import _to_2d
 
 DATA_ROOT = Path("/data/bioxfel/user/gihan/Resonet/production")
 
 PRODUCTION_FILES: dict[str, Path] = {
-    "AGIPD":       DATA_ROOT / "agipd_20k"    / "compressed0.cxi",
+    "AGIPD": DATA_ROOT / "agipd_20k" / "compressed0.cxi",
     "JUNGFRAU_4M": DATA_ROOT / "jungfrau_20k" / "compressed0.cxi",
-    "ePix10k":     DATA_ROOT / "epix10k_20k"  / "compressed0.cxi",
-    "Eiger4M":     DATA_ROOT / "eiger4m_20k"  / "compressed0.cxi",
+    "ePix10k": DATA_ROOT / "epix10k_20k" / "compressed0.cxi",
+    "Eiger4M": DATA_ROOT / "eiger4m_20k" / "compressed0.cxi",
 }
 
 
@@ -57,7 +62,7 @@ def assemble_raw(cxi_path: Path, frame_idx: int) -> tuple[np.ndarray, str]:
         return _to_2d(raw), desc
 
     pads = get_geometry(desc)
-    asm  = get_assembler(desc)
+    asm = get_assembler(desc)
 
     if pads.defines_slicing():
         # Canvas-based detectors (e.g. EigerRESoNeT, JUNGFRAU_4M): extract panels
@@ -84,7 +89,7 @@ def save_image(
     # Use 99.9th percentile so Bragg spots (top ~0.1% of pixels) are not
     # saturated. 99th percentile clips at background scatter for sparse
     # multi-panel layouts (e.g. Eiger4M 4-quadrant with large dead zones).
-    p_low  = np.percentile(pos, 1)   if len(pos) else 0.0
+    p_low = np.percentile(pos, 1) if len(pos) else 0.0
     p_high = np.percentile(pos, 99.9) if len(pos) else 1.0
     vmin_auto = max(0.0, float(p_low))
     vmax_auto = float(p_high) if vmax is None else vmax
@@ -112,7 +117,9 @@ def save_image(
     print(f"  saved → {out_path}  (shape={image.shape})")
 
 
-def process_one(cxi_path: Path, frame_idx: int, out_path: Path | None, vmax: float | None) -> None:
+def process_one(
+    cxi_path: Path, frame_idx: int, out_path: Path | None, vmax: float | None
+) -> None:
     print(f"\n{cxi_path.name}  frame={frame_idx}")
     image, desc = assemble_raw(cxi_path, frame_idx)
     print(f"  detector:        {desc}")
@@ -134,8 +141,12 @@ def main() -> None:
     parser.add_argument("cxi_path", nargs="?", type=Path, help="Path to a CXI file")
     parser.add_argument("--frame", type=int, default=0, help="Frame index (default: 0)")
     parser.add_argument("--out", type=Path, default=None, help="Output PNG path")
-    parser.add_argument("--vmax", type=float, default=None, help="Colour scale upper limit")
-    parser.add_argument("--all", action="store_true", help="Process all four production files")
+    parser.add_argument(
+        "--vmax", type=float, default=None, help="Colour scale upper limit"
+    )
+    parser.add_argument(
+        "--all", action="store_true", help="Process all four production files"
+    )
     args = parser.parse_args()
 
     if args.all:

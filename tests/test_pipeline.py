@@ -6,7 +6,12 @@ import numpy as np
 import pytest
 
 from src.preprocessing.geometry import load_pad_geometry
-from src.preprocessing.pipeline import TARGET_SIZE, _to_2d, preprocess, preprocess_assembled
+from src.preprocessing.pipeline import (
+    TARGET_SIZE,
+    _to_2d,
+    preprocess,
+    preprocess_assembled,
+)
 
 DETECTORS = ["AGIPD", "JUNGFRAU_4M", "ePix10k", "Eiger4M"]
 
@@ -94,7 +99,11 @@ class TestPreprocess:
 
 class TestPreprocessAssembled:
     def test_output_shape_is_target_size(self) -> None:
-        img = np.random.default_rng(0).integers(0, 1000, (5632, 384), dtype=np.uint16).astype(np.float32)
+        img = (
+            np.random.default_rng(0)
+            .integers(0, 1000, (5632, 384), dtype=np.uint16)
+            .astype(np.float32)
+        )
         out = preprocess_assembled(img)
         assert out.shape == TARGET_SIZE
 

@@ -157,7 +157,9 @@ def main(config_path: str | Path) -> None:
         else:
             epochs_without_improvement += 1
             if epochs_without_improvement >= patience:
-                print(f"Early stopping at epoch {epoch} (no improvement for {patience} epochs)")
+                print(
+                    f"Early stopping at epoch {epoch} (no improvement for {patience} epochs)"
+                )
                 break
 
     wandb.finish()

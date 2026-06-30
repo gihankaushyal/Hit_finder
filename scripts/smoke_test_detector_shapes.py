@@ -19,7 +19,11 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import numpy as np
 
-from src.preprocessing.geometry import assemble_image, extract_panels_from_canvas, get_geometry
+from src.preprocessing.geometry import (
+    assemble_image,
+    extract_panels_from_canvas,
+    get_geometry,
+)
 from src.preprocessing.io import read_detector_description, read_frame
 from src.preprocessing.pipeline import (
     TARGET_SIZE,
@@ -31,10 +35,10 @@ from src.preprocessing.pipeline import (
 DATA_ROOT = Path("/data/bioxfel/user/gihan/Resonet/production")
 
 DETECTORS = {
-    "AGIPD":       DATA_ROOT / "agipd_20k"    / "compressed0.cxi",
+    "AGIPD": DATA_ROOT / "agipd_20k" / "compressed0.cxi",
     "JUNGFRAU_4M": DATA_ROOT / "jungfrau_20k" / "compressed0.cxi",
-    "ePix10k":     DATA_ROOT / "epix10k_20k"  / "compressed0.cxi",
-    "Eiger4M":     DATA_ROOT / "eiger4m_20k"  / "compressed0.cxi",
+    "ePix10k": DATA_ROOT / "epix10k_20k" / "compressed0.cxi",
+    "Eiger4M": DATA_ROOT / "eiger4m_20k" / "compressed0.cxi",
 }
 
 PASS = "\033[92mPASS\033[0m"

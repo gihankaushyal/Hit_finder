@@ -11,7 +11,6 @@ import pytest
 from src.preprocessing.geometry import _EIGER4M_GEOM, get_geometry
 from src.preprocessing.pipeline import preprocess_with_geometry
 
-
 # ---------------------------------------------------------------------------
 # read_detector_description
 # ---------------------------------------------------------------------------
@@ -134,7 +133,9 @@ class TestPreprocessAssembledJungfrau:
         from src.preprocessing.pipeline import preprocess_assembled
 
         # Jungfrau 4M arrives as a 2D canvas (2164, 2068)
-        frame = np.random.default_rng(1).standard_normal((2164, 2068)).astype(np.float32)
+        frame = (
+            np.random.default_rng(1).standard_normal((2164, 2068)).astype(np.float32)
+        )
         result = preprocess_assembled(frame)
         assert result.shape == (224, 224)
         assert result.dtype == np.float32
