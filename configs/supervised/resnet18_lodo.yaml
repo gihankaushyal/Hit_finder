@@ -17,5 +17,10 @@ lodo:
   cxi_pattern: "compressed*.cxi"
   label_key: entry_1/labels/hit
 
+augmentation:
+  enabled: true
+  n_cutout_holes: 3
+  cutout_hole_size: 32
+
 wandb:
   tags: [supervised, resnet18, lodo]

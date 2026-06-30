@@ -18,7 +18,14 @@ from src.preprocessing.io import (
     read_frame,
     read_image,
 )
-from src.preprocessing.pipeline import preprocess_assembled, preprocess_with_geometry
+from src.preprocessing.pipeline import (
+    _to_2d,
+    assemble_only,
+    preprocess_assembled,
+    preprocess_eval,
+    preprocess_train,
+    preprocess_with_geometry,
+)
 
 
 class UnlabeledDataset(Dataset):
@@ -110,8 +117,14 @@ class MultiFrameCXIDataset(Dataset):
         cxi_paths: list[str | Path],
         label_key: str = "entry_1/labels/hit",
         preprocess_fn: Callable[[np.ndarray], np.ndarray] | None = preprocess_assembled,
+        augment: bool = False,
+        n_cutout_holes: int = 3,
+        cutout_hole_size: int = 32,
     ) -> None:
         self._preprocess_fn = preprocess_fn
+        self._augment = augment
+        self._n_cutout_holes = n_cutout_holes
+        self._cutout_hole_size = cutout_hole_size
         # Checked once at init so __getitem__ does not use `is` identity, which
         # breaks for any wrapped/partial version of preprocess_assembled.
         self._use_geometry = preprocess_fn is preprocess_assembled
@@ -150,7 +163,29 @@ class MultiFrameCXIDataset(Dataset):
     def __getitem__(self, idx: int) -> tuple[torch.Tensor, int]:
         path, frame_idx = self._index[idx]
         frame = read_frame(path, frame_idx)
-        if self._preprocess_fn is not None:
+
+        if self._augment:
+            # Augmentation path: assemble to native resolution, then crop/rotate/flip/norm/cutout.
+            # Jungfrau 4M has no desc entry (pre-assembled) — _to_2d gives the 2164×2068 canvas.
+            if path in self._path_to_desc:
+                desc = self._path_to_desc[path]
+                try:
+                    pads = get_geometry(desc)
+                    assembler = get_assembler(desc)
+                    assembled = assemble_only(frame, pads, desc, assembler=assembler)
+                except (ValueError, KeyError, OSError):
+                    assembled = _to_2d(frame)
+            else:
+                assembled = _to_2d(frame)
+            rng = np.random.default_rng()
+            frame = preprocess_train(
+                assembled,
+                rng,
+                n_cutout_holes=self._n_cutout_holes,
+                cutout_hole_size=self._cutout_hole_size,
+            )
+        elif self._preprocess_fn is not None:
+            # Existing eval path (unchanged for non-augment use).
             if self._use_geometry and path in self._path_to_desc:
                 desc = self._path_to_desc[path]
                 try:
@@ -159,11 +194,10 @@ class MultiFrameCXIDataset(Dataset):
                     frame = preprocess_with_geometry(
                         frame, pads, desc, assembler=assembler
                     )
-                except (ValueError, KeyError):
-                    frame = preprocess_assembled(
-                        frame
-                    )  # e.g. Jungfrau 4M — already assembled
+                except (ValueError, KeyError, OSError):
+                    frame = preprocess_assembled(frame)
             else:
                 frame = self._preprocess_fn(frame)
+
         tensor = torch.from_numpy(frame).unsqueeze(0)
         return tensor, self._labels[idx]

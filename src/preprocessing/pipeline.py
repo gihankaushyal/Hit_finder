@@ -122,6 +122,113 @@ def preprocess(
     return resized.astype(np.float32)
 
 
+def assemble_only(
+    frame: np.ndarray,
+    pads: PADGeometryList,
+    detector_desc: str,
+    assembler: PADAssembler | None = None,
+) -> np.ndarray:
+    """Assemble raw detector frame to native-resolution 2D without normalisation.
+
+    Mirrors the assembly logic in preprocess_with_geometry but stops before
+    GCN/LCN/resize — used by the augmentation pipeline to get the full-size
+    image for random cropping.
+
+    Args:
+        frame: Raw frame from CXI file (detector-native shape).
+        pads: PADGeometryList from get_geometry(detector_desc).
+        detector_desc: Detector description string from CXI metadata.
+        assembler: Optional pre-built PADAssembler (avoids recomputing flat_indices).
+
+    Returns:
+        float32 array of shape (H, W) at native detector resolution.
+
+    Raises:
+        ValueError: If detector_desc is unrecognised.
+    """
+    if detector_desc in ("AGIPD 1M", "ePix10k 2.2M"):
+        flat = frame.ravel().astype(np.float32)
+    elif detector_desc == "EIGER 4M":
+        panels = extract_panels_from_canvas(frame.astype(np.float32), pads)
+        flat = np.concatenate([p.ravel() for p in panels])
+    else:
+        raise ValueError(
+            f"assemble_only: unrecognised detector_desc '{detector_desc}'. "
+            "For Jungfrau 4M use _to_2d() directly (pre-assembled canvas)."
+        )
+    if assembler is None:
+        assembler = PADAssembler(pad_geometry=pads)
+    return assembler.assemble_data(flat).astype(np.float32)
+
+
+def preprocess_train(
+    assembled: np.ndarray,
+    rng: np.random.Generator,
+    n_cutout_holes: int = 3,
+    cutout_hole_size: int = 32,
+    lcn_window: int = LCN_WINDOW_DEFAULT,
+) -> np.ndarray:
+    """Train-time augmentation pipeline on a native-resolution assembled image.
+
+    Order: random crop 224×224 → random 90° rotation → random flip →
+           GCN → LCN → random cutout masking.
+
+    Normalisation (GCN → LCN) is computed on the cropped patch so local
+    statistics reflect the actual region seen by the model, not the full frame.
+    Cutout is applied after normalisation so masked pixels are 0.0, matching the
+    approximate post-normalisation mean and simulating dead detector regions.
+
+    Args:
+        assembled: float32 array (H, W) at native detector resolution (≥224 each dim).
+        rng: Numpy Generator — caller creates one per __getitem__ call.
+        n_cutout_holes: Number of rectangular cutout patches.
+        cutout_hole_size: Side length of each cutout patch in pixels.
+        lcn_window: LCN neighbourhood size (default 9, Phase 3 ablation).
+
+    Returns:
+        float32 array of shape (224, 224).
+    """
+    from src.preprocessing.augment import (
+        random_crop,
+        random_cutout,
+        random_flip,
+        random_rot90,
+    )
+
+    patch = random_crop(assembled, TARGET_SIZE[0], rng)
+    patch = random_rot90(patch, rng)
+    patch = random_flip(patch, rng)
+    patch = gcn(patch.astype(np.float32))
+    patch = lcn(patch, window=lcn_window)
+    patch = random_cutout(
+        patch, rng, n_holes=n_cutout_holes, hole_size=cutout_hole_size
+    )
+    return patch.astype(np.float32)
+
+
+def preprocess_eval(
+    assembled: np.ndarray,
+    lcn_window: int = LCN_WINDOW_DEFAULT,
+) -> np.ndarray:
+    """Deterministic eval-time pipeline on a native-resolution assembled image.
+
+    Order: centre crop 224×224 → GCN → LCN. No rotation, flip, or cutout.
+
+    Args:
+        assembled: float32 array (H, W) at native detector resolution (≥224 each dim).
+        lcn_window: LCN neighbourhood size (default 9, Phase 3 ablation).
+
+    Returns:
+        float32 array of shape (224, 224).
+    """
+    from src.preprocessing.augment import center_crop
+
+    patch = center_crop(assembled.astype(np.float32), TARGET_SIZE[0])
+    patch = gcn(patch)
+    patch = lcn(patch, window=lcn_window)
+    return patch.astype(np.float32)
+
+
 def preprocess_with_geometry(
     frame: np.ndarray,
     pads: PADGeometryList,

@@ -44,6 +44,9 @@ def cxi_session_loader(
     num_workers: int = 4,
     shuffle: bool = True,
     label_key: str = "entry_1/labels/hit",
+    augment: bool = False,
+    n_cutout_holes: int = 3,
+    cutout_hole_size: int = 32,
 ) -> DataLoader:
     """DataLoader over a subset of CXI sessions identified by session_id.
 
@@ -57,12 +60,22 @@ def cxi_session_loader(
         shuffle: Whether to shuffle each epoch.
         label_key: HDF5 key for per-frame labels; must match the key used
             in build_sessions() so frame counts and label reads are consistent.
+        augment: If True, apply train-time augmentation (random crop, rot90, flip,
+            cutout). If False (default), use deterministic centre-crop eval path.
+        n_cutout_holes: Number of cutout patches when augment=True.
+        cutout_hole_size: Side length of each cutout patch in pixels.
 
     Returns:
         DataLoader yielding (image, label) pairs; image shape (B, 1, 224, 224).
     """
     paths = [session_map[sid] for sid in session_ids]
-    dataset = MultiFrameCXIDataset(paths, label_key=label_key)
+    dataset = MultiFrameCXIDataset(
+        paths,
+        label_key=label_key,
+        augment=augment,
+        n_cutout_holes=n_cutout_holes,
+        cutout_hole_size=cutout_hole_size,
+    )
     return DataLoader(
         dataset,
         batch_size=batch_size,

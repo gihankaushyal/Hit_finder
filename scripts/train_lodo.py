@@ -89,10 +89,21 @@ def _make_loader(
     num_workers: int,
     shuffle: bool,
     label_key: str = "entry_1/labels/hit",
+    augment: bool = False,
+    n_cutout_holes: int = 3,
+    cutout_hole_size: int = 32,
 ):
     ids = [sid for sid, s in split_artifact["splits"].items() if s == split_name]
     return cxi_session_loader(
-        session_map, ids, batch_size, num_workers, shuffle, label_key=label_key
+        session_map,
+        ids,
+        batch_size,
+        num_workers,
+        shuffle,
+        label_key=label_key,
+        augment=augment,
+        n_cutout_holes=n_cutout_holes,
+        cutout_hole_size=cutout_hole_size,
     )
 
 
@@ -116,6 +127,11 @@ def _train_fold(
     run_name = f"{backbone}-lodo-fold{fold_id}-seed{seed}"
 
     label_key = cfg["lodo"].get("label_key", "entry_1/labels/hit")
+    augment_cfg = cfg.get("augmentation", {})
+    augment_enabled = augment_cfg.get("enabled", False)
+    n_cutout_holes = augment_cfg.get("n_cutout_holes", 3)
+    cutout_hole_size = augment_cfg.get("cutout_hole_size", 32)
+
     train_dl = _make_loader(
         split_artifact,
         SPLIT_TRAIN,
@@ -124,6 +140,9 @@ def _train_fold(
         num_workers,
         shuffle=True,
         label_key=label_key,
+        augment=augment_enabled,
+        n_cutout_holes=n_cutout_holes,
+        cutout_hole_size=cutout_hole_size,
     )
     val_dl = _make_loader(
         split_artifact,
