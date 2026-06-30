@@ -40,6 +40,8 @@
 | 7 | Deployment preparation | Future |
 | 8 | Thesis writing | Future |
 
+> **2026-06-30:** PR #16 merged — geometry-aware assembly for all 4 detectors, full LODO training pipeline, 4-fold LODO evaluation complete, 8 code-review findings fixed. Two Phase 4 items remain: Resonet CXI evaluation and real-detector baseline.
+
 ---
 
 ## Phase 3 Checklist ✅ (complete, merged 2026-05-23)
@@ -74,11 +76,18 @@
 - [x] `scripts/submit_resonet_train.sh` — SLURM job script for Resonet CXI training
 - [x] `configs/supervised/resnet18_resonet.yaml` — config for Resonet CXI training (early_stopping_patience=10, test_fraction=0.1)
 - [x] Resonet CXI domain investigation: confirmed `cxi_merged_25k.cxi` and `cxi_1k/` are in same intensity regime; `cxi_100/` is anomalous low-intensity distribution (2026-06-12)
-- [ ] Resonet CXI training run: `resnet18-resonet-seed42` on `cxi_merged_25k.cxi` (70/20/10 split), SLURM job 55337893 — in progress (2026-06-12)
-- [ ] Baseline run on Sol HPC with real detector data: train on 3 detectors, eval on held-out 4th (leave-one-out)
-- [ ] `scripts/submit_supervised.sh` — check off when first HPC run launches
+- [x] Geometry-aware assembly for all 4 detectors: AGIPD/ePix10k via Reborn std pads + PADAssembler, Eiger4M via CrystFEL `.geom` throughout — PR #16 merged 2026-06-30
+- [x] CrystFEL `.geom` files added: `src/preprocessing/data/agipd.geom`, `eiger4m.geom`, `epix10k.geom`
+- [x] `scripts/train_lodo.py` — LODO training script with session-level split, wandb logging, per-fold checkpoint + results.json
+- [x] `scripts/submit_lodo.sh`, `scripts/submit_lodo_fold.sh` — SLURM submission (fold-level log names fixed)
+- [x] `configs/supervised/resnet18_lodo.yaml` — LODO config
+- [x] `scripts/aggregate_lodo_results.py` — aggregate per-fold results.json into summary table
+- [x] LODO 4-fold evaluation complete (2026-06-27): mean cross AP=0.812 ± 0.167; AGIPD held-out AP=0.565 is outlier; checkpoints on disk under `checkpoints/`
+- [x] 8 code-review findings fixed: label_key forwarding, geometry routing identity check, OSError handling, pickle safety, fold key validation, checkpoint config validation, wandb stable run ID, aggregate script bare open()
+- [ ] Resonet CXI training run: evaluate `resnet18-resonet-seed42` checkpoint (SLURM job 55337893 completed 2026-06-12) on held-out test set
+- [ ] Real-detector LODO baseline: investigate AGIPD generalisation gap (cross AP=0.565 vs 0.868–0.931 for other detectors)
 
-> **Note:** Synthetic baseline complete. Remaining Phase 4 work: Resonet CXI training run, real-detector validation with actual data, and leave-one-detector-out (LODO) evaluation with synthetic data. Phase 5 (SSL) does not begin until these are complete.
+> **Note:** Geometry assembly and LODO pipeline merged (PR #16, 2026-06-30). Remaining Phase 4 work: Resonet CXI evaluation and AGIPD gap investigation. Phase 5 (SSL) does not begin until user confirms Phase 4 testing complete.
 
 ---
 
