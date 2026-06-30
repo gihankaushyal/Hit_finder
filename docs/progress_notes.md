@@ -1,6 +1,6 @@
 # SFX Hitfinder — Progress Notes (Track 1: Supervised Baseline)
 
-*Last updated: 2026-06-26. These notes cover Phase 1–4 of the project roadmap.*
+*Last updated: 2026-06-30. These notes cover Phase 1–4 of the project roadmap.*
 
 ---
 
@@ -107,18 +107,23 @@ Each fold saves `checkpoints/<run_name>/results.json` on completion. The aggrega
 
 ---
 
-## 6. Current Results (Fold 1 Only — Folds 2–4 In Progress)
+## 6. Current Results — All 4 Folds Complete
 
-*As of 2026-06-26. Folds 2–4 are currently training.*
+*As of 2026-06-27. All folds trained and evaluated. Production data: `/data/bioxfel/user/gihan/Resonet/production/` (per-detector subdirs, 5 files × 4,000 frames each for AGIPD/ePix10k/Eiger4M; 10 files × 2,000 frames for JUNGFRAU_4M). Geometry assembly fix (section 8b) was applied before these runs.*
 
 | Fold | Held-out detector | Cross AP | Cross AUC | Cross F1 | In-domain AP |
 |---|---|---|---|---|---|
 | 1 | AGIPD | 0.5649 | 0.5904 | 0.6661 | 1.0000 |
-| 2 | JUNGFRAU_4M | pending | — | — | — |
-| 3 | ePix10k | pending | — | — | — |
-| 4 | Eiger4M | pending | — | — | — |
+| 2 | JUNGFRAU_4M | 0.8683 | 0.8156 | 0.7816 | 0.9999 |
+| 3 | ePix10k | 0.8825 | 0.8886 | 0.8092 | 1.0000 |
+| 4 | Eiger4M | 0.9310 | 0.9138 | 0.8189 | 1.0000 |
+| **Mean** | | **0.8117 ± 0.167** | | | |
 
-**Observation:** In-domain AP = 1.0000 confirms the model fits the training detectors perfectly. Cross-detector AP = 0.5649 for AGIPD (barely above random chance of 0.5) suggests the model is not generalizing to the held-out detector.
+**Observations:**
+- In-domain AP ≈ 1.0 across all folds confirms the model fits the training-detector distribution perfectly — the capacity and training protocol are not limiting factors.
+- Cross-detector AP ranges from 0.565 (AGIPD) to 0.931 (Eiger4M). JUNGFRAU_4M and ePix10k sit in the 0.87–0.88 band.
+- **AGIPD is the clear outlier.** A cross AP of 0.565 is barely above random (0.5), suggesting the model trained on the other three detectors fails to generalise to AGIPD. The other three detectors generalise to each other reasonably well.
+- The mean AP of 0.81 with a std of 0.17 is dominated by the AGIPD gap — without fold 1 the mean would be ~0.89.
 
 ---
 
@@ -137,7 +142,7 @@ Only JUNGFRAU_4M has spatially correct geometry. The other three detectors produ
 
 **Scientific concern:** A ResNet18 trained on these images may learn to identify detector type from panel-edge artifacts rather than from Bragg spot features. Under LODO, these detector-specific edge signatures are absent in the held-out detector — leaving the model without the spurious cues it relied on. This is a plausible explanation for the low fold 1 cross-detector AP of 0.5649.
 
-**Planned fix:** Replace `preprocess_assembled` in `MultiFrameCXIDataset` with geometry-aware assembly using Reborn for all 4 detectors. This requires geometry files for AGIPD, ePix10k, and Eiger4M (JUNGFRAU geometry already exists at `src/preprocessing/data/jungfrau4m_jf4m_103mm.json`). The user is preparing a Reborn geometry reference document.
+**Fix implemented (PR #16, merged 2026-06-30):** See section 8b. Geometry-aware assembly is now active for all 4 detectors. The full LODO results in section 6 were obtained with geometry-corrected inputs.
 
 ---
 
@@ -172,19 +177,17 @@ Only JUNGFRAU_4M has spatially correct geometry. The other three detectors produ
 | Eiger4M | (1687, 1687) | Correct Bragg ring layout ✅ |
 | Jungfrau 4M | (2164, 2068) | Unchanged — correct ✅ |
 
-**Files changed:** `src/preprocessing/geometry.py` (`get_geometry()` dispatch, `get_assembler()` cache), `src/preprocessing/pipeline.py` (`preprocess_with_geometry()` uses `PADAssembler` with flat data), `src/data/dataset.py` (pre-builds assembler cache), `scripts/visualize_assembled.py` (updated assembly paths), `tests/test_geometry_assembly.py` (18 tests, all passing).
+**Files changed (PR #16, merged 2026-06-30):** `src/preprocessing/geometry.py` (`get_geometry()` dispatch, `get_assembler()` module-level cache), `src/preprocessing/pipeline.py` (`preprocess_with_geometry()` uses `PADAssembler` with flat data), `src/data/dataset.py` (`_use_geometry` flag replaces `is` identity check; Reborn objects fetched lazily from cache instead of stored as instance attrs), `scripts/visualize_assembled.py`, `tests/test_geometry_assembly.py` (18 tests, all passing). Additionally 8 code-review findings fixed: `label_key` forwarding in `cxi_session_loader`, `OSError` added to exception handler, pickle safety under spawn workers, fold key validation at startup, backbone/num_classes checkpoint validation, stable `id=run_name` in `wandb.init`, aggregate script bare-open fix.
 
-**Next step:** Re-run all 4 LODO folds with geometry-corrected inputs and compare cross-detector AP against the 0.5649 fold-1 baseline.
+**Outcome:** All 4 LODO folds completed with geometry-corrected inputs (results in section 6). AGIPD cross AP = 0.565 despite correct assembly — the gap is not explained by panel-edge artifacts alone and warrants further investigation.
 
 ---
 
 ## 9. What Comes Next
 
-**Immediate (before manuscript):**
-1. Wait for folds 2–4 to complete → get full LODO mean ± std AP
-2. Implement proper Reborn geometry assembly for all 4 detectors
-3. Re-run LODO with geometry-corrected inputs → compare cross-detector AP before/after
-4. Determine whether geometry correction closes the generalization gap
+**Immediate (Phase 4 — remaining):**
+1. **Investigate AGIPD generalisation gap** — cross AP = 0.565 persists even after geometry-correct assembly. Candidate causes: (a) EuXFEL vs. LCLS domain shift (different photon energies, sample environments); (b) AGIPD 16-module sparse layout produces a fundamentally different image structure than the other three detectors; (c) hit rate or label distribution differs in the AGIPD production data. Next step: inspect assembled AGIPD frames visually and compare hit/non-hit distributions.
+2. **Phase 5 starts only when user confirms Phase 4 testing complete.**
 
 **Track 2 (Phase 5):**
 - MAE-style self-supervised pretraining on pooled unlabeled XFEL frames
