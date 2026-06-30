@@ -1,17 +1,22 @@
 #!/bin/bash
-#SBATCH --job-name=lodo_resnet18
-#SBATCH -p general
-#SBATCH -q grp_cxfel
-#SBATCH --gres=gpu:1
-#SBATCH --nodelist=scg020
-#SBATCH -c 16
-#SBATCH --mem=128G
-#SBATCH --time=24:00:00
-#SBATCH --output=logs/lodo_%j.log
-#SBATCH --error=logs/lodo_%j.err
+# Submit one SLURM job per LODO fold.
+# --output/--error are passed on the sbatch command line so the shell expands
+# $FOLD before SLURM sees the value (unlike #SBATCH headers, which are parsed
+# before the shell runs and cannot expand environment variables).
+#
+# Usage: bash scripts/submit_lodo.sh [fold1 fold2 ...]
+#        Default: all four folds (1 2 3 4)
 
+set -euo pipefail
+
+FOLDS="${@:-1 2 3 4}"
 mkdir -p logs
 
-/home/gketawal/.conda/envs/sfx-hitfinder/bin/python \
-    scripts/train_lodo.py \
-    --config configs/supervised/resnet18_lodo.yaml
+for FOLD in $FOLDS; do
+    sbatch \
+        --export=ALL,FOLD=${FOLD} \
+        --output="logs/lodo_fold${FOLD}_%j.log" \
+        --error="logs/lodo_fold${FOLD}_%j.err" \
+        scripts/submit_lodo_fold.sh
+    echo "Submitted fold ${FOLD}"
+done

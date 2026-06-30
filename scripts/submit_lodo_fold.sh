@@ -1,4 +1,10 @@
 #!/bin/bash
+# Usage: FOLD=1 sbatch scripts/submit_lodo_fold.sh
+#        or via submit_lodo.sh which passes --output/--error on the sbatch
+#        command line (shell expands $FOLD before SLURM sees the directive).
+#
+# Do NOT put --output/--error in #SBATCH headers here — SLURM parses those
+# before the shell runs, so $FOLD would be the literal string "${FOLD}".
 #SBATCH --job-name=lodo_f${FOLD}
 #SBATCH -p general
 #SBATCH -q grp_cxfel
@@ -7,8 +13,6 @@
 #SBATCH -c 16
 #SBATCH --mem=128G
 #SBATCH --time=14:00:00
-#SBATCH --output=logs/lodo_fold${FOLD}_%j.log
-#SBATCH --error=logs/lodo_fold${FOLD}_%j.err
 
 mkdir -p logs
 
