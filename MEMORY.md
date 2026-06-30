@@ -39,7 +39,7 @@ In-domain AP = 1.0 for all folds. AGIPD is the clear outlier — likely domain s
 
 ### Phase 4 — Resonet CXI Integration (2026-06-11)
 
-`MultiFrameCXIDataset`, `preprocess_assembled()` geometry-bypass, `eiger_resonet_pad_geometry_list()`, `extract_panels_from_canvas()`. Training script `scripts/train_resonet_cxi.py`, evaluation `scripts/evaluate_resonet_cxi.py`. Job 55337893 completed 2026-06-12 — checkpoint exists at `checkpoints/resnet18-resonet-seed42/best.pt`, evaluation on held-out test set still pending.
+`MultiFrameCXIDataset`, `preprocess_assembled()` geometry-bypass, `eiger_resonet_pad_geometry_list()`, `extract_panels_from_canvas()`. Training script `scripts/train_resonet_cxi.py`, evaluation `scripts/evaluate_resonet_cxi.py`. Production data at `/data/bioxfel/user/gihan/Resonet/production/` (per-detector subdirs, used by LODO config).
 
 ### Phase 4 — Supervised Baseline (complete, 2026-05-28)
 
@@ -66,7 +66,7 @@ Full pipeline: Reborn geometry → GCN → LCN (window=9) → resize 224×224. L
 | 5 | `notebooks/lcn_ablation_executed.ipynb` is untracked — intentional executed artifact | Do not commit. |
 | 6 | `anaconda_projects/` directory is untracked | Status unresolved — determine if active or legacy before Phase 5. |
 | 7 | Resonet geometry file is named `Eigar.geom` (typo) | Use `src/preprocessing/data/eiger_resonet.geom` — not the original. |
-| 8 | Resonet 25k file is `cxi_merged_25k.cxi` | Full path: `/data/bioxfel/user/gihan/Resonet/cxi_merged_25k.cxi` |
+| 8 | Resonet production data root | `/data/bioxfel/user/gihan/Resonet/production/` — per-detector subdirs (agipd_20k, jungfrau_20k, epix10k_20k, eiger4m_20k) |
 | 9 | `geometry_file_to_pad_geometry_list()` is in `reborn.external.crystfel` | Always import from `reborn.external.crystfel`, not `reborn.detector`. |
 | 10 | `gh pr edit` is broken by GitHub Projects Classic deprecation warning (exit 1) | Use `gh api repos/<owner>/<repo>/pulls/<N> -X PATCH -f body="..."` instead. |
 
@@ -74,8 +74,8 @@ Full pipeline: Reborn geometry → GCN → LCN (window=9) → resize 224×224. L
 
 ## Immediate Next Steps
 
-1. **Evaluate `resnet18-resonet-seed42`** — checkpoint exists at `checkpoints/resnet18-resonet-seed42/best.pt`; run `scripts/evaluate_resonet_cxi.py` on the held-out test set
-2. **Investigate AGIPD gap** — cross AP=0.565 is 30+ points below other detectors; likely causes: panel structure (16×512×128 raw), assembly path differences, or data distribution shift
+1. **Investigate AGIPD gap** — cross AP=0.565 is 30+ points below other detectors; likely causes: panel structure (16×512×128 raw), assembly path differences, or data distribution shift
+2. **Real-detector LODO baseline** — evaluate model generalisation on actual facility data
 3. **Phase 5 starts only when user confirms Phase 4 testing complete**
 
 ---
