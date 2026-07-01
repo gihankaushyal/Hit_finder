@@ -93,6 +93,37 @@ def random_flip(image: np.ndarray, rng: np.random.Generator) -> np.ndarray:
     return image
 
 
+def patch_grid(
+    image: np.ndarray,
+    patch_size: int = 224,
+    stride: int | None = None,
+) -> list[np.ndarray]:
+    """Tile a 2D image into a grid of (patch_size × patch_size) patches.
+
+    Partial patches at the right/bottom edge are discarded — no padding.
+    Patches are returned in row-major order (left-to-right, top-to-bottom).
+
+    Args:
+        image: 2D float32 array (H, W).
+        patch_size: Side length of each square patch in pixels.
+        stride: Step between patch origins. Defaults to patch_size
+            (non-overlapping). A stride < patch_size produces overlapping
+            patches for better edge coverage at the cost of more forward passes.
+
+    Returns:
+        List of float32 arrays each of shape (patch_size, patch_size).
+        Empty list if the image is smaller than patch_size in either dim.
+    """
+    if stride is None:
+        stride = patch_size
+    h, w = image.shape
+    patches = []
+    for top in range(0, h - patch_size + 1, stride):
+        for left in range(0, w - patch_size + 1, stride):
+            patches.append(image[top : top + patch_size, left : left + patch_size])
+    return patches
+
+
 def random_cutout(
     image: np.ndarray,
     rng: np.random.Generator,
