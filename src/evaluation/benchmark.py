@@ -260,20 +260,31 @@ def run_patch_agg(
 def run_fold(
     model: torch.nn.Module,
     split_artifact: dict,
-    dataloader_factory: Callable[[list[str]], DataLoader],
+    session_map: dict[str, Path],
     device: str = "cpu",
+    patch_stride: int = 224,
+    min_hit_patches: int = 3,
+    label_key: str = "entry_1/labels/hit",
 ) -> dict[str, float]:
-    """Evaluate model on the held-out test-detector sessions for one fold.
+    """Evaluate model on the held-out cross-detector sessions for one fold.
 
-    dataloader_factory(session_ids) must return a DataLoader over those sessions.
+    Uses patch-grid aggregation: tiles each frame into 224×224 patches, runs
+    all patches through the model, and reduces to a frame-level max score.
     """
     held_out_ids = [
         sid
         for sid, split in split_artifact["splits"].items()
         if split == SPLIT_CROSS_DETECTOR
     ]
-    loader = dataloader_factory(held_out_ids)
-    metrics = run_on_loader(model, loader, device)
+    metrics = run_patch_agg(
+        model,
+        session_map,
+        held_out_ids,
+        label_key=label_key,
+        patch_stride=patch_stride,
+        min_hit_patches=min_hit_patches,
+        device=device,
+    )
     metrics["test_detector"] = split_artifact["test_detector"]
     return metrics
 
@@ -281,8 +292,11 @@ def run_fold(
 def run_benchmark(
     model: torch.nn.Module,
     split_artifacts: list[dict],
-    dataloader_factory: Callable[[list[str]], DataLoader],
+    session_map: dict[str, Path],
     device: str = "cpu",
+    patch_stride: int = 224,
+    min_hit_patches: int = 3,
+    label_key: str = "entry_1/labels/hit",
 ) -> dict:
     """Run all folds and return per-fold results plus mean_ap and std_ap."""
     results: dict = {}
@@ -294,7 +308,13 @@ def run_benchmark(
                 "has fold=None. Pass fold=<int> to build_session_stratified_split."
             )
         results[f"fold_{fold_id}"] = run_fold(
-            model, artifact, dataloader_factory, device
+            model,
+            artifact,
+            session_map,
+            device,
+            patch_stride=patch_stride,
+            min_hit_patches=min_hit_patches,
+            label_key=label_key,
         )
 
     ap_values = [v["ap"] for v in results.values()]
