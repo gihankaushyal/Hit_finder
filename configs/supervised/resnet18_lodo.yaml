@@ -22,5 +22,9 @@ augmentation:
   n_cutout_holes: 3
   cutout_hole_size: 32
 
+evaluation:
+  patch_stride: 224
+  min_hit_patches: 3
+
 wandb:
   tags: [supervised, resnet18, lodo]

@@ -45,11 +45,11 @@ from src.evaluation.benchmark import (
     build_lodo_folds,
     build_session_stratified_split,
     format_results_table,
-    run_on_loader,
+    run_patch_agg,
     save_split_artifact,
 )
 from src.models.supervised import build_supervised_model
-from src.training.train_supervised import _set_seeds, evaluate, train_one_epoch
+from src.training.train_supervised import _set_seeds, train_one_epoch
 from src.utils.config import load_config
 
 
@@ -144,38 +144,22 @@ def _train_fold(
         n_cutout_holes=n_cutout_holes,
         cutout_hole_size=cutout_hole_size,
     )
-    val_dl = _make_loader(
-        split_artifact,
-        SPLIT_VAL,
-        session_map,
-        batch_size,
-        num_workers,
-        shuffle=False,
-        label_key=label_key,
-    )
-    in_domain_dl = _make_loader(
-        split_artifact,
-        SPLIT_IN_DOMAIN_TEST,
-        session_map,
-        batch_size,
-        num_workers,
-        shuffle=False,
-        label_key=label_key,
-    )
-    cross_dl = _make_loader(
-        split_artifact,
-        SPLIT_CROSS_DETECTOR,
-        session_map,
-        batch_size,
-        num_workers,
-        shuffle=False,
-        label_key=label_key,
-    )
+    eval_cfg = cfg.get("evaluation", {})
+    patch_stride = eval_cfg.get("patch_stride", 224)
+    min_hit_patches = eval_cfg.get("min_hit_patches", 3)
+
+    val_ids = [sid for sid, s in split_artifact["splits"].items() if s == SPLIT_VAL]
+    in_domain_ids = [
+        sid for sid, s in split_artifact["splits"].items() if s == SPLIT_IN_DOMAIN_TEST
+    ]
+    cross_ids = [
+        sid for sid, s in split_artifact["splits"].items() if s == SPLIT_CROSS_DETECTOR
+    ]
 
     n_train = len(train_dl.dataset)
-    n_val = len(val_dl.dataset)
-    n_indomain = len(in_domain_dl.dataset)
-    n_cross = len(cross_dl.dataset)
+    n_val = len(val_ids)
+    n_indomain = len(in_domain_ids)
+    n_cross = len(cross_ids)
 
     print(
         f"\n{'='*60}\n"
@@ -224,21 +208,27 @@ def _train_fold(
 
         for epoch in range(1, epochs + 1):
             train_m = train_one_epoch(model, train_dl, optimizer, criterion, device)
-            val_m = evaluate(model, val_dl, criterion, device)
+            val_m = run_patch_agg(
+                model,
+                session_map,
+                val_ids,
+                label_key=label_key,
+                patch_stride=patch_stride,
+                min_hit_patches=min_hit_patches,
+                device=device,
+            )
 
             print(
                 f"  Epoch {epoch:3d}/{epochs}  "
                 f"train_loss={train_m['loss']:.4f}  "
-                f"val_loss={val_m['loss']:.4f}  "
                 f"val_AP={val_m['ap']:.4f}  val_F1={val_m['f1']:.4f}"
             )
             wandb.log(
                 {
                     "epoch": epoch,
                     "train/loss": train_m["loss"],
-                    "val/loss": val_m["loss"],
                     "val/ap": val_m["ap"],
-                    "val/auc": val_m["auc"],
+                    "val/auc": val_m["auc_roc"],
                     "val/f1": val_m["f1"],
                 }
             )
@@ -281,8 +271,24 @@ def _train_fold(
         )
     model.load_state_dict(ckpt["model_state_dict"])
 
-    in_domain_m = run_on_loader(model, in_domain_dl, device)
-    cross_m = run_on_loader(model, cross_dl, device)
+    in_domain_m = run_patch_agg(
+        model,
+        session_map,
+        in_domain_ids,
+        label_key=label_key,
+        patch_stride=patch_stride,
+        min_hit_patches=min_hit_patches,
+        device=device,
+    )
+    cross_m = run_patch_agg(
+        model,
+        session_map,
+        cross_ids,
+        label_key=label_key,
+        patch_stride=patch_stride,
+        min_hit_patches=min_hit_patches,
+        device=device,
+    )
 
     print(
         f"  In-domain test:    AP={in_domain_m['ap']:.4f}  AUC={in_domain_m['auc_roc']:.4f}  F1={in_domain_m['f1']:.4f}"
