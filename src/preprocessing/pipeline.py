@@ -285,3 +285,39 @@ def preprocess_with_geometry(
         preserve_range=True,
     )
     return resized.astype(np.float32)
+
+
+def preprocess_eval_patches(
+    assembled: np.ndarray,
+    patch_size: int = TARGET_SIZE[0],
+    stride: int | None = None,
+    lcn_window: int = LCN_WINDOW_DEFAULT,
+) -> np.ndarray:
+    """GCN → LCN each patch from a patch_grid tiling of the assembled image.
+
+    Used for all evaluation paths (validation, in-domain test, cross-detector
+    test). The full native-resolution assembled frame is tiled into complete
+    (patch_size × patch_size) patches; each patch is normalised independently.
+
+    Args:
+        assembled: float32 array (H, W) at native detector resolution.
+        patch_size: Patch side length in pixels (default 224).
+        stride: Step between patch origins (default = patch_size, non-overlapping).
+        lcn_window: LCN neighbourhood size (default 9, Phase 3 ablation).
+
+    Returns:
+        float32 array of shape (N, patch_size, patch_size) where N ≥ 1.
+
+    Raises:
+        ValueError: If the image produces zero complete patches.
+    """
+    from src.preprocessing.augment import patch_grid
+
+    patches = patch_grid(assembled.astype(np.float32), patch_size, stride)
+    if not patches:
+        raise ValueError(
+            f"preprocess_eval_patches: no complete {patch_size}×{patch_size} "
+            f"patch fits in image of shape {assembled.shape}."
+        )
+    normed = [lcn(gcn(p), window=lcn_window) for p in patches]
+    return np.stack(normed, axis=0).astype(np.float32)

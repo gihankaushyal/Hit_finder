@@ -51,3 +51,41 @@ class TestPatchGrid:
         patches = patch_grid(img, 224, 224)
         assert patches[0][0, 0] == 1.0
         assert patches[2][0, 0] == 2.0
+
+
+from src.preprocessing.pipeline import preprocess_eval_patches
+
+
+class TestPreprocessEvalPatches:
+    def test_output_shape_agipd_size(self):
+        # floor(1273/224)=5 → 5×5=25 patches
+        img = np.random.default_rng(42).random((1273, 1273)).astype(np.float32)
+        out = preprocess_eval_patches(img)
+        assert out.shape == (25, 224, 224)
+
+    def test_output_dtype_float32(self):
+        img = np.zeros((500, 500), dtype=np.float32)
+        out = preprocess_eval_patches(img, patch_size=224, stride=224)
+        assert out.dtype == np.float32
+
+    def test_raises_if_no_complete_patch(self):
+        img = np.zeros((100, 100), dtype=np.float32)
+        with pytest.raises(ValueError, match="no complete"):
+            preprocess_eval_patches(img)
+
+    def test_custom_stride_changes_count(self):
+        img = np.random.default_rng(0).random((500, 500)).astype(np.float32)
+        default_out = preprocess_eval_patches(img, stride=224)
+        overlap_out = preprocess_eval_patches(img, stride=112)
+        assert overlap_out.shape[0] > default_out.shape[0]
+
+    def test_each_patch_has_zero_mean_after_gcn(self):
+        img = np.random.default_rng(7).random((500, 500)).astype(np.float32) * 1000
+        out = preprocess_eval_patches(img)
+        patch_means = out.reshape(out.shape[0], -1).mean(axis=1)
+        np.testing.assert_allclose(patch_means, 0.0, atol=2e-4)
+
+    def test_output_is_finite(self):
+        img = np.random.default_rng(99).random((1273, 1273)).astype(np.float32)
+        out = preprocess_eval_patches(img)
+        assert np.isfinite(out).all()
