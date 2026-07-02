@@ -23,6 +23,7 @@ __all__ = [
     "save_split_artifact",
     "load_split_artifact",
     "run_on_loader",
+    "run_patch_agg",
     "run_fold",
     "run_benchmark",
     "format_results_table",
@@ -156,6 +157,97 @@ def run_on_loader(
     y_score = np.concatenate(all_scores)
     y_true = np.concatenate(all_labels)
 
+    best_f1, threshold = f1_at_optimal_threshold(y_true, y_score)
+    return {
+        "ap": average_precision(y_true, y_score),
+        "auc_roc": auc_roc(y_true, y_score),
+        "f1": best_f1,
+        "threshold": threshold,
+    }
+
+
+def run_patch_agg(
+    model: torch.nn.Module,
+    session_map: dict[str, Path],
+    session_ids: list[str],
+    label_key: str = "entry_1/labels/hit",
+    patch_size: int = 224,
+    patch_stride: int = 224,
+    min_hit_patches: int = 3,
+    device: str = "cpu",
+    inference_batch_size: int = 64,
+) -> dict[str, float]:
+    """Evaluate a model on full frames using patch-grid aggregation.
+
+    For each frame: tile into complete patch_size×patch_size patches → GCN →
+    LCN each patch → run all patches through the model in mini-batches →
+    reduce to a single frame-level score (max softmax over patches).
+
+    Replaces run_on_loader for all evaluation steps (validation during training,
+    in-domain test, and cross-detector test). The gradient-update training loop
+    is unaffected.
+
+    Args:
+        model: Trained classifier with 2-class head.
+        session_map: Mapping from session_id to CXI file path.
+        session_ids: Subset of sessions to evaluate.
+        label_key: HDF5 key for per-frame labels.
+        patch_size: Patch side length in pixels (default 224).
+        patch_stride: Step between patches in pixels.
+        min_hit_patches: Reserved for vote-based thresholding; not used in metrics.
+        device: Torch device string ('cpu' or 'cuda').
+        inference_batch_size: Patches per forward pass.
+
+    Returns:
+        dict with keys: ap, auc_roc, f1, threshold.
+    """
+    import h5py
+
+    from src.preprocessing.pipeline import preprocess_eval_patches
+
+    model.to(device)
+    model.eval()
+
+    all_scores: list[float] = []
+    all_labels: list[int] = []
+
+    for sid in session_ids:
+        path = Path(session_map[sid])
+        with h5py.File(path, "r") as f:
+            labels_arr = f[label_key][()]
+            frames_arr = f["entry_1/data_1/data"][()]
+
+        for frame_idx in range(len(frames_arr)):
+            frame = frames_arr[frame_idx].astype(np.float32)
+            try:
+                patches_np = preprocess_eval_patches(
+                    frame, patch_size=patch_size, stride=patch_stride
+                )
+            except ValueError:
+                continue
+
+            patch_tensors = torch.from_numpy(patches_np).unsqueeze(1).to(device)
+            patch_scores_list: list[np.ndarray] = []
+            with torch.no_grad():
+                for i in range(0, len(patch_tensors), inference_batch_size):
+                    batch = patch_tensors[i : i + inference_batch_size]
+                    logits = model(batch)
+                    if logits.ndim == 2 and logits.shape[1] == 2:
+                        s = torch.softmax(logits, dim=1)[:, 1].cpu().numpy()
+                    else:
+                        s = torch.sigmoid(logits.squeeze(-1)).cpu().numpy()
+                    patch_scores_list.append(s)
+
+            patch_scores = np.concatenate(patch_scores_list)
+            all_scores.append(float(patch_scores.max()))
+            all_labels.append(int(round(float(labels_arr[frame_idx]))))
+
+    if not all_scores:
+        nan = float("nan")
+        return {"ap": nan, "auc_roc": nan, "f1": nan, "threshold": nan}
+
+    y_score = np.array(all_scores)
+    y_true = np.array(all_labels)
     best_f1, threshold = f1_at_optimal_threshold(y_true, y_score)
     return {
         "ap": average_precision(y_true, y_score),

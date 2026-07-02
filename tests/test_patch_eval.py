@@ -89,3 +89,97 @@ class TestPreprocessEvalPatches:
         img = np.random.default_rng(99).random((1273, 1273)).astype(np.float32)
         out = preprocess_eval_patches(img)
         assert np.isfinite(out).all()
+
+
+import torch
+import torch.nn as nn
+from pathlib import Path
+from src.evaluation.benchmark import run_patch_agg
+
+
+class _ConstantModel(nn.Module):
+    """Always predicts the same 2-class logits for all inputs."""
+
+    def __init__(self, hit_logit: float = 10.0):
+        super().__init__()
+        self.hit_logit = hit_logit
+
+    def forward(self, x):
+        batch = x.shape[0]
+        return torch.tensor(
+            [[-self.hit_logit, self.hit_logit]] * batch, dtype=torch.float32
+        )
+
+
+def _make_cxi(tmp_path, n_frames=4, n_hits=2, shape=(500, 500)):
+    """Write a minimal CXI-like HDF5 file with data and labels."""
+    import h5py
+
+    path = tmp_path / "test.cxi"
+    with h5py.File(path, "w") as f:
+        data = np.random.default_rng(0).random((n_frames, *shape)).astype(np.float32)
+        f.create_dataset("entry_1/data_1/data", data=data)
+        labels = np.array(
+            [1.0] * n_hits + [0.0] * (n_frames - n_hits), dtype=np.float32
+        )
+        f.create_dataset("entry_1/labels/hit", data=labels)
+    return path
+
+
+class TestRunPatchAgg:
+    def test_returns_required_keys(self, tmp_path):
+        path = _make_cxi(tmp_path)
+        model = _ConstantModel()
+        result = run_patch_agg(
+            model,
+            session_map={"s0": path},
+            session_ids=["s0"],
+            label_key="entry_1/labels/hit",
+            patch_stride=224,
+            min_hit_patches=3,
+            device="cpu",
+        )
+        for key in ("ap", "auc_roc", "f1", "threshold"):
+            assert key in result, f"Missing key: {key}"
+
+    def test_all_metrics_are_finite(self, tmp_path):
+        path = _make_cxi(tmp_path, n_frames=8, n_hits=4)
+        model = _ConstantModel(hit_logit=2.0)
+        result = run_patch_agg(
+            model,
+            session_map={"s0": path},
+            session_ids=["s0"],
+            label_key="entry_1/labels/hit",
+            patch_stride=224,
+            min_hit_patches=3,
+            device="cpu",
+        )
+        for key in ("ap", "auc_roc", "f1", "threshold"):
+            assert np.isfinite(result[key]), f"{key} is not finite: {result[key]}"
+
+    def test_empty_session_ids_returns_nan(self, tmp_path):
+        model = _ConstantModel()
+        result = run_patch_agg(
+            model,
+            session_map={},
+            session_ids=[],
+            label_key="entry_1/labels/hit",
+            patch_stride=224,
+            min_hit_patches=3,
+            device="cpu",
+        )
+        assert np.isnan(result["ap"])
+
+    def test_threshold_in_unit_interval(self, tmp_path):
+        path = _make_cxi(tmp_path, n_frames=6, n_hits=3)
+        model = _ConstantModel(hit_logit=2.0)
+        result = run_patch_agg(
+            model,
+            session_map={"s0": path},
+            session_ids=["s0"],
+            label_key="entry_1/labels/hit",
+            patch_stride=224,
+            min_hit_patches=3,
+            device="cpu",
+        )
+        assert 0.0 <= result["threshold"] <= 1.0
