@@ -176,12 +176,13 @@ def run_patch_agg(
     min_hit_patches: int = 3,
     device: str = "cpu",
     inference_batch_size: int = 64,
+    aggregation: str = "max",
 ) -> dict[str, float]:
     """Evaluate a model on full frames using patch-grid aggregation.
 
     For each frame: tile into complete patch_size×patch_size patches → GCN →
     LCN each patch → run all patches through the model in mini-batches →
-    reduce to a single frame-level score (max softmax over patches).
+    reduce to a single frame-level score (max softmax over patches or vote).
 
     Replaces run_on_loader for all evaluation steps (validation during training,
     in-domain test, and cross-detector test). The gradient-update training loop
@@ -194,9 +195,13 @@ def run_patch_agg(
         label_key: HDF5 key for per-frame labels.
         patch_size: Patch side length in pixels (default 224).
         patch_stride: Step between patches in pixels.
-        min_hit_patches: Reserved for vote-based thresholding; not used in metrics.
+        min_hit_patches: Vote mode only — frame is logged as binary hit if
+            vote_count >= min_hit_patches. Not used in AP/AUC/F1 computation.
         device: Torch device string ('cpu' or 'cuda').
         inference_batch_size: Patches per forward pass.
+        aggregation: Frame-score reduction over patches. "max" (default,
+            backward-compatible): max softmax across patches. "vote":
+            hit_count/n_patches where hit_count = patches with softmax[:,1] > 0.5.
 
     Returns:
         dict with keys: ap, auc_roc, f1, threshold.
@@ -239,7 +244,13 @@ def run_patch_agg(
                     patch_scores_list.append(s)
 
             patch_scores = np.concatenate(patch_scores_list)
-            all_scores.append(float(patch_scores.max()))
+            n_patches = len(patch_scores)
+            if aggregation == "vote":
+                hit_count = int((patch_scores > 0.5).sum())
+                frame_score = float(hit_count) / max(n_patches, 1)
+            else:
+                frame_score = float(patch_scores.max())
+            all_scores.append(frame_score)
             all_labels.append(int(round(float(labels_arr[frame_idx]))))
 
     if not all_scores:
