@@ -194,3 +194,125 @@ Only JUNGFRAU_4M has spatially correct geometry. The other three detectors produ
 - Attach classification head, fine-tune on labeled data
 - LODO evaluation using identical protocol to Track 1
 - Compare Track 1 vs Track 2 cross-detector AP as scientific contribution
+
+---
+
+## 10. Asymmetric Pipeline — Design and Implementation (2026-07-02)
+
+### 10.1 Motivation
+
+The LODO baseline (section 6) uses frame-level hit/non-hit labels inherited by all training crops. This is weak supervision: a random 224×224 crop from a hit frame may contain only background diffuse scatter and no Bragg spots. The model receives label=1 for a patch that looks identical to a non-hit background patch — degrading the signal-to-noise of the training signal.
+
+The asymmetric pipeline solves this by routing each assembled frame through a peak-finding algorithm (PeakFinder8 or a GPU hitfinder) before cropping. The crop label is then assigned based on **crop content** rather than frame label:
+
+```
+label = 1  if crop contains ≥1 peak centroid
+label = 0  if crop is from a non-hit frame (any crop)
+label = 0  if crop is from a hit frame but no centroid within 50 px of any crop edge
+              (hard negative — background crop from a hit frame)
+```
+
+### 10.2 Full Training Pipeline
+
+```
+Raw CXI frame
+  → Reborn geometry assembly → assembled (H, W) float32
+  → Hitfinder → peak centroid map [(x₁,y₁), (x₂,y₂), ...]
+  → Sample 224×224 crop (class-balanced, see §10.3)
+  → random_rot90 → random_flip → GCN(patch) → LCN(patch) → random_cutout
+  → ResNet18
+```
+
+Validation and test use the existing blind grid approach:
+```
+Assembled frame → non-overlapping 224×224 grid → GCN+LCN per patch → ResNet18
+  → hit_tile = softmax[:,1] > 0.5
+  → frame_score = hit_tile_count / n_tiles  (vote aggregation)
+  → frame_label = 1 if frame_score ≥ 3/n_tiles
+  → compare with ground-truth label → AP, AUC, F1
+```
+
+### 10.3 Class-Balance Sampling
+
+`hit_frac = 0.5` (configurable):
+
+| Branch | Condition | Sampling | Label |
+|---|---|---|---|
+| Hit crop | `frame_label=1`, `rand < hit_frac` | Random crop until ≥1 centroid inside; fallback to label=0 after `hard_neg_max_attempts=50` | 1 |
+| Hard negative | `frame_label=1`, `rand ≥ hit_frac` | Random crop until no centroid within 50 px of any edge | 0 |
+| True miss | `frame_label=0` | Any random crop | 0 |
+
+The 50 px margin in the hard-negative branch (`_crop_within_margin`) prevents including Bragg peak halos — the diffuse scatter ring surrounding a peak centroid — in label-0 training patches.
+
+**Practical note on small frames:** On a 512×512 frame with a 224×224 crop, the 50 px margin leaves ≤0 px of unoccupied space if a peak sits near frame centre. The fallback (random crop, label=0) handles this without crashing.
+
+### 10.4 Hitfinder Abstraction
+
+Two pluggable backends, same `find_peaks(assembled) → (N,2) float32` interface:
+
+| Backend | Class | Status | Worker safety |
+|---|---|---|---|
+| `pf8` | `PF8Hitfinder` | **Stub** — `NotImplementedError`; C++ wrapper interface TBD | Fork-safe, any `num_workers` |
+| `gpu` | `GPUHitfinder` | **Stub** — `NotImplementedError`; user script TBD | Requires `num_workers=0` |
+| `mock` | `MockHitfinder` | Fully implemented — returns fixed peaks; use for tests/smoke | Fork-safe |
+
+Config selects backend:
+```yaml
+hitfinder:
+  backend: pf8     # "pf8" | "gpu" | "mock"
+  pf8_threshold_snr: 5.0
+  pf8_min_peaks: 1
+```
+
+`train_asymmetric.py` automatically forces `num_workers=0` and prints a warning when `backend: gpu` with `num_workers > 0`.
+
+### 10.5 Vote Aggregation in Validation
+
+Added `aggregation` parameter to `run_patch_agg` in `src/evaluation/benchmark.py`:
+
+- `aggregation="max"` (default, backward-compatible): `frame_score = max(softmax[:,1])` across patches
+- `aggregation="vote"`: `frame_score = hit_tile_count / n_tiles` where `hit_tile = softmax[:,1] > 0.5`
+
+Vote aggregation matches the training objective better: the model is trained on individual crops that are each labeled hit or miss, so its scores should be interpreted as per-crop decisions rather than frame-wide confidence values.
+
+All new code (`train_asymmetric.py`, `resnet18_asymmetric.yaml`) defaults to `aggregation="vote"`. Old code (`train_lodo.py`) is unaffected (uses default `"max"`).
+
+### 10.6 Files Added / Modified
+
+| File | Change |
+|---|---|
+| `src/hitfinders/__init__.py` | New — exports Protocol, stubs, `get_hitfinder` factory |
+| `src/hitfinders/base.py` | New — `Hitfinder` Protocol, `MockHitfinder` |
+| `src/hitfinders/pf8.py` | New — `PF8Hitfinder` stub |
+| `src/hitfinders/gpu.py` | New — `GPUHitfinder` stub |
+| `src/data/dataset.py` | Added `AsymmetricCXIDataset`, `_crop_contains_centroid`, `_crop_within_margin(margin=50)`; deprecated `MultiFrameCXIDataset` |
+| `src/data/dataloader.py` | Added `asymmetric_loader`; deprecated `cxi_session_loader` |
+| `src/evaluation/benchmark.py` | Added `aggregation` param to `run_patch_agg`; validated against `("max","vote")` |
+| `configs/supervised/resnet18_asymmetric.yaml` | New — full asymmetric pipeline config |
+| `scripts/train_asymmetric.py` | New — training entrypoint (mirrors `train_lodo.py`) |
+| `tests/test_hitfinders.py` | New — 9 tests |
+| `tests/test_asymmetric_dataset.py` | New — 9 tests |
+| `tests/test_vote_aggregation.py` | New — 4 tests |
+| `tests/test_train_supervised.py` | Fixed stale `evaluate` import (function was removed) |
+| `src/training/train_supervised.py` | Stripped to `_set_seeds` + `train_one_epoch` only |
+
+**Deprecated and deleted scripts** (used old `evaluate()` approach):
+- `scripts/train_synthetic_full.py`, `train_synthetic_4epochs.py`, `train_resonet_cxi.py`
+- `scripts/evaluate_supervised.py`, `evaluate_resonet_cxi.py`
+- `scripts/smoke_test_synthetic.py`, `smoke_test_synthetic_reborn.py`
+- `scripts/submit_resonet_train.sh`, `submit_supervised.sh`
+
+### 10.7 Test Status
+
+```
+263 passed, 8 skipped  (as of 2026-07-02, branch phase-04-augmentation)
+```
+
+All new tests pass. Deprecated symbols (`MultiFrameCXIDataset`, `cxi_session_loader`) still importable — no backward-compat breakage.
+
+### 10.8 What Remains Before Running
+
+1. **PF8 C++ wrapper:** `PF8Hitfinder.find_peaks` is a stub. User needs to provide the call signature for the existing PF8 wrapper on Sol (subprocess? ctypes? Python binding?). Then implement in `src/hitfinders/pf8.py`.
+2. **GPU hitfinder:** `GPUHitfinder.find_peaks` is a stub. User to provide GPU hitfinder script for integration.
+3. **Smoke test with mock backend:** `python scripts/train_asymmetric.py --config configs/supervised/resnet18_asymmetric.yaml --device cpu --folds 1` after setting `hitfinder.backend: mock` in YAML — confirms the full pipeline runs end-to-end before real hitfinder is wired up.
+4. **Full training run:** Once PF8 is wired, run all 4 LODO folds and compare asymmetric pipeline AP vs LODO baseline AP (section 6).
