@@ -7,7 +7,8 @@ from pathlib import Path
 import torch
 from torch.utils.data import DataLoader
 
-from src.data.dataset import MultiFrameCXIDataset, SFXDataset, UnlabeledDataset
+from src.data.dataset import AsymmetricCXIDataset, MultiFrameCXIDataset, SFXDataset, UnlabeledDataset
+from src.hitfinders.base import Hitfinder
 
 
 def ssl_pretrain_loader(
@@ -37,6 +38,66 @@ def ssl_pretrain_loader(
     )
 
 
+def asymmetric_loader(
+    session_map: dict[str, Path],
+    session_ids: list[str],
+    hitfinder: Hitfinder,
+    batch_size: int,
+    num_workers: int = 4,
+    shuffle: bool = True,
+    label_key: str = "entry_1/labels/hit",
+    patch_size: int = 224,
+    lcn_window: int = 9,
+    hit_frac: float = 0.5,
+    hard_neg_max_attempts: int = 50,
+    n_cutout_holes: int = 3,
+    cutout_hole_size: int = 32,
+) -> DataLoader:
+    """DataLoader for asymmetric hitfinder-guided crop training.
+
+    Instantiates AsymmetricCXIDataset: each item is a hitfinder-labeled 224×224
+    patch with class-balanced sampling (hit crops, hard negatives, miss crops).
+
+    Args:
+        session_map: Maps session_id → CXI file path.
+        session_ids: Session IDs to include.
+        hitfinder: Hitfinder instance (PF8Hitfinder or GPUHitfinder).
+            GPU hitfinder requires num_workers=0 (no fork-safe GPU context).
+        batch_size: Patches per batch.
+        num_workers: DataLoader worker processes. Must be 0 for GPU hitfinder.
+        shuffle: Shuffle each epoch.
+        label_key: HDF5 key for per-frame labels.
+        patch_size: Crop side length in pixels.
+        lcn_window: LCN window size (must be odd).
+        hit_frac: Fraction of items targeting label=1 crops.
+        hard_neg_max_attempts: Max attempts to find a hit/hard-neg crop.
+        n_cutout_holes: Cutout augmentation holes.
+        cutout_hole_size: Cutout hole side length.
+
+    Returns:
+        DataLoader yielding (patch_tensor, label) pairs; patch shape (B, 1, 224, 224).
+    """
+    dataset = AsymmetricCXIDataset(
+        session_ids=session_ids,
+        session_map=session_map,
+        hitfinder=hitfinder,
+        label_key=label_key,
+        patch_size=patch_size,
+        lcn_window=lcn_window,
+        hit_frac=hit_frac,
+        hard_neg_max_attempts=hard_neg_max_attempts,
+        n_cutout_holes=n_cutout_holes,
+        cutout_hole_size=cutout_hole_size,
+    )
+    return DataLoader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=shuffle,
+        num_workers=num_workers,
+        pin_memory=torch.cuda.is_available(),
+    )
+
+
 def cxi_session_loader(
     session_map: dict[str, Path],
     session_ids: list[str],
@@ -48,8 +109,9 @@ def cxi_session_loader(
     n_cutout_holes: int = 3,
     cutout_hole_size: int = 32,
 ) -> DataLoader:
-    """DataLoader over a subset of CXI sessions identified by session_id.
+    """DEPRECATED: Use asymmetric_loader for new training pipelines.
 
+    DataLoader over a subset of CXI sessions identified by session_id.
     Used by the LODO dataloader_factory closure in scripts/train_lodo.py.
 
     Args:
