@@ -46,3 +46,9 @@ def test_gpu_hitfinder_find_peaks_raises_not_implemented():
     hf = GPUHitfinder()
     with pytest.raises(NotImplementedError):
         hf.find_peaks(np.zeros((512, 512), dtype=np.float32))
+
+
+def test_hitfinder_protocol_isinstance():
+    from src.hitfinders.base import Hitfinder
+    hf = MockHitfinder()
+    assert isinstance(hf, Hitfinder)
