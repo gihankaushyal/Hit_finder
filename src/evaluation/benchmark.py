@@ -195,8 +195,8 @@ def run_patch_agg(
         label_key: HDF5 key for per-frame labels.
         patch_size: Patch side length in pixels (default 224).
         patch_stride: Step between patches in pixels.
-        min_hit_patches: Vote mode only — frame is logged as binary hit if
-            vote_count >= min_hit_patches. Not used in AP/AUC/F1 computation.
+        min_hit_patches: Reserved for future vote-based binary thresholding.
+            Currently not used in any computation inside this function.
         device: Torch device string ('cpu' or 'cuda').
         inference_batch_size: Patches per forward pass.
         aggregation: Frame-score reduction over patches. "max" (default,
@@ -248,8 +248,12 @@ def run_patch_agg(
             if aggregation == "vote":
                 hit_count = int((patch_scores > 0.5).sum())
                 frame_score = float(hit_count) / max(n_patches, 1)
-            else:
+            elif aggregation == "max":
                 frame_score = float(patch_scores.max())
+            else:
+                raise ValueError(
+                    f"aggregation must be 'max' or 'vote', got {aggregation!r}"
+                )
             all_scores.append(frame_score)
             all_labels.append(int(round(float(labels_arr[frame_idx]))))
 
