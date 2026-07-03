@@ -22,10 +22,14 @@ def get_hitfinder(cfg: dict) -> Hitfinder:
         A Hitfinder instance.
 
     Raises:
-        ValueError: If the backend name is unrecognised.
+        ValueError: If the backend name is missing or unrecognised.
     """
     hf_cfg = cfg.get("hitfinder", {})
-    backend = hf_cfg.get("backend", "pf8")
+    backend = hf_cfg.get("backend")
+    if backend is None:
+        raise ValueError(
+            "cfg['hitfinder']['backend'] is required. Valid options: 'pf8', 'gpu', 'mock'."
+        )
 
     if backend == "pf8":
         return PF8Hitfinder(
@@ -33,7 +37,7 @@ def get_hitfinder(cfg: dict) -> Hitfinder:
             min_peaks=hf_cfg.get("pf8_min_peaks", 1),
         )
     if backend == "gpu":
-        return GPUHitfinder()
+        return GPUHitfinder(device=hf_cfg.get("gpu_device", "cuda"))
     if backend == "mock":
         return MockHitfinder()
     raise ValueError(

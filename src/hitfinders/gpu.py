@@ -22,6 +22,9 @@ class GPUHitfinder:
     is not shareable across forked DataLoader worker processes.
     """
 
+    def __init__(self, device: str = "cuda") -> None:
+        self.device = device
+
     def find_peaks(self, assembled: np.ndarray) -> np.ndarray:
         raise NotImplementedError(
             "GPUHitfinder.find_peaks is not yet implemented. "

@@ -4,8 +4,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from src.hitfinders.base import MockHitfinder
-from src.hitfinders import get_hitfinder
+from src.hitfinders import MockHitfinder, get_hitfinder
 
 
 def test_mock_hitfinder_returns_correct_shape():
@@ -34,6 +33,12 @@ def test_get_hitfinder_unknown_backend_raises():
         get_hitfinder(cfg)
 
 
+def test_get_hitfinder_missing_backend_raises():
+    cfg = {"hitfinder": {}}
+    with pytest.raises(ValueError, match="backend.*required"):
+        get_hitfinder(cfg)
+
+
 def test_pf8_hitfinder_find_peaks_raises_not_implemented():
     from src.hitfinders.pf8 import PF8Hitfinder
     hf = PF8Hitfinder(threshold_snr=5.0, min_peaks=1)
@@ -49,6 +54,7 @@ def test_gpu_hitfinder_find_peaks_raises_not_implemented():
 
 
 def test_hitfinder_protocol_isinstance():
+    """runtime_checkable checks method names only — not signatures."""
     from src.hitfinders.base import Hitfinder
     hf = MockHitfinder()
-    assert isinstance(hf, Hitfinder)
+    assert isinstance(hf, Hitfinder)  # structural check: has find_peaks method
