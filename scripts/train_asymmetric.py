@@ -38,6 +38,7 @@ from src.evaluation.benchmark import (
     save_split_artifact,
 )
 from src.hitfinders import get_hitfinder
+from src.hitfinders.base import Hitfinder
 from src.models.supervised import build_supervised_model
 from src.training.train_supervised import _set_seeds, train_one_epoch
 from src.utils.config import load_config
@@ -76,8 +77,9 @@ def _train_fold(
     split_artifact: dict,
     session_map: dict[str, Path],
     cfg: dict,
-    hitfinder: object,
+    hitfinder: Hitfinder,
     device: str,
+    num_workers_override: int | None = None,
 ) -> dict:
     """Train one LODO fold from scratch using asymmetric loader; return metrics."""
     import wandb
@@ -86,7 +88,7 @@ def _train_fold(
     seed = cfg["seed"]
     fold_id = fold["fold_id"]
     batch_size = cfg["training"]["batch_size"]
-    num_workers = cfg["training"]["num_workers"]
+    num_workers = num_workers_override if num_workers_override is not None else cfg["training"]["num_workers"]
     epochs = cfg["training"]["epochs"]
     patience = cfg["training"].get("early_stopping_patience", 10)
     run_name = f"{backbone}-asymmetric-fold{fold_id}-seed{seed}"
@@ -134,7 +136,7 @@ def _train_fold(
     print(
         f"\n{'='*60}\n"
         f"Fold {fold_id}  |  held-out: {fold['test_detector']}\n"
-        f"  train={n_train}  val={n_val}  in_domain_test={n_indomain}  cross={n_cross}\n"
+        f"  train={n_train} patches  val={n_val} sessions  in_domain_test={n_indomain} sessions  cross={n_cross} sessions\n"
         f"{'='*60}"
     )
 
@@ -333,12 +335,13 @@ def main(
 
     # GPU hitfinder + multiprocessing DataLoader workers do not mix:
     # the hitfinder holds CUDA tensors that cannot be forked into worker processes.
-    if cfg["hitfinder"]["backend"] == "gpu" and cfg["training"]["num_workers"] > 0:
+    num_workers = cfg["training"]["num_workers"]
+    if cfg["hitfinder"]["backend"] == "gpu" and num_workers > 0:
         print(
             "WARNING: hitfinder.backend='gpu' is incompatible with num_workers > 0. "
-            "Setting num_workers=0 to avoid CUDA fork issues in DataLoader workers."
+            "Overriding to num_workers=0 for this run to avoid CUDA fork issues."
         )
-        cfg["training"]["num_workers"] = 0
+        num_workers = 0
 
     hitfinder = get_hitfinder(cfg)
 
@@ -383,7 +386,7 @@ def main(
             artifacts_dir / f"fold_{fold['fold_id']}.json",
         )
 
-        result = _train_fold(fold, split_artifact, session_map, cfg, hitfinder, device)
+        result = _train_fold(fold, split_artifact, session_map, cfg, hitfinder, device, num_workers_override=num_workers)
         fold_results[f"fold_{fold['fold_id']}"] = result
 
     # Summary table over completed folds
