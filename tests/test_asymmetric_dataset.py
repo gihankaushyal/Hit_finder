@@ -120,7 +120,6 @@ def test_hit_patch_label_with_centroids(synthetic_cxi: Path) -> None:
         hitfinder=hf,
         label_key=LABEL_KEY,
         hit_frac=1.0,
-        rng_seed=0,
     )
     # Indices 0–3 are hit frames
     hit_frame_indices = [i for i in range(N_FRAMES) if ds._labels[i] == 1]
@@ -150,7 +149,6 @@ def test_hard_negative_label_zero(synthetic_cxi: Path) -> None:
         hitfinder=hf,
         label_key=LABEL_KEY,
         hit_frac=0.0,
-        rng_seed=42,
     )
     hit_frame_indices = [i for i in range(N_FRAMES) if ds._labels[i] == 1]
     for idx in hit_frame_indices:
@@ -168,7 +166,6 @@ def test_miss_frame_always_label_zero(synthetic_cxi: Path) -> None:
         hitfinder=hf,
         label_key=LABEL_KEY,
         hit_frac=1.0,
-        rng_seed=7,
     )
     miss_frame_indices = [i for i in range(N_FRAMES) if ds._labels[i] == 0]
     assert miss_frame_indices, "Expected at least one non-hit frame"
@@ -186,7 +183,6 @@ def test_no_centroids_fallback(synthetic_cxi: Path) -> None:
         hitfinder=hf,
         label_key=LABEL_KEY,
         hit_frac=1.0,
-        rng_seed=99,
     )
     hit_frame_indices = [i for i in range(N_FRAMES) if ds._labels[i] == 1]
     for idx in hit_frame_indices:

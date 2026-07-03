@@ -277,7 +277,6 @@ class AsymmetricCXIDataset(Dataset):
         hard_neg_max_attempts: Max random crop attempts for hit/hard-neg sampling.
         n_cutout_holes: Cutout augmentation holes.
         cutout_hole_size: Cutout hole side length.
-        rng_seed: Seed for reproducibility.
     """
 
     def __init__(
@@ -292,7 +291,6 @@ class AsymmetricCXIDataset(Dataset):
         hard_neg_max_attempts: int = 50,
         n_cutout_holes: int = 3,
         cutout_hole_size: int = 32,
-        rng_seed: int | None = None,
     ) -> None:
         self._hitfinder = hitfinder
         self._label_key = label_key
@@ -302,7 +300,6 @@ class AsymmetricCXIDataset(Dataset):
         self._hard_neg_max_attempts = hard_neg_max_attempts
         self._n_cutout_holes = n_cutout_holes
         self._cutout_hole_size = cutout_hole_size
-        self._rng = np.random.default_rng(rng_seed)
 
         # Resolve session_map to Path objects for requested session_ids only.
         cxi_paths: list[Path] = []
@@ -355,8 +352,9 @@ class AsymmetricCXIDataset(Dataset):
         size = self._patch_size
         h, w = assembled.shape
 
-        # Guard: if the assembled image is smaller than patch_size, center-pad.
-        # This prevents random_crop from raising on tiny synthetic frames.
+        # Guard: if the assembled image is smaller than patch_size, pad at
+        # bottom/right only. Padding at the end leaves existing (x, y) centroid
+        # coordinates valid in the padded image — coordinate origins are unchanged.
         if h < size or w < size:
             pad_h = max(0, size - h)
             pad_w = max(0, size - w)
@@ -369,7 +367,10 @@ class AsymmetricCXIDataset(Dataset):
             h, w = assembled.shape
 
         # --- Sample crop with class-balanced labeling ---
-        rng = self._rng
+        # Fresh RNG per call: shared state would produce correlated crops across
+        # DataLoader fork()ed workers on Linux.
+        rng = np.random.default_rng()
+        patch: np.ndarray
         int_label: int
 
         if frame_label == 1 and rng.random() < self._hit_frac:
