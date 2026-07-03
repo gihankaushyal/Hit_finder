@@ -244,6 +244,40 @@ def _crop_contains_centroid(
     return bool(inside.any())
 
 
+def _crop_within_margin(
+    top: int, left: int, size: int, centroids: np.ndarray, margin: int = 50
+) -> bool:
+    """Return True if any centroid is within margin px of the crop region.
+
+    Used for hard-negative mining: rejects crops where a Bragg peak sits just
+    outside the boundary but its diffuse halo still overlaps the tile.
+
+    A centroid (x, y) is "too close" if it lies in the expanded region
+    [left-margin, left+size+margin) × [top-margin, top+size+margin).
+
+    Args:
+        top: Row offset of the crop's top-left corner.
+        left: Column offset of the crop's top-left corner.
+        size: Side length of the square crop in pixels.
+        centroids: (N, 2) float32 array of [x, y] pairs. Empty array → False.
+        margin: Clearance buffer in pixels around the crop boundary (default 50).
+
+    Returns:
+        True if at least one centroid is inside or within margin px of the crop.
+    """
+    if centroids.shape[0] == 0:
+        return False
+    xs = centroids[:, 0]
+    ys = centroids[:, 1]
+    near = (
+        (xs >= left - margin)
+        & (xs < left + size + margin)
+        & (ys >= top - margin)
+        & (ys < top + size + margin)
+    )
+    return bool(near.any())
+
+
 # ---------------------------------------------------------------------------
 # AsymmetricCXIDataset
 # ---------------------------------------------------------------------------
@@ -393,12 +427,12 @@ class AsymmetricCXIDataset(Dataset):
                 int_label = 0
 
         elif frame_label == 1:
-            # Hard negative: try to find a crop with NO centroid inside → label=0
+            # Hard negative: find a crop with no centroid within 50 px of any edge → label=0
             found_neg = False
             for _ in range(self._hard_neg_max_attempts):
                 top = int(rng.integers(0, h - size + 1))
                 left = int(rng.integers(0, w - size + 1))
-                if not _crop_contains_centroid(top, left, size, centroids):
+                if not _crop_within_margin(top, left, size, centroids):
                     patch = assembled[top : top + size, left : left + size]
                     found_neg = True
                     break
