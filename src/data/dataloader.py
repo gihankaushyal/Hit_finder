@@ -7,7 +7,12 @@ from pathlib import Path
 import torch
 from torch.utils.data import DataLoader
 
-from src.data.dataset import AsymmetricCXIDataset, MultiFrameCXIDataset, SFXDataset, UnlabeledDataset
+from src.data.dataset import (
+    AsymmetricCXIDataset,
+    MultiFrameCXIDataset,
+    SFXDataset,
+    UnlabeledDataset,
+)
 from src.hitfinders.base import Hitfinder
 
 
@@ -52,6 +57,7 @@ def asymmetric_loader(
     hard_neg_max_attempts: int = 50,
     n_cutout_holes: int = 3,
     cutout_hole_size: int = 32,
+    seed: int = 42,
 ) -> DataLoader:
     """DataLoader for asymmetric hitfinder-guided crop training.
 
@@ -69,10 +75,12 @@ def asymmetric_loader(
         label_key: HDF5 key for per-frame labels.
         patch_size: Crop side length in pixels.
         lcn_window: LCN window size (must be odd).
-        hit_frac: Fraction of items targeting label=1 crops.
+        hit_frac: Conditional label=1 rate within hit frames (not the overall
+            positive rate — see AsymmetricCXIDataset for the class-balance note).
         hard_neg_max_attempts: Max attempts to find a hit/hard-neg crop.
         n_cutout_holes: Cutout augmentation holes.
         cutout_hole_size: Cutout hole side length.
+        seed: Base seed for reproducible per-item augmentation.
 
     Returns:
         DataLoader yielding (patch_tensor, label) pairs; patch shape (B, 1, 224, 224).
@@ -88,6 +96,7 @@ def asymmetric_loader(
         hard_neg_max_attempts=hard_neg_max_attempts,
         n_cutout_holes=n_cutout_holes,
         cutout_hole_size=cutout_hole_size,
+        seed=seed,
     )
     return DataLoader(
         dataset,
@@ -108,6 +117,7 @@ def cxi_session_loader(
     augment: bool = False,
     n_cutout_holes: int = 3,
     cutout_hole_size: int = 32,
+    seed: int = 42,
 ) -> DataLoader:
     """DEPRECATED: Use asymmetric_loader for new training pipelines.
 
@@ -137,6 +147,7 @@ def cxi_session_loader(
         augment=augment,
         n_cutout_holes=n_cutout_holes,
         cutout_hole_size=cutout_hole_size,
+        seed=seed,
     )
     return DataLoader(
         dataset,

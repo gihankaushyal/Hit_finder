@@ -94,6 +94,24 @@ def build_session_stratified_split(
         splits[s["session_id"]] = bucket_names[chosen]
         bucket_counts[chosen] += 1
 
+    # Guarantee every bucket is non-empty when there are enough sessions to fill
+    # them. With a small train_pool the greedy fill can starve val/in_domain_test
+    # (all sessions land in train), and an empty val set yields nan eval metrics
+    # that break checkpoint selection downstream. Deterministic repair: move one
+    # session from the largest bucket into each empty one.
+    if len(train_pool) >= len(bucket_names):
+        train_pool_ids = [s["session_id"] for s in train_pool]
+        for i in range(len(bucket_names)):
+            if bucket_counts[i] == 0:
+                donor = int(np.argmax(bucket_counts))
+                donor_ids = [
+                    sid for sid in train_pool_ids if splits[sid] == bucket_names[donor]
+                ]
+                move_id = donor_ids[-1]
+                splits[move_id] = bucket_names[i]
+                bucket_counts[donor] -= 1
+                bucket_counts[i] += 1
+
     for s in held_out:
         splits[s["session_id"]] = SPLIT_CROSS_DETECTOR
 
@@ -206,9 +224,17 @@ def run_patch_agg(
     Returns:
         dict with keys: ap, auc_roc, f1, threshold.
     """
-    import h5py
-
-    from src.preprocessing.pipeline import preprocess_eval_patches
+    from src.preprocessing.geometry import get_assembler, get_geometry
+    from src.preprocessing.io import (
+        read_detector_description,
+        read_embedded_labels,
+        read_frame,
+    )
+    from src.preprocessing.pipeline import (
+        _to_2d,
+        assemble_only,
+        preprocess_eval_patches,
+    )
 
     model.to(device)
     model.eval()
@@ -218,15 +244,34 @@ def run_patch_agg(
 
     for sid in session_ids:
         path = Path(session_map[sid])
-        with h5py.File(path, "r") as f:
-            labels_arr = f[label_key][()]
-            frames_arr = f["entry_1/data_1/data"][()]
+        # Read labels once; read frames lazily one at a time (never load the whole
+        # dataset into RAM). Frame reads use the same candidate-key reader as the
+        # training path, so eval works for every detector's CXI key layout — not
+        # just files whose data lives under entry_1/data_1/data.
+        labels_arr = read_embedded_labels(path, label_key)
+        try:
+            desc = read_detector_description(path)
+        except (ValueError, KeyError, OSError):
+            desc = None
 
-        for frame_idx in range(len(frames_arr)):
-            frame = frames_arr[frame_idx].astype(np.float32)
+        for frame_idx in range(len(labels_arr)):
+            frame = read_frame(path, frame_idx)
+            # Assemble to native resolution exactly as AsymmetricCXIDataset does,
+            # so train and eval see identically-assembled images. Detectors with no
+            # description (or pre-assembled canvases like Jungfrau 4M) fall back to
+            # _to_2d, matching the dataset's own fallback.
+            if desc is not None:
+                try:
+                    pads = get_geometry(desc)
+                    assembler = get_assembler(desc)
+                    assembled = assemble_only(frame, pads, desc, assembler=assembler)
+                except (ValueError, KeyError, OSError):
+                    assembled = _to_2d(frame)
+            else:
+                assembled = _to_2d(frame)
             try:
                 patches_np = preprocess_eval_patches(
-                    frame, patch_size=patch_size, stride=patch_stride
+                    assembled, patch_size=patch_size, stride=patch_stride
                 )
             except ValueError:
                 continue

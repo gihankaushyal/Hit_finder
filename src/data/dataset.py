@@ -36,6 +36,20 @@ from src.preprocessing.pipeline import (
 )
 
 
+def _worker_rng(seed: int, idx: int) -> np.random.Generator:
+    """Deterministic per-item RNG, unique per (seed, worker, idx).
+
+    Reproducible across runs given the same seed and worker count, while staying
+    independent across DataLoader fork workers (each worker has a distinct id).
+    Trade-off: augmentation is fixed per sample index, so it does not vary across
+    epochs — the cost of making runs reproducible without plumbing epoch state
+    into __getitem__.
+    """
+    worker = torch.utils.data.get_worker_info()
+    worker_id = worker.id if worker is not None else 0
+    return np.random.default_rng([seed, worker_id, idx])
+
+
 class UnlabeledDataset(Dataset):
     """Dataset of assembled diffraction images with no labels.
 
@@ -130,11 +144,13 @@ class MultiFrameCXIDataset(Dataset):
         augment: bool = False,
         n_cutout_holes: int = 3,
         cutout_hole_size: int = 32,
+        seed: int = 42,
     ) -> None:
         self._preprocess_fn = preprocess_fn
         self._augment = augment
         self._n_cutout_holes = n_cutout_holes
         self._cutout_hole_size = cutout_hole_size
+        self._seed = seed
         # Checked once at init so __getitem__ does not use `is` identity, which
         # breaks for any wrapped/partial version of preprocess_assembled.
         self._use_geometry = preprocess_fn is preprocess_assembled
@@ -187,7 +203,7 @@ class MultiFrameCXIDataset(Dataset):
                     assembled = _to_2d(frame)
             else:
                 assembled = _to_2d(frame)
-            rng = np.random.default_rng()
+            rng = _worker_rng(self._seed, idx)
             frame = preprocess_train(
                 assembled,
                 rng,
@@ -238,9 +254,7 @@ def _crop_contains_centroid(
         return False
     xs = centroids[:, 0]
     ys = centroids[:, 1]
-    inside = (
-        (xs >= left) & (xs < left + size) & (ys >= top) & (ys < top + size)
-    )
+    inside = (xs >= left) & (xs < left + size) & (ys >= top) & (ys < top + size)
     return bool(inside.any())
 
 
@@ -297,8 +311,15 @@ class AsymmetricCXIDataset(Dataset):
       4. Augment: random_rot90 → random_flip → gcn(patch) → lcn(patch) → random_cutout
       5. Return (tensor(1,224,224) float32, int_label)
 
-    Class balance: hit_frac=0.5 → 50% label-1, 50% label-0 (split: 25% true misses from
-    non-hit frames + 25% hard negatives from hit frames).
+    Class balance: label-1 patches can only come from hit frames (they are the
+    only frames with peaks), so hit_frac is the *conditional* positive rate within
+    hit frames, NOT the overall positive rate. Because the index has one item per
+    frame, the realized fraction of label-1 patches is approximately
+    P(frame is a hit) × hit_frac. For a frame set that is f_hit fraction hits with
+    hit_frac=h, expect ≈ f_hit·h label-1, f_hit·(1−h) hard negatives from hit
+    frames, and (1−f_hit) true misses from non-hit frames. If hit frames are a
+    minority, positives will be under-represented despite hit_frac — use a
+    class-balanced sampler upstream if a fixed overall positive rate is required.
 
     Args:
         session_ids: Session IDs to include.
@@ -307,10 +328,12 @@ class AsymmetricCXIDataset(Dataset):
         label_key: HDF5 key for per-frame labels.
         patch_size: Crop side length in pixels.
         lcn_window: LCN window size (must be odd; default 9).
-        hit_frac: Fraction of items targeting label=1 patches (default 0.5).
+        hit_frac: Conditional label=1 rate within hit frames (default 0.5). See the
+            class-balance note above — this is not the overall positive rate.
         hard_neg_max_attempts: Max random crop attempts for hit/hard-neg sampling.
         n_cutout_holes: Cutout augmentation holes.
         cutout_hole_size: Cutout hole side length.
+        seed: Base seed for reproducible per-item augmentation (default 42).
     """
 
     def __init__(
@@ -325,6 +348,7 @@ class AsymmetricCXIDataset(Dataset):
         hard_neg_max_attempts: int = 50,
         n_cutout_holes: int = 3,
         cutout_hole_size: int = 32,
+        seed: int = 42,
     ) -> None:
         self._hitfinder = hitfinder
         self._label_key = label_key
@@ -334,6 +358,7 @@ class AsymmetricCXIDataset(Dataset):
         self._hard_neg_max_attempts = hard_neg_max_attempts
         self._n_cutout_holes = n_cutout_holes
         self._cutout_hole_size = cutout_hole_size
+        self._seed = seed
 
         # Resolve session_map to Path objects for requested session_ids only.
         cxi_paths: list[Path] = []
@@ -401,9 +426,10 @@ class AsymmetricCXIDataset(Dataset):
             h, w = assembled.shape
 
         # --- Sample crop with class-balanced labeling ---
-        # Fresh RNG per call: shared state would produce correlated crops across
-        # DataLoader fork()ed workers on Linux.
-        rng = np.random.default_rng()
+        # Deterministic per-item RNG: reproducible across runs (given seed +
+        # worker count) yet independent across DataLoader fork()ed workers, so
+        # crops are not correlated between workers on Linux.
+        rng = _worker_rng(self._seed, idx)
         patch: np.ndarray
         int_label: int
 
