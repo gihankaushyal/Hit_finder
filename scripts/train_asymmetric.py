@@ -88,7 +88,11 @@ def _train_fold(
     seed = cfg["seed"]
     fold_id = fold["fold_id"]
     batch_size = cfg["training"]["batch_size"]
-    num_workers = num_workers_override if num_workers_override is not None else cfg["training"]["num_workers"]
+    num_workers = (
+        num_workers_override
+        if num_workers_override is not None
+        else cfg["training"]["num_workers"]
+    )
     epochs = cfg["training"]["epochs"]
     patience = cfg["training"].get("early_stopping_patience", 10)
     run_name = f"{backbone}-asymmetric-fold{fold_id}-seed{seed}"
@@ -97,9 +101,7 @@ def _train_fold(
     asym_cfg = cfg.get("asymmetric", {})
 
     # Build training IDs from the split artifact
-    train_ids = [
-        sid for sid, s in split_artifact["splits"].items() if s == SPLIT_TRAIN
-    ]
+    train_ids = [sid for sid, s in split_artifact["splits"].items() if s == SPLIT_TRAIN]
 
     train_dl = asymmetric_loader(
         session_map=session_map,
@@ -113,6 +115,7 @@ def _train_fold(
         hard_neg_max_attempts=asym_cfg.get("hard_neg_max_attempts", 50),
         n_cutout_holes=asym_cfg.get("n_cutout_holes", 3),
         cutout_hole_size=asym_cfg.get("cutout_hole_size", 32),
+        seed=seed,
     )
 
     bench_cfg = cfg.get("benchmark", {})
@@ -212,7 +215,7 @@ def _train_fold(
                 }
             )
 
-            if val_m["f1"] > best_f1:
+            if not np.isnan(val_m["f1"]) and val_m["f1"] > best_f1:
                 best_f1 = val_m["f1"]
                 epochs_no_improve = 0
                 torch.save(
@@ -233,6 +236,24 @@ def _train_fold(
                         f"  Early stopping at epoch {epoch} (no improvement for {patience} epochs)"
                     )
                     break
+
+        if not ckpt_path.exists():
+            # No epoch improved val F1 (e.g. an empty or degenerate val split gives
+            # nan metrics). Save the final model so the evaluation section below
+            # always has a checkpoint to load instead of crashing on torch.load.
+            print(
+                "  No val-F1 improvement recorded — saving final epoch as checkpoint."
+            )
+            torch.save(
+                {
+                    "epoch": epochs,
+                    "model_state_dict": model.state_dict(),
+                    "val_f1": float("nan"),
+                    "backbone": backbone,
+                    "num_classes": cfg["model"]["num_classes"],
+                },
+                ckpt_path,
+            )
 
     # Evaluate best checkpoint on in-domain and cross-detector test sets
     ckpt = torch.load(ckpt_path, map_location=device, weights_only=True)
@@ -386,7 +407,15 @@ def main(
             artifacts_dir / f"fold_{fold['fold_id']}.json",
         )
 
-        result = _train_fold(fold, split_artifact, session_map, cfg, hitfinder, device, num_workers_override=num_workers)
+        result = _train_fold(
+            fold,
+            split_artifact,
+            session_map,
+            cfg,
+            hitfinder,
+            device,
+            num_workers_override=num_workers,
+        )
         fold_results[f"fold_{fold['fold_id']}"] = result
 
     # Summary table over completed folds
