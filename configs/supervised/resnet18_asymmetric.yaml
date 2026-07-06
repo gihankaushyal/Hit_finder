@@ -18,9 +18,19 @@ lodo:
   label_key: entry_1/labels/hit
 
 hitfinder:
-  backend: pf8          # "pf8" | "gpu" | "mock"
-  pf8_threshold_snr: 5.0
-  pf8_min_peaks: 1
+  backend: pf8          # "pf8" (ctypes) | "pf8_numpy" | "gpu" | "mock"
+  # PF8 parameters (used by both "pf8" and "pf8_numpy" backends):
+  pf8_threshold: 800.0
+  pf8_min_snr: 5.0
+  pf8_min_pix_count: 2
+  pf8_max_pix_count: 200
+  pf8_local_bg_radius: 3
+  pf8_min_res: 0
+  pf8_max_res: 0
+  pf8_use_saturated: false
+  # GPU backend:
+  gpu_script_path: ""   # absolute path to user GPU hitfinder script
+  gpu_device: cuda
 
 asymmetric:
   hit_frac: 0.5
