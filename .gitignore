@@ -15,6 +15,9 @@ build/
 # Weights & Biases
 wandb/
 
+# Secrets — never commit (WANDB_API_KEY etc.)
+.secrets/
+
 # Logs
 logs/
 

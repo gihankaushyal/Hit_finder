@@ -20,6 +20,27 @@ graphify update .   # after modifying code — AST-only, no API cost
 
 ---
 
+## Key Paths — verify before Read
+
+**Rule:** never `Read` a path you have not confirmed exists. `ls`/`find` a scoped
+directory first, then Read the confirmed file. Guessing paths for logs, checkpoints,
+and data is the largest single source of "File does not exist" errors in this project.
+When searching a subtree, scope `find`/`grep` to a specific directory below — a bare
+recursive search over the repo root times out.
+
+| What | Where |
+|------|-------|
+| Training logs | `logs/*.out`, `logs/*.err` (newest: `ls -1t logs/*.err | head`) |
+| Checkpoints | `checkpoints/<run>/best.pt` |
+| Data (symlinks) | `data/raw/`, `data/processed/`, `data/splits/`, `data/synthetic/` |
+| Detector geometry | `src/preprocessing/data/*.geom` (agipd, epix10k, eiger4m) |
+| Configs | `configs/base.yaml`, `configs/supervised/`, `configs/ssl/` |
+| Geometry source (Resonet) | `/data/bioxfel/user/gihan/Resonet/geoms/*.geom` |
+
+The `/resume` skill runs this discovery automatically at session start.
+
+---
+
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Project Identity
@@ -277,6 +298,22 @@ No wandb = no run. If wandb is unavailable on a compute node:
 wandb offline
 # sync after: wandb sync wandb/offline-run-*/
 ```
+
+### Credentials — WANDB_API_KEY
+
+The API key lives in `.secrets/wandb.env` (gitignored — **never commit it, never paste
+it inline on a command line**; inline keys get recorded into the permission allowlist and
+the session transcript). Before running any training pipeline, load it:
+
+```bash
+source .secrets/wandb.env          # exports WANDB_API_KEY
+python src/training/train_supervised.py --config configs/supervised/resnet18.yaml
+```
+
+The same applies to SLURM: `source .secrets/wandb.env` inside the sbatch job script
+before the training command. If `.secrets/wandb.env` is missing, create it from the
+template (`export WANDB_API_KEY="..."`) or run `wandb login`; do not hardcode the key
+into scripts or configs.
 
 ---
 
