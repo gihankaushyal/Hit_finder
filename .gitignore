@@ -35,6 +35,19 @@ data/synthetic/*
 # Brainstorming session files
 .superpowers/
 
+# Claude Code session data and graph output
+.claude/
+graphify-out/
+
+# Reflection / scratch notes
+reflection-notes-*.md
+
+# Compiled C extensions
+*.so
+
+# Vim swap files
+*.swp
+
 # macOS
 .DS_Store
 
