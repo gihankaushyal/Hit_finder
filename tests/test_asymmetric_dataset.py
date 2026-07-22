@@ -1,4 +1,4 @@
-"""Tests for AsymmetricCXIDataset and _crop_contains_centroid.
+"""Tests for AsymmetricCXIDataset and crop helper functions.
 
 Uses a synthetic CXI fixture (h5py) — no real detector data required.
 """
@@ -13,8 +13,13 @@ import numpy as np
 import pytest
 import torch
 
-from src.data.dataset import AsymmetricCXIDataset, _crop_contains_centroid
+from src.data.dataset import (
+    AsymmetricCXIDataset,
+    _crop_contains_centroid,
+    _crop_within_margin,
+)
 from src.hitfinders import MockHitfinder
+from src.preprocessing.augment import PAD_BORDER_DEFAULT, pad_border
 
 # ---------------------------------------------------------------------------
 # Synthetic CXI fixture
@@ -68,6 +73,46 @@ def test_crop_contains_centroid_empty() -> None:
     assert not _crop_contains_centroid(top=0, left=0, size=224, centroids=centroids)
 
 
+def test_crop_within_margin_near() -> None:
+    """Centroid just outside the crop but within the margin is rejected."""
+    # crop at (100, 100) size 224; centroid at x=325, y=200 — 1 px outside right edge
+    centroids = np.array([[325.0, 200.0]], dtype=np.float32)
+    assert _crop_within_margin(top=100, left=100, size=224, centroids=centroids, margin=50)
+
+
+def test_crop_within_margin_far() -> None:
+    """Centroid well outside the margin is accepted (returns False)."""
+    # crop at (0, 0) size 224; centroid at x=400, y=400 — well outside
+    centroids = np.array([[400.0, 400.0]], dtype=np.float32)
+    assert not _crop_within_margin(top=0, left=0, size=224, centroids=centroids, margin=50)
+
+
+def test_crop_within_margin_empty() -> None:
+    """Empty centroid array → False (any position is safe)."""
+    centroids = np.zeros((0, 2), dtype=np.float32)
+    assert not _crop_within_margin(top=0, left=0, size=224, centroids=centroids)
+
+
+def test_pad_border_centroid_shift() -> None:
+    """After pad_border, centroids shifted by PAD_BORDER_DEFAULT land in the same
+    relative position as the original centroids did in the unpadded image."""
+    p = PAD_BORDER_DEFAULT
+    img = np.random.default_rng(0).random((512, 512)).astype(np.float32)
+    padded = pad_border(img)
+
+    # A centroid at (r, c) in the original maps to (r+p, c+p) in the padded image.
+    r, c = 100, 200
+    original_value = img[r, c]
+    shifted_value = padded[r + p, c + p]
+    assert original_value == shifted_value
+
+    # Verify shifted centroids are valid for _crop_contains_centroid.
+    centroids_orig = np.array([[float(c), float(r)]], dtype=np.float32)  # (x, y)
+    centroids_shifted = centroids_orig + p
+    # A crop at the shifted position should contain the shifted centroid.
+    assert _crop_contains_centroid(top=r, left=c, size=224, centroids=centroids_shifted)
+
+
 # ---------------------------------------------------------------------------
 # AsymmetricCXIDataset structural tests
 # ---------------------------------------------------------------------------
@@ -85,62 +130,9 @@ def test_len(synthetic_cxi: Path) -> None:
     assert len(ds) == N_FRAMES
 
 
-def test_getitem_returns_correct_shape_dtype(synthetic_cxi: Path) -> None:
-    """Each item is a (1, 224, 224) float32 tensor and an int label 0 or 1."""
-    hf = MockHitfinder()
-    ds = AsymmetricCXIDataset(
-        session_ids=["s0"],
-        session_map={"s0": synthetic_cxi},
-        hitfinder=hf,
-        label_key=LABEL_KEY,
-    )
-    for idx in range(len(ds)):
-        tensor, label = ds[idx]
-        assert isinstance(tensor, torch.Tensor), f"item {idx}: expected Tensor"
-        assert tensor.shape == (1, 224, 224), f"item {idx}: wrong shape {tensor.shape}"
-        assert tensor.dtype == torch.float32, f"item {idx}: wrong dtype {tensor.dtype}"
-        assert label in (0, 1), f"item {idx}: label out of range {label}"
-
-
-# ---------------------------------------------------------------------------
-# Crop-labelling logic tests
-# ---------------------------------------------------------------------------
-
-
-def test_hit_patch_label_with_centroids(synthetic_cxi: Path) -> None:
-    """With centroids scattered across the frame and hit_frac=1.0, at least 1/20
-    samples from a hit frame gets label=1."""
-    peaks = np.array(
-        [[100.0, 100.0], [300.0, 300.0], [450.0, 450.0]], dtype=np.float32
-    )
-    hf = MockHitfinder(peaks=peaks)
-    ds = AsymmetricCXIDataset(
-        session_ids=["s0"],
-        session_map={"s0": synthetic_cxi},
-        hitfinder=hf,
-        label_key=LABEL_KEY,
-        hit_frac=1.0,
-    )
-    # Indices 0–3 are hit frames
-    hit_frame_indices = [i for i in range(N_FRAMES) if ds._labels[i] == 1]
-    assert hit_frame_indices, "Expected at least one hit frame"
-
-    label_ones = 0
-    n_samples = 20
-    rng = np.random.default_rng(1)
-    for _ in range(n_samples):
-        idx = int(rng.choice(hit_frame_indices))
-        _, label = ds[idx]
-        if label == 1:
-            label_ones += 1
-
-    assert label_ones >= 1, (
-        f"Expected >=1 label=1 out of {n_samples} samples from hit frames, got {label_ones}"
-    )
-
-
-def test_hard_negative_label_zero(synthetic_cxi: Path) -> None:
-    """With hit_frac=0.0, crops from hit frames are always hard negatives → label=0."""
+def test_hit_path_returns_crop_shape_and_label_one(synthetic_cxi: Path) -> None:
+    """When hitfinder returns peaks, __getitem__ takes Path A: (1,224,224) tensor, label=1."""
+    # Peak at centre of 512×512 frame — well within padded bounds
     peaks = np.array([[256.0, 256.0]], dtype=np.float32)
     hf = MockHitfinder(peaks=peaks)
     ds = AsymmetricCXIDataset(
@@ -148,46 +140,47 @@ def test_hard_negative_label_zero(synthetic_cxi: Path) -> None:
         session_map={"s0": synthetic_cxi},
         hitfinder=hf,
         label_key=LABEL_KEY,
-        hit_frac=0.0,
     )
-    hit_frame_indices = [i for i in range(N_FRAMES) if ds._labels[i] == 1]
-    for idx in hit_frame_indices:
-        _, label = ds[idx]
-        assert label == 0, f"Expected hard-negative label=0 for hit frame idx={idx}, got {label}"
+    for idx in range(len(ds)):
+        result = ds[idx]
+        assert result is not None, f"item {idx}: unexpected None from Path A"
+        tensor, label = result
+        assert tensor.shape == (1, 224, 224), f"item {idx}: wrong shape {tensor.shape}"
+        assert tensor.dtype == torch.float32, f"item {idx}: wrong dtype {tensor.dtype}"
+        assert label == 1, f"item {idx}: expected label=1 (hit crop), got {label}"
 
 
-def test_miss_frame_always_label_zero(synthetic_cxi: Path) -> None:
-    """Non-hit frames always produce label=0 regardless of centroids."""
-    peaks = np.array([[100.0, 100.0], [200.0, 200.0]], dtype=np.float32)
+def test_miss_path_returns_crop_shape_and_label_zero(synthetic_cxi: Path) -> None:
+    """When hitfinder finds no peaks, __getitem__ takes Path B: (1,224,224) tensor, label=0."""
+    hf = MockHitfinder()  # returns empty (0, 2) centroid array
+    ds = AsymmetricCXIDataset(
+        session_ids=["s0"],
+        session_map={"s0": synthetic_cxi},
+        hitfinder=hf,
+        label_key=LABEL_KEY,
+    )
+    for idx in range(len(ds)):
+        result = ds[idx]
+        assert result is not None, f"item {idx}: unexpected None — empty centroids always yield a valid miss crop"
+        tensor, label = result
+        assert tensor.shape == (1, 224, 224), f"item {idx}: wrong shape {tensor.shape}"
+        assert tensor.dtype == torch.float32, f"item {idx}: wrong dtype {tensor.dtype}"
+        assert label == 0, f"item {idx}: expected label=0 (miss crop), got {label}"
+
+
+def test_crop_is_normalised(synthetic_cxi: Path) -> None:
+    """Returned tensor values are not in raw detector range — GCN+LCN has been applied."""
+    peaks = np.array([[256.0, 256.0]], dtype=np.float32)
     hf = MockHitfinder(peaks=peaks)
     ds = AsymmetricCXIDataset(
         session_ids=["s0"],
         session_map={"s0": synthetic_cxi},
         hitfinder=hf,
         label_key=LABEL_KEY,
-        hit_frac=1.0,
     )
-    miss_frame_indices = [i for i in range(N_FRAMES) if ds._labels[i] == 0]
-    assert miss_frame_indices, "Expected at least one non-hit frame"
-    for idx in miss_frame_indices:
-        _, label = ds[idx]
-        assert label == 0, f"Non-hit frame idx={idx} produced label={label}"
-
-
-def test_no_centroids_fallback(synthetic_cxi: Path) -> None:
-    """MockHitfinder returning empty (0,2) → hit frame falls back to label=0 without crash."""
-    hf = MockHitfinder()  # default: no peaks
-    ds = AsymmetricCXIDataset(
-        session_ids=["s0"],
-        session_map={"s0": synthetic_cxi},
-        hitfinder=hf,
-        label_key=LABEL_KEY,
-        hit_frac=1.0,
-    )
-    hit_frame_indices = [i for i in range(N_FRAMES) if ds._labels[i] == 1]
-    for idx in hit_frame_indices:
-        tensor, label = ds[idx]
-        assert label == 0, (
-            f"With no centroids, hit frame idx={idx} should fall back to label=0, got {label}"
-        )
-        assert tensor.shape == (1, 224, 224)
+    tensor, _ = ds[0]
+    arr = tensor.numpy()
+    # Raw synthetic frames are uniform random in [0, 1); after GCN+LCN the mean
+    # should be near 0 and values span well beyond [0, 1).
+    assert arr.mean() == pytest.approx(0.0, abs=0.5), "GCN should shift mean toward 0"
+    assert arr.max() > 1.0 or arr.min() < 0.0, "LCN should produce values outside [0,1]"

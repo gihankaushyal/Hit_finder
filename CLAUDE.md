@@ -76,16 +76,19 @@ The comparison between Track 1 and Track 2 is itself a scientific contribution.
 
 ```
 1. Read HDF5/CXI metadata → identify detector type (AGIPD | JUNGFRAU | ePix10k | Eiger4M)
-2. Reborn geometry handler → GeometryList → assemble multi-panel image
-3. Global Contrast Normalization (GCN): I_gcn = (I - μ) / (σ + ε)
-4. Local Contrast Normalization (LCN): I_lcn(x,y) = (I(x,y) - μ_W(x,y)) / (σ_W(x,y) + ε)
-5. Resize to 224×224 (after normalization — never before)
+2. Reborn geometry handler → PADAssembler → assemble multi-panel image (native resolution)
+3. Hitfinder (on-the-fly) → locate Bragg spots; derive hit/non-hit label and centroids
+4. Crop to 224×224 — centre crop (eval) or hitfinder-guided random crop (training)
+5. Augmentation (training only): random rot90 → random flip → random cutout
+6. Global Contrast Normalization (GCN): I_gcn = (I - μ) / (σ + ε)
+7. Local Contrast Normalization (LCN): I_lcn(x,y) = (I(x,y) - μ_W(x,y)) / (σ_W(x,y) + ε)
 ```
 
 **Critical constraints:**
 - Detector type is ALWAYS read from metadata. Never infer it from image content.
-- Normalization order is GCN → LCN. Never reversed.
-- Resize happens last. It is for model compatibility, not detector correction.
+- Normalization after crop and augmentation. Always: crop → augment → GCN → LCN. Never reversed.
+- GCN → LCN order is fixed. Never swap them.
+- There is no resize step. 224×224 is achieved via crop only, never downsampling.
 - Pipeline must be bit-for-bit identical across both tracks for fair comparison.
 
 ---
@@ -114,8 +117,8 @@ sfx-hitfinder/
 │   │   └── data/                # geometry JSON files for detectors
 │   │       └── jungfrau4m_jf4m_103mm.json
 │   ├── data/
-│   │   ├── dataset.py           # UnlabeledDataset (.img/SSL) + SFXDataset (labeled HDF5)
-│   │   ├── dataloader.py        # DataLoader factories
+│   │   ├── dataset.py           # UnlabeledDataset, MultiFrameCXIDataset, AsymmetricCXIDataset
+│   │   ├── dataloader.py        # DataLoader factories (ssl_pretrain_loader, asymmetric_loader)
 │   │   └── synthetic.py         # synthetic data generation
 │   ├── models/
 │   │   ├── supervised.py        # ResNet18/50 fine-tuning (build_supervised_model via timm)
@@ -221,7 +224,7 @@ python src/training/train_supervised.py --config configs/supervised/resnet18.yam
 - Raw detector images: HDF5 (`.h5`) or CXI (`.cxi`) — CXI is HDF5 with a defined schema
 - Assembled images (unlabeled SSL data): `.img` — ADSC/MAR format, read via `fabio`; **already assembled, skip Reborn geometry step**
 - Geometry files: Reborn-compatible, co-located with or referenced from image files
-- Labels: JSON sidecar (`labels.json`) — keys are absolute file paths, values are 0 (non-hit) or 1 (hit)
+- Labels: embedded in CXI files at `entry_1/labels/hit` (Resonet format); derived on-the-fly by hitfinder for asymmetric pipeline
 - Train/val/test splits: plaintext `.txt` files listing absolute file paths, one per line
 
 ### Detector Types and Expected Image Dimensions (pre-assembly)
@@ -333,9 +336,9 @@ into scripts or configs.
 
 1. **Detector type comes from metadata.** Never from image content, filename parsing, or a learned neural layer.
 
-2. **Preprocessing pipeline is shared and fixed.** Any modification to GCN, LCN, resize, or Reborn geometry handling applies to BOTH tracks. Changes require explicit design review — do not patch one track silently.
+2. **Preprocessing pipeline is shared and fixed.** Any modification to GCN, LCN, crop, or Reborn geometry handling applies to BOTH tracks. Changes require explicit design review — do not patch one track silently.
 
-3. **Normalization before resize.** Always. GCN → LCN → resize. Non-negotiable.
+3. **Normalization after crop and augmentation.** Always: crop → augment → GCN → LCN. There is no resize step — 224×224 is achieved via crop only. Non-negotiable.
 
 4. **HDF5 files are opened lazily.** Never in `__init__`. Multiprocessing will deadlock otherwise.
 

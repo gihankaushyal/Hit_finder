@@ -23,21 +23,23 @@ The comparison between Track 1 and Track 2 is itself a scientific contribution �
 
 ---
 
-## 2. Preprocessing Pipeline (Phases 1–3)
+## 2. Preprocessing Pipeline (Phases 1–4)
 
 All frames pass through an identical pipeline regardless of track, ensuring fair comparison:
 
 ```
-1. Read CXI/HDF5 frame  →  raw detector array
-2. Flatten to 2D        →  (_to_2d: row-stack if multi-panel, reshape if 1D)
-3. GCN                  →  I_gcn = (I − μ) / (σ + ε)   [global contrast normalisation]
-4. LCN                  →  I_lcn(x,y) = (I(x,y) − μ_W(x,y)) / (σ_W(x,y) + ε)   [local]
-5. Resize to 224 × 224  →  anti-aliased, preserve_range=True
+1. Read CXI/HDF5 frame     →  raw detector array
+2. Geometry assembly        →  PADAssembler → native-resolution 2D spatial image
+3. Hitfinder (on-the-fly)  →  Bragg spot centroids; hit/non-hit label derived per crop
+4. Crop to 224 × 224       →  centre crop (eval) or hitfinder-guided random crop (training)
+5. Augmentation (train)     →  random rot90 → random flip → random cutout
+6. GCN                     →  I_gcn = (I − μ) / (σ + ε)   [global contrast normalisation]
+7. LCN                     →  I_lcn(x,y) = (I(x,y) − μ_W(x,y)) / (σ_W(x,y) + ε)   [local]
 ```
 
 **LCN window selection (Phase 3 ablation):** Window sizes 3, 9, 15, and 31 were evaluated across all four detector types. Window 31 caused visible panel-edge ringing artifacts. Windows 3, 9, and 15 produced equivalent outputs on non-hit frames. Window **9** was selected as the smallest safe choice that avoids artifacts — this is now the fixed default (`LCN_WINDOW_DEFAULT = 9`).
 
-**Critical ordering constraint:** Normalization (GCN → LCN) always precedes resize. Resize is solely for model input compatibility, not detector correction.
+**Critical ordering constraint (Phase 4 update):** GCN → LCN are applied after the 224×224 crop and all augmentations. There is no resize step — 224×224 is achieved via crop only. Cutout augmentation happens before normalization so GCN/LCN statistics reflect the masked patch.
 
 ---
 

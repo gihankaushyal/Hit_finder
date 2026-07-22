@@ -3,87 +3,52 @@
 from __future__ import annotations
 
 import numpy as np
-import pytest
 
 from src.preprocessing.augment import (
-    center_crop,
-    random_crop,
+    PAD_BORDER_DEFAULT,
+    pad_border,
     random_cutout,
     random_flip,
     random_rot90,
 )
-from src.preprocessing.pipeline import preprocess_eval, preprocess_train
 
 RNG_SEED = 42
 
 
 # ---------------------------------------------------------------------------
-# random_crop
+# pad_border
 # ---------------------------------------------------------------------------
 
 
-class TestRandomCrop:
-    def test_output_shape(self):
-        rng = np.random.default_rng(RNG_SEED)
-        img = np.ones((500, 600), dtype=np.float32)
-        crop = random_crop(img, 224, rng)
-        assert crop.shape == (224, 224)
+class TestPadBorder:
+    def test_output_shape(self) -> None:
+        img = np.zeros((300, 400), dtype=np.float32)
+        out = pad_border(img)
+        assert out.shape == (300 + 2 * PAD_BORDER_DEFAULT, 400 + 2 * PAD_BORDER_DEFAULT)
 
-    def test_exact_size_image(self):
-        rng = np.random.default_rng(RNG_SEED)
+    def test_border_is_zero(self) -> None:
+        img = np.ones((300, 300), dtype=np.float32)
+        out = pad_border(img)
+        assert out[0, :].sum() == 0
+        assert out[-1, :].sum() == 0
+        assert out[:, 0].sum() == 0
+        assert out[:, -1].sum() == 0
+
+    def test_interior_unchanged(self) -> None:
+        img = np.random.default_rng(0).random((300, 300)).astype(np.float32)
+        out = pad_border(img)
+        p = PAD_BORDER_DEFAULT
+        np.testing.assert_array_equal(out[p:-p, p:-p], img)
+
+    def test_zero_pad_size_is_identity(self) -> None:
         img = np.ones((224, 224), dtype=np.float32)
-        crop = random_crop(img, 224, rng)
-        assert crop.shape == (224, 224)
+        out = pad_border(img, pad_size=0)
+        np.testing.assert_array_equal(out, img)
 
-    def test_raises_if_too_small(self):
-        rng = np.random.default_rng(RNG_SEED)
-        img = np.ones((100, 300), dtype=np.float32)
-        with pytest.raises(ValueError, match="smaller than requested crop"):
-            random_crop(img, 224, rng)
-
-    def test_different_seeds_give_different_crops(self):
-        img = np.arange(500 * 500, dtype=np.float32).reshape(500, 500)
-        crop_a = random_crop(img, 224, np.random.default_rng(1))
-        crop_b = random_crop(img, 224, np.random.default_rng(2))
-        # Very unlikely to be identical with a large image
-        assert not np.array_equal(crop_a, crop_b)
-
-    def test_crop_is_contiguous_subarray(self):
-        img = np.arange(400 * 400, dtype=np.float32).reshape(400, 400)
-        rng = np.random.default_rng(RNG_SEED)
-        crop = random_crop(img, 100, rng)
-        # Every value in the crop must appear somewhere in img
-        assert np.isin(crop, img).all()
-
-
-# ---------------------------------------------------------------------------
-# center_crop
-# ---------------------------------------------------------------------------
-
-
-class TestCenterCrop:
-    def test_output_shape(self):
-        img = np.ones((1273, 1273), dtype=np.float32)
-        crop = center_crop(img, 224)
-        assert crop.shape == (224, 224)
-
-    def test_is_centred(self):
-        h, w, size = 600, 800, 224
-        img = np.zeros((h, w), dtype=np.float32)
-        expected_top = (h - size) // 2
-        expected_left = (w - size) // 2
-        img[expected_top, expected_left] = 1.0
-        crop = center_crop(img, size)
-        assert crop[0, 0] == 1.0
-
-    def test_deterministic(self):
-        img = np.random.default_rng(RNG_SEED).random((900, 900)).astype(np.float32)
-        assert np.array_equal(center_crop(img, 224), center_crop(img, 224))
-
-    def test_raises_if_too_small(self):
-        img = np.ones((100, 100), dtype=np.float32)
-        with pytest.raises(ValueError, match="smaller than requested crop"):
-            center_crop(img, 224)
+    def test_custom_pad_size(self) -> None:
+        img = np.zeros((100, 100), dtype=np.float32)
+        out = pad_border(img, pad_size=50)
+        assert out.shape == (200, 200)
 
 
 # ---------------------------------------------------------------------------
@@ -203,56 +168,3 @@ class TestRandomCutout:
         result = random_cutout(img, np.random.default_rng(RNG_SEED), n_holes=0)
         np.testing.assert_array_equal(result, img)
 
-
-# ---------------------------------------------------------------------------
-# preprocess_train  (end-to-end shape + dtype)
-# ---------------------------------------------------------------------------
-
-
-class TestPreprocessTrain:
-    def test_output_shape_and_dtype(self):
-        img = np.random.default_rng(RNG_SEED).random((1273, 1273)).astype(np.float32)
-        rng = np.random.default_rng(RNG_SEED)
-        result = preprocess_train(img, rng)
-        assert result.shape == (224, 224)
-        assert result.dtype == np.float32
-
-    def test_stochastic_across_calls(self):
-        img = np.random.default_rng(RNG_SEED).random((1273, 1273)).astype(np.float32)
-        a = preprocess_train(img, np.random.default_rng(1))
-        b = preprocess_train(img, np.random.default_rng(2))
-        assert not np.array_equal(a, b)
-
-    def test_cutout_params_forwarded(self):
-        img = np.ones((500, 500), dtype=np.float32)
-        rng = np.random.default_rng(RNG_SEED)
-        result = preprocess_train(img, rng, n_cutout_holes=5, cutout_hole_size=20)
-        assert result.shape == (224, 224)
-
-
-# ---------------------------------------------------------------------------
-# preprocess_eval  (determinism + shape + dtype)
-# ---------------------------------------------------------------------------
-
-
-class TestPreprocessEval:
-    def test_output_shape_and_dtype(self):
-        img = np.random.default_rng(RNG_SEED).random((1273, 1273)).astype(np.float32)
-        result = preprocess_eval(img)
-        assert result.shape == (224, 224)
-        assert result.dtype == np.float32
-
-    def test_deterministic(self):
-        img = np.random.default_rng(RNG_SEED).random((1500, 1500)).astype(np.float32)
-        a = preprocess_eval(img)
-        b = preprocess_eval(img)
-        np.testing.assert_array_equal(a, b)
-
-    def test_different_from_train(self):
-        img = np.random.default_rng(RNG_SEED).random((1273, 1273)).astype(np.float32)
-        eval_out = preprocess_eval(img)
-        # Train uses random crop; with high probability it differs from centre crop
-        train_out = preprocess_train(img, np.random.default_rng(99))
-        # They may occasionally coincide if random crop == centre crop, but for a
-        # 1273×1273 image the probability is (1/(1050²))² ≈ 0, so this is safe.
-        assert not np.array_equal(eval_out, train_out)

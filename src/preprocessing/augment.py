@@ -9,54 +9,25 @@ from __future__ import annotations
 
 import numpy as np
 
-
-def random_crop(image: np.ndarray, size: int, rng: np.random.Generator) -> np.ndarray:
-    """Extract a random (size × size) patch from a 2D image.
-
-    Args:
-        image: 2D float32 array (H, W). Must have H >= size and W >= size.
-        size: Side length of the square crop in pixels.
-        rng: Numpy Generator (e.g. np.random.default_rng()).
-
-    Returns:
-        float32 array of shape (size, size).
-
-    Raises:
-        ValueError: If image dimensions are smaller than size.
-    """
-    h, w = image.shape
-    if h < size or w < size:
-        raise ValueError(
-            f"random_crop: image ({h}×{w}) is smaller than requested crop ({size}×{size})."
-        )
-    top = int(rng.integers(0, h - size + 1))
-    left = int(rng.integers(0, w - size + 1))
-    return image[top : top + size, left : left + size]
+PAD_BORDER_DEFAULT = 112
 
 
-def center_crop(image: np.ndarray, size: int) -> np.ndarray:
-    """Extract the centre (size × size) patch from a 2D image.
-
-    Deterministic — no RNG needed. Used on the eval/test path.
+def pad_border(image: np.ndarray, pad_size: int = PAD_BORDER_DEFAULT) -> np.ndarray:
+    """Symmetrically pad all four edges with zeros.
 
     Args:
-        image: 2D float32 array (H, W). Must have H >= size and W >= size.
-        size: Side length of the square crop in pixels.
+        image: float32 array of shape (H, W).
+        pad_size: Number of zero pixels to add on each edge.
 
     Returns:
-        float32 array of shape (size, size).
-
-    Raises:
-        ValueError: If image dimensions are smaller than size.
+        float32 array of shape (H + 2*pad_size, W + 2*pad_size).
     """
-    h, w = image.shape
-    if h < size or w < size:
-        raise ValueError(
-            f"center_crop: image ({h}×{w}) is smaller than requested crop ({size}×{size})."
-        )
-    top = (h - size) // 2
-    left = (w - size) // 2
-    return image[top : top + size, left : left + size]
+    return np.pad(
+        image,
+        ((pad_size, pad_size), (pad_size, pad_size)),
+        mode="constant",
+        constant_values=0.0,
+    )
 
 
 def random_rot90(image: np.ndarray, rng: np.random.Generator) -> np.ndarray:
@@ -132,8 +103,8 @@ def random_cutout(
 ) -> np.ndarray:
     """Zero-fill n_holes random (hole_size × hole_size) rectangular patches.
 
-    Simulates detector panel gaps or masked regions. Applied after GCN → LCN so
-    masked pixels are set to 0.0, which is the approximate post-normalisation mean.
+    Simulates detector panel gaps or masked regions. Applied before GCN → LCN;
+    zeroed pixels will be pulled toward the normalised mean during normalisation.
 
     Args:
         image: 2D float32 array (H, W).

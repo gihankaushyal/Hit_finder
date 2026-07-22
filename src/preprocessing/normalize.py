@@ -10,6 +10,27 @@ LCN_EPSILON: float = 1e-6
 LCN_WINDOW_DEFAULT: int = 9
 
 
+def gcn_apply(
+    image: np.ndarray, mu: float, sigma: float, eps: float = GCN_EPSILON
+) -> np.ndarray:
+    """Apply GCN using precomputed mean and std.
+
+    Used when statistics must be captured on the full assembled frame before
+    cropping, so that all patches from the same frame share consistent scale.
+
+    Args:
+        image: 2D float array (H, W) — typically a 224×224 crop.
+        mu: Precomputed global mean (e.g. from the unpadded assembled frame).
+        sigma: Precomputed global standard deviation.
+        eps: Stability term added to the denominator.
+
+    Returns:
+        Normalized array, same shape and dtype float64.
+    """
+    image = image.astype(np.float64)
+    return (image - mu) / (sigma + eps)
+
+
 def gcn(image: np.ndarray, eps: float = GCN_EPSILON) -> np.ndarray:
     """Global Contrast Normalization: (I - μ) / (σ + ε).
 

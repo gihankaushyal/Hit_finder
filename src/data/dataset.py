@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from collections.abc import Callable
 from pathlib import Path
 
@@ -20,34 +19,15 @@ from src.preprocessing.io import (
 )
 from src.hitfinders.base import Hitfinder
 from src.preprocessing.augment import (
-    random_crop,
+    PAD_BORDER_DEFAULT,
+    pad_border,
     random_cutout,
     random_flip,
     random_rot90,
 )
-from src.preprocessing.normalize import gcn, lcn
-from src.preprocessing.pipeline import (
-    _to_2d,
-    assemble_only,
-    preprocess_assembled,
-    preprocess_eval,
-    preprocess_train,
-    preprocess_with_geometry,
-)
+from src.preprocessing.normalize import gcn_apply, lcn
+from src.preprocessing.pipeline import _to_2d, assemble_only
 
-
-def _worker_rng(seed: int, idx: int) -> np.random.Generator:
-    """Deterministic per-item RNG, unique per (seed, worker, idx).
-
-    Reproducible across runs given the same seed and worker count, while staying
-    independent across DataLoader fork workers (each worker has a distinct id).
-    Trade-off: augmentation is fixed per sample index, so it does not vary across
-    epochs — the cost of making runs reproducible without plumbing epoch state
-    into __getitem__.
-    """
-    worker = torch.utils.data.get_worker_info()
-    worker_id = worker.id if worker is not None else 0
-    return np.random.default_rng([seed, worker_id, idx])
 
 
 class UnlabeledDataset(Dataset):
@@ -68,50 +48,6 @@ class UnlabeledDataset(Dataset):
         return torch.from_numpy(image).unsqueeze(0)
 
 
-class SFXDataset(Dataset):
-    """Dataset of labeled diffraction images for supervised training.
-
-    Reads a plaintext split file (one absolute image path per line) and a
-    JSON labels file mapping absolute path strings to integer labels
-    (1 = hit, 0 = non-hit).
-
-    Labels file format (labels.json):
-        {
-            "/absolute/path/to/frame_001.h5": 1,
-            "/absolute/path/to/frame_002.h5": 0
-        }
-
-    Detector type is always read from file metadata — never inferred.
-    HDF5 files are opened lazily in __getitem__ to support multiprocessing.
-    """
-
-    def __init__(self, split_file: str | Path, labels_file: str | Path) -> None:
-        split_file = Path(split_file)
-        self._paths = [
-            Path(line.strip())
-            for line in split_file.read_text().splitlines()
-            if line.strip()
-        ]
-        labels_file = Path(labels_file)
-        self._labels: dict[str, int] = json.loads(labels_file.read_text())
-
-    def __len__(self) -> int:
-        return len(self._paths)
-
-    def __getitem__(self, idx: int) -> tuple[torch.Tensor, int]:
-        image = read_image(self._paths[idx])
-        tensor = torch.from_numpy(image).unsqueeze(0)
-        label = self._load_label(idx)
-        return tensor, label
-
-    def _load_label(self, idx: int) -> int:
-        key = str(self._paths[idx])
-        if key not in self._labels:
-            raise KeyError(
-                f"No label for '{key}'. Verify the path appears in labels_file."
-            )
-        return int(self._labels[key])
-
 
 class MultiFrameCXIDataset(Dataset):
     """DEPRECATED: Use AsymmetricCXIDataset for new training pipelines.
@@ -131,46 +67,16 @@ class MultiFrameCXIDataset(Dataset):
         cxi_paths: List of paths to multi-frame CXI/HDF5 files.
         label_key: HDF5 key for the per-frame label array in each file.
         preprocess_fn: Optional callable applied to each raw (H, W) float32
-            frame before converting to a tensor. Defaults to
-            preprocess_assembled (GCN → LCN → resize 224×224). Pass None to
-            return raw frames.
+            frame before converting to a tensor. Pass None to return raw frames.
     """
 
     def __init__(
         self,
         cxi_paths: list[str | Path],
         label_key: str = "entry_1/labels/hit",
-        preprocess_fn: Callable[[np.ndarray], np.ndarray] | None = preprocess_assembled,
-        augment: bool = False,
-        n_cutout_holes: int = 3,
-        cutout_hole_size: int = 32,
-        seed: int = 42,
+        preprocess_fn: Callable[[np.ndarray], np.ndarray] | None = None,
     ) -> None:
         self._preprocess_fn = preprocess_fn
-        self._augment = augment
-        self._n_cutout_holes = n_cutout_holes
-        self._cutout_hole_size = cutout_hole_size
-        self._seed = seed
-        # Checked once at init so __getitem__ does not use `is` identity, which
-        # breaks for any wrapped/partial version of preprocess_assembled.
-        self._use_geometry = preprocess_fn is preprocess_assembled
-
-        # Read detector descriptions eagerly so __getitem__ can route to
-        # geometry-aware preprocessing. Geometry objects (PADGeometryList,
-        # PADAssembler) are NOT stored as instance attributes — they are not
-        # picklable under spawn/forkserver DataLoader workers. Instead we call
-        # get_geometry/get_assembler lazily in __getitem__; both functions use
-        # a module-level cache that is process-local and safe under any start method.
-        unique_paths = {Path(p) for p in cxi_paths}
-        self._path_to_desc: dict[Path, str] = {}
-        for p in unique_paths:
-            try:
-                desc = read_detector_description(p)
-                self._path_to_desc[p] = desc
-            except (ValueError, KeyError, OSError):
-                # File lacks description key or is unreadable — falls back to
-                # preprocess_assembled.
-                pass
 
         # Build flat index and cache labels eagerly — label arrays are small
         # and reading them per __getitem__ caused O(N) file opens per epoch.
@@ -189,42 +95,8 @@ class MultiFrameCXIDataset(Dataset):
     def __getitem__(self, idx: int) -> tuple[torch.Tensor, int]:
         path, frame_idx = self._index[idx]
         frame = read_frame(path, frame_idx)
-
-        if self._augment:
-            # Augmentation path: assemble to native resolution, then crop/rotate/flip/norm/cutout.
-            # Jungfrau 4M has no desc entry (pre-assembled) — _to_2d gives the 2164×2068 canvas.
-            if path in self._path_to_desc:
-                desc = self._path_to_desc[path]
-                try:
-                    pads = get_geometry(desc)
-                    assembler = get_assembler(desc)
-                    assembled = assemble_only(frame, pads, desc, assembler=assembler)
-                except (ValueError, KeyError, OSError):
-                    assembled = _to_2d(frame)
-            else:
-                assembled = _to_2d(frame)
-            rng = _worker_rng(self._seed, idx)
-            frame = preprocess_train(
-                assembled,
-                rng,
-                n_cutout_holes=self._n_cutout_holes,
-                cutout_hole_size=self._cutout_hole_size,
-            )
-        elif self._preprocess_fn is not None:
-            # Existing eval path (unchanged for non-augment use).
-            if self._use_geometry and path in self._path_to_desc:
-                desc = self._path_to_desc[path]
-                try:
-                    pads = get_geometry(desc)
-                    assembler = get_assembler(desc)
-                    frame = preprocess_with_geometry(
-                        frame, pads, desc, assembler=assembler
-                    )
-                except (ValueError, KeyError, OSError):
-                    frame = preprocess_assembled(frame)
-            else:
-                frame = self._preprocess_fn(frame)
-
+        if self._preprocess_fn is not None:
+            frame = self._preprocess_fn(frame)
         tensor = torch.from_numpy(frame).unsqueeze(0)
         return tensor, self._labels[idx]
 
@@ -298,42 +170,26 @@ def _crop_within_margin(
 
 
 class AsymmetricCXIDataset(Dataset):
-    """Primary training dataset: crop-content-labeled patches with hitfinder integration.
+    """Primary training dataset: hitfinder-guided crop with augmentation and normalisation.
 
-    Replaces MultiFrameCXIDataset as the main training path. For each frame:
+    For each frame:
       1. Read + assemble to native resolution
-      2. Run hitfinder → centroids (N_peaks, 2)
-      3. Sample a 224×224 crop with class-balanced labeling:
-         - frame_label=1, rand < hit_frac: sample crops until ≥1 centroid inside → label=1
-           (fallback to label=0 if hard_neg_max_attempts exhausted or 0 peaks)
-         - frame_label=1, rand >= hit_frac: sample crop with 0 centroids inside → label=0 (hard neg)
-         - frame_label=0: random crop → label=0
-      4. Augment: random_rot90 → random_flip → gcn(patch) → lcn(patch) → random_cutout
-      5. Return (tensor(1,224,224) float32, int_label)
-
-    Class balance: label-1 patches can only come from hit frames (they are the
-    only frames with peaks), so hit_frac is the *conditional* positive rate within
-    hit frames, NOT the overall positive rate. Because the index has one item per
-    frame, the realized fraction of label-1 patches is approximately
-    P(frame is a hit) × hit_frac. For a frame set that is f_hit fraction hits with
-    hit_frac=h, expect ≈ f_hit·h label-1, f_hit·(1−h) hard negatives from hit
-    frames, and (1−f_hit) true misses from non-hit frames. If hit frames are a
-    minority, positives will be under-represented despite hit_frac — use a
-    class-balanced sampler upstream if a fixed overall positive rate is required.
+      2. Capture full-frame GCN statistics (μ, σ) before padding
+      3. Run hitfinder → centroids (N_peaks, 2)
+      4. Pad frame by PAD_BORDER_DEFAULT px on each edge; shift centroids
+      5. Guided crop (224×224) → derived label:
+           Path A (peaks found): crop centred on a random Bragg peak → label=1
+           Path B (no peaks):    random crop with 50 px clearance from all peaks → label=0
+      6. Augment: random_rot90 → random_flip → random_cutout
+      7. Normalise: GCN with full-frame μ/σ → LCN
+      8. Return (tensor(1, 224, 224) float32, derived_label)
 
     Args:
         session_ids: Session IDs to include.
         session_map: Maps session_id → Path to CXI file.
         hitfinder: Hitfinder Protocol instance (find_peaks method).
-        label_key: HDF5 key for per-frame labels.
-        patch_size: Crop side length in pixels.
-        lcn_window: LCN window size (must be odd; default 9).
-        hit_frac: Conditional label=1 rate within hit frames (default 0.5). See the
-            class-balance note above — this is not the overall positive rate.
-        hard_neg_max_attempts: Max random crop attempts for hit/hard-neg sampling.
-        n_cutout_holes: Cutout augmentation holes.
-        cutout_hole_size: Cutout hole side length.
-        seed: Base seed for reproducible per-item augmentation (default 42).
+        label_key: HDF5 key for per-frame labels (used only to build the flat index).
+        seed: Base RNG seed; per-sample seed is seed+idx for reproducibility.
     """
 
     def __init__(
@@ -342,22 +198,10 @@ class AsymmetricCXIDataset(Dataset):
         session_map: dict[str, str | Path],
         hitfinder: Hitfinder,
         label_key: str = "entry_1/labels/hit",
-        patch_size: int = 224,
-        lcn_window: int = 9,
-        hit_frac: float = 0.5,
-        hard_neg_max_attempts: int = 50,
-        n_cutout_holes: int = 3,
-        cutout_hole_size: int = 32,
         seed: int = 42,
     ) -> None:
         self._hitfinder = hitfinder
         self._label_key = label_key
-        self._patch_size = patch_size
-        self._lcn_window = lcn_window
-        self._hit_frac = hit_frac
-        self._hard_neg_max_attempts = hard_neg_max_attempts
-        self._n_cutout_holes = n_cutout_holes
-        self._cutout_hole_size = cutout_hole_size
         self._seed = seed
 
         # Resolve session_map to Path objects for requested session_ids only.
@@ -388,7 +232,7 @@ class AsymmetricCXIDataset(Dataset):
     def __len__(self) -> int:
         return len(self._index)
 
-    def __getitem__(self, idx: int) -> tuple[torch.Tensor, int]:
+    def __getitem__(self, idx: int) -> tuple[torch.Tensor, int] | None:
         path, frame_idx = self._index[idx]
         frame = read_frame(path, frame_idx)
 
@@ -404,85 +248,53 @@ class AsymmetricCXIDataset(Dataset):
         else:
             assembled = _to_2d(frame)
 
+        # Full-frame GCN stats captured before padding for consistent scale across crops.
+        gcn_mu = float(assembled.mean())
+        gcn_sigma = float(assembled.std())
+
         # --- Run hitfinder ---
-        centroids = self._hitfinder.find_peaks(assembled)  # (N, 2) float32
+        centroids = self._hitfinder.find_peaks(assembled)  # (N, 2) float32 [x, y]
 
-        frame_label = self._labels[idx]
-        size = self._patch_size
-        h, w = assembled.shape
+        # --- Pad and shift centroids into padded coordinate frame ---
+        padded = pad_border(assembled)
+        centroids = centroids + PAD_BORDER_DEFAULT
 
-        # Guard: if the assembled image is smaller than patch_size, pad at
-        # bottom/right only. Padding at the end leaves existing (x, y) centroid
-        # coordinates valid in the padded image — coordinate origins are unchanged.
-        if h < size or w < size:
-            pad_h = max(0, size - h)
-            pad_w = max(0, size - w)
-            assembled = np.pad(
-                assembled,
-                ((0, pad_h), (0, pad_w)),
-                mode="constant",
-                constant_values=0.0,
-            )
-            h, w = assembled.shape
+        ph, pw = padded.shape
+        rng = np.random.default_rng(self._seed + idx)
 
-        # --- Sample crop with class-balanced labeling ---
-        # Deterministic per-item RNG: reproducible across runs (given seed +
-        # worker count) yet independent across DataLoader fork()ed workers, so
-        # crops are not correlated between workers on Linux.
-        rng = _worker_rng(self._seed, idx)
-        patch: np.ndarray
-        int_label: int
+        _CROP = 224
 
-        if frame_label == 1 and rng.random() < self._hit_frac:
-            # Try to find a crop containing ≥1 centroid → label=1
-            found = False
-            if centroids.shape[0] > 0:
-                for _ in range(self._hard_neg_max_attempts):
-                    top = int(rng.integers(0, h - size + 1))
-                    left = int(rng.integers(0, w - size + 1))
-                    if _crop_contains_centroid(top, left, size, centroids):
-                        patch = assembled[top : top + size, left : left + size]
-                        int_label = 1
-                        found = True
-                        break
-            if not found:
-                # Fallback: random crop, label=0
-                top = int(rng.integers(0, h - size + 1))
-                left = int(rng.integers(0, w - size + 1))
-                patch = assembled[top : top + size, left : left + size]
-                int_label = 0
-
-        elif frame_label == 1:
-            # Hard negative: find a crop with no centroid within 50 px of any edge → label=0
-            found_neg = False
-            for _ in range(self._hard_neg_max_attempts):
-                top = int(rng.integers(0, h - size + 1))
-                left = int(rng.integers(0, w - size + 1))
-                if not _crop_within_margin(top, left, size, centroids):
-                    patch = assembled[top : top + size, left : left + size]
-                    found_neg = True
-                    break
-            if not found_neg:
-                top = int(rng.integers(0, h - size + 1))
-                left = int(rng.integers(0, w - size + 1))
-                patch = assembled[top : top + size, left : left + size]
-            int_label = 0
-
+        # --- Guided crop ---
+        if centroids.shape[0] > 0:
+            # Path A: hit crop centred on a randomly chosen Bragg peak → label=1
+            peak = centroids[int(rng.integers(0, len(centroids)))]
+            cx = int(round(float(peak[0])))  # column
+            cy = int(round(float(peak[1])))  # row
+            left = int(np.clip(cx - _CROP // 2, 0, pw - _CROP))
+            top = int(np.clip(cy - _CROP // 2, 0, ph - _CROP))
+            crop = padded[top : top + _CROP, left : left + _CROP].copy()
+            derived_label = 1
         else:
-            # Non-hit frame: random crop → label=0
-            top = int(rng.integers(0, h - size + 1))
-            left = int(rng.integers(0, w - size + 1))
-            patch = assembled[top : top + size, left : left + size]
-            int_label = 0
+            # Path B: miss crop — random position with 50 px clearance from all peaks → label=0
+            crop = None
+            for _ in range(50):
+                top = int(rng.integers(0, ph - _CROP + 1))
+                left = int(rng.integers(0, pw - _CROP + 1))
+                if not _crop_within_margin(top, left, _CROP, centroids, margin=50):
+                    crop = padded[top : top + _CROP, left : left + _CROP].copy()
+                    break
+            if crop is None:
+                return None
+            derived_label = 0
 
-        # --- Augment ---
-        patch = random_rot90(patch, rng)
-        patch = random_flip(patch, rng)
-        patch = gcn(patch)
-        patch = lcn(patch, window=self._lcn_window)
-        patch = random_cutout(
-            patch, rng, n_holes=self._n_cutout_holes, hole_size=self._cutout_hole_size
-        )
+        # --- Augmentation: rot90 → flip → cutout ---
+        crop = random_rot90(crop, rng)
+        crop = random_flip(crop, rng)
+        crop = random_cutout(crop, rng)
 
-        tensor = torch.from_numpy(np.ascontiguousarray(patch)).unsqueeze(0).float()
-        return tensor, int_label
+        # --- Normalisation: full-frame GCN stats → LCN ---
+        crop = gcn_apply(crop, gcn_mu, gcn_sigma)
+        crop = lcn(crop)
+
+        tensor = torch.from_numpy(np.ascontiguousarray(crop)).unsqueeze(0).float()
+        return tensor, derived_label

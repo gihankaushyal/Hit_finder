@@ -111,11 +111,6 @@ def _train_fold(
         num_workers=num_workers,
         shuffle=True,
         label_key=label_key,
-        hit_frac=asym_cfg.get("hit_frac", 0.5),
-        hard_neg_max_attempts=asym_cfg.get("hard_neg_max_attempts", 50),
-        n_cutout_holes=asym_cfg.get("n_cutout_holes", 3),
-        cutout_hole_size=asym_cfg.get("cutout_hole_size", 32),
-        seed=seed,
     )
 
     bench_cfg = cfg.get("benchmark", {})

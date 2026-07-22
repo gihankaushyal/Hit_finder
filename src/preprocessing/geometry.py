@@ -80,12 +80,12 @@ def get_geometry(detector_desc: str) -> detector.PADGeometryList:
         PADGeometryList, cached in _GEOM_CACHE so it is loaded only once per process.
 
     Raises:
-        ValueError: If detector_desc is 'Jungfrau 4M' (pre-assembled — use
-            preprocess_assembled() instead) or an unrecognised string.
+        ValueError: If detector_desc is 'Jungfrau 4M' (pre-assembled — call
+            _to_2d() then pad_border() directly) or an unrecognised string.
     """
     if detector_desc == "Jungfrau 4M":
         raise ValueError(
-            "Jungfrau 4M arrives pre-assembled. Use preprocess_assembled() directly."
+            "Jungfrau 4M arrives pre-assembled. Call _to_2d() then pad_border() directly."
         )
     if detector_desc not in _KNOWN_DESCS:
         raise ValueError(
