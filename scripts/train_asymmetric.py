@@ -218,6 +218,10 @@ def _train_fold(
                         "epoch": epoch,
                         "model_state_dict": model.state_dict(),
                         "val_f1": best_f1,
+                        # Option 1 (default): val-set optimal F1 threshold saved here so
+                        # inference can apply `frame_score >= inference_threshold` without
+                        # needing labels.  Option 2 fallback: use 0.5 if this is NaN.
+                        "inference_threshold": val_m["threshold"],
                         "backbone": backbone,
                         "num_classes": cfg["model"]["num_classes"],
                     },
@@ -244,6 +248,7 @@ def _train_fold(
                     "epoch": epochs,
                     "model_state_dict": model.state_dict(),
                     "val_f1": float("nan"),
+                    "inference_threshold": float("nan"),
                     "backbone": backbone,
                     "num_classes": cfg["model"]["num_classes"],
                 },
@@ -265,6 +270,15 @@ def _train_fold(
             f"num_classes={cfg['model']['num_classes']}. Delete the checkpoint or update the config."
         )
     model.load_state_dict(ckpt["model_state_dict"])
+
+    # Option 1 (default): use the val-set threshold saved during training.
+    # Option 2 fallback: if the checkpoint pre-dates this change or val metrics
+    # were degenerate (NaN), fall back to a fixed 0.5 frame-score threshold.
+    _saved_thresh = ckpt.get("inference_threshold", float("nan"))
+    inference_threshold: float = (
+        _saved_thresh if not np.isnan(_saved_thresh) else 0.5
+    )
+    print(f"  Inference threshold: {inference_threshold:.4f} (option {'1 — val-set' if not np.isnan(_saved_thresh) else '2 — fixed 0.5'})")
 
     in_domain_m = run_patch_agg(
         model,
@@ -302,6 +316,7 @@ def _train_fold(
             "cross/ap": cross_m["ap"],
             "cross/auc": cross_m["auc_roc"],
             "cross/f1": cross_m["f1"],
+            "inference_threshold": inference_threshold,
         }
     )
     wandb.finish()
@@ -309,6 +324,7 @@ def _train_fold(
     result = {
         "fold_id": fold_id,
         "test_detector": fold["test_detector"],
+        "inference_threshold": inference_threshold,
         "cross": {
             "ap": cross_m["ap"],
             "auc_roc": cross_m["auc_roc"],
