@@ -205,6 +205,7 @@ class AsymmetricCXIDataset(Dataset):
         self._hitfinder = hitfinder
         self._label_key = label_key
         self._seed = seed
+        self._last_geom_path: Path | None = None
 
         # Resolve session_map to Path objects for requested session_ids only.
         cxi_paths: list[Path] = []
@@ -227,10 +228,16 @@ class AsymmetricCXIDataset(Dataset):
                     self._path_to_geom[p] = {
                         "dist": float(_f["entry_1/instrument_1/detector_1/distance"][()]),
                         "wavelength": float(_f["entry_1/instrument_1/source_1/wavelength"][()]),
+                        # x_pixel_size == y_pixel_size confirmed for all four supported detectors
                         "pixel_size": float(_f["entry_1/instrument_1/detector_1/x_pixel_size"][()]),
                     }
-            except (KeyError, OSError):
-                pass
+            except (KeyError, OSError) as exc:
+                import warnings
+                warnings.warn(
+                    f"Geometry keys missing for {p} ({exc}); "
+                    "set_geometry will be skipped for this file.",
+                    stacklevel=2,
+                )
 
         # Build flat (path, frame_idx) index and cache labels.
         self._index: list[tuple[Path, int]] = []
@@ -260,9 +267,14 @@ class AsymmetricCXIDataset(Dataset):
         else:
             assembled = _to_2d(frame)
 
-        # Update geometry for this CXI file (no-op if hitfinder lacks set_geometry).
-        if path in self._path_to_geom and hasattr(self._hitfinder, "set_geometry"):
+        # Update geometry when the CXI file changes (avoids redundant calls per frame).
+        if (
+            path != self._last_geom_path
+            and path in self._path_to_geom
+            and hasattr(self._hitfinder, "set_geometry")
+        ):
             self._hitfinder.set_geometry(**self._path_to_geom[path])
+            self._last_geom_path = path
 
         # --- Run hitfinder on raw assembled frame (before GCN) ---
         centroids = self._hitfinder.find_peaks(assembled)  # (N, 2) float32 [x, y]
