@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 
+import h5py
 import numpy as np
 import torch
 from torch.utils.data import Dataset
@@ -174,15 +175,16 @@ class AsymmetricCXIDataset(Dataset):
 
     For each frame:
       1. Read + assemble to native resolution
-      2. Apply GCN to the full assembled frame before padding
-      3. Run hitfinder → centroids (N_peaks, 2)
-      4. Pad frame by PAD_BORDER_DEFAULT px on each edge; shift centroids
-      5. Guided crop (224×224) → derived label:
+      2. Call set_geometry on hitfinder (if supported) with CXI dist/wavelength/pixel_size
+      3. Run hitfinder on raw assembled frame → centroids (N_peaks, 2)
+      4. Apply GCN to the full assembled frame
+      5. Pad frame by PAD_BORDER_DEFAULT px on each edge; shift centroids
+      6. Guided crop (224×224) → derived label:
            Path A (peaks found): crop centred on a random Bragg peak → label=1
            Path B (no peaks):    random crop with 50 px clearance from all peaks → label=0
-      6. Augment: random_rot90 → random_flip → random_cutout
-      7. Normalise: GCN with full-frame μ/σ → LCN
-      8. Return (tensor(1, 224, 224) float32, derived_label)
+      7. Augment: random_rot90 → random_flip → random_cutout
+      8. Normalise: LCN (GCN already applied to full frame in step 4)
+      9. Return (tensor(1, 224, 224) float32, derived_label)
 
     Args:
         session_ids: Session IDs to include.
@@ -213,11 +215,21 @@ class AsymmetricCXIDataset(Dataset):
         # (not picklable); get_geometry/get_assembler use a process-local cache.
         unique_paths = set(cxi_paths)
         self._path_to_desc: dict[Path, str] = {}
+        self._path_to_geom: dict[Path, dict[str, float]] = {}
         for p in unique_paths:
             try:
                 desc = read_detector_description(p)
                 self._path_to_desc[p] = desc
             except (ValueError, KeyError, OSError):
+                pass
+            try:
+                with h5py.File(p, "r") as _f:
+                    self._path_to_geom[p] = {
+                        "dist": float(_f["entry_1/instrument_1/detector_1/distance"][()]),
+                        "wavelength": float(_f["entry_1/instrument_1/source_1/wavelength"][()]),
+                        "pixel_size": float(_f["entry_1/instrument_1/detector_1/x_pixel_size"][()]),
+                    }
+            except (KeyError, OSError):
                 pass
 
         # Build flat (path, frame_idx) index and cache labels.
@@ -248,11 +260,15 @@ class AsymmetricCXIDataset(Dataset):
         else:
             assembled = _to_2d(frame)
 
+        # Update geometry for this CXI file (no-op if hitfinder lacks set_geometry).
+        if path in self._path_to_geom and hasattr(self._hitfinder, "set_geometry"):
+            self._hitfinder.set_geometry(**self._path_to_geom[path])
+
+        # --- Run hitfinder on raw assembled frame (before GCN) ---
+        centroids = self._hitfinder.find_peaks(assembled)  # (N, 2) float32 [x, y]
+
         # GCN applied to the full assembled frame before padding/crop.
         assembled = gcn(assembled)
-
-        # --- Run hitfinder ---
-        centroids = self._hitfinder.find_peaks(assembled)  # (N, 2) float32 [x, y]
 
         # --- Pad and shift centroids into padded coordinate frame ---
         padded = pad_border(assembled)

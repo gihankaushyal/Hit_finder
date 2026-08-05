@@ -43,6 +43,11 @@ def synthetic_cxi(tmp_path_factory: pytest.TempPathFactory) -> Path:
     with h5py.File(path, "w") as f:
         f.create_dataset(DATA_KEY, data=frames)
         f.create_dataset(LABEL_KEY, data=labels)
+        det_grp = f.require_group("entry_1/instrument_1/detector_1")
+        det_grp.create_dataset("distance", data=np.float64(0.1))
+        det_grp.create_dataset("x_pixel_size", data=np.float64(1e-4))
+        src_grp = f.require_group("entry_1/instrument_1/source_1")
+        src_grp.create_dataset("wavelength", data=np.float64(1.3e-10))
     return path
 
 
@@ -184,3 +189,61 @@ def test_crop_is_normalised(synthetic_cxi: Path) -> None:
     # should be near 0 and values span well beyond [0, 1).
     assert arr.mean() == pytest.approx(0.0, abs=0.5), "GCN should shift mean toward 0"
     assert arr.max() > 1.0 or arr.min() < 0.0, "LCN should produce values outside [0,1]"
+
+
+def test_hitfinder_runs_before_gcn(synthetic_cxi: Path) -> None:
+    """find_peaks must be called on the raw assembled frame, before gcn()."""
+    from unittest.mock import patch
+
+    call_order: list[str] = []
+
+    class OrderTrackingHitfinder:
+        def find_peaks(self, frame: np.ndarray) -> np.ndarray:
+            call_order.append("find_peaks")
+            return np.zeros((0, 2), dtype=np.float32)
+
+    def recording_gcn(frame: np.ndarray) -> np.ndarray:
+        call_order.append("gcn")
+        return frame
+
+    with patch("src.data.dataset.gcn", side_effect=recording_gcn):
+        ds = AsymmetricCXIDataset(
+            session_ids=["s0"],
+            session_map={"s0": synthetic_cxi},
+            hitfinder=OrderTrackingHitfinder(),
+        )
+        ds[0]
+
+    assert "find_peaks" in call_order
+    assert "gcn" in call_order
+    assert call_order.index("find_peaks") < call_order.index("gcn"), (
+        "find_peaks must run before gcn"
+    )
+
+
+def test_set_geometry_called_with_cxi_params(synthetic_cxi: Path) -> None:
+    """AsymmetricCXIDataset calls set_geometry with dist/wavelength/pixel_size."""
+    set_geom_calls: list[dict] = []
+
+    class GeomCapturingHitfinder:
+        def set_geometry(self, **kwargs: float) -> None:
+            set_geom_calls.append(kwargs)
+
+        def find_peaks(self, frame: np.ndarray) -> np.ndarray:
+            return np.zeros((0, 2), dtype=np.float32)
+
+    ds = AsymmetricCXIDataset(
+        session_ids=["s0"],
+        session_map={"s0": synthetic_cxi},
+        hitfinder=GeomCapturingHitfinder(),
+    )
+    ds[0]
+
+    assert len(set_geom_calls) >= 1
+    call = set_geom_calls[0]
+    assert "dist" in call
+    assert "wavelength" in call
+    assert "pixel_size" in call
+    assert call["dist"] == pytest.approx(0.1)
+    assert call["wavelength"] == pytest.approx(1.3e-10)
+    assert call["pixel_size"] == pytest.approx(1e-4)
