@@ -169,6 +169,11 @@ def _rebuild(frame_shape: tuple[int, int]) -> None:
     )
 
     ai.polarization(factor=POL_FACTOR, shape=frame_shape)
+
+    # pyFAI private API: _cached_array keys are undocumented internals.
+    # Verified against pyFAI 2026.5.0. Pin pyFAI in environment.yml to
+    # prevent silent breakage on upgrades. Keys used: "last_polarization",
+    # "<unit_prefix>_center" (e.g. "r_center" for unit "r_mm").
     polarization = ai._cached_array.get("last_polarization")
     radius_key = unit.name.split("_")[0] + "_center"
     radius = ai._cached_array.get(radius_key)

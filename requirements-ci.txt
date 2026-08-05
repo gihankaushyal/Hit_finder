@@ -13,4 +13,5 @@ PyQt5
 scipy
 matplotlib
 scikit-image
+pyFAI>=2024.0
 git+https://gitlab.com/kirianlab/reborn.git@gihan

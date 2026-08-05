@@ -24,3 +24,4 @@ dependencies:
     - black
     - pytest
     - fabio
+    - pyFAI>=2024.0
