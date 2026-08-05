@@ -325,11 +325,11 @@ def test_gpu_pf8_find_peaks_returns_correct_shape():
         frame = np.full((512, 512), 50.0, dtype=np.float32)
         peaks = gpu_pf8.find_peaks(frame)
 
-    assert peaks.shape == (2, 2)
-    assert peaks.dtype == np.float32
-    # columns are [x, y] = [pos1, pos0]
-    assert peaks[0, 0] == pytest.approx(150.0)  # x = pos1[0]
-    assert peaks[0, 1] == pytest.approx(100.0)  # y = pos0[0]
+        assert peaks.shape == (2, 2)
+        assert peaks.dtype == np.float32
+        # columns are [x, y] = [pos1, pos0]
+        assert peaks[0, 0] == pytest.approx(150.0)  # x = pos1[0]
+        assert peaks[0, 1] == pytest.approx(100.0)  # y = pos0[0]
 
 
 def test_gpu_pf8_find_peaks_empty_returns_zero_shape():
@@ -362,5 +362,5 @@ def test_gpu_pf8_find_peaks_empty_returns_zero_shape():
         frame = np.zeros((512, 512), dtype=np.float32)
         peaks = gpu_pf8.find_peaks(frame)
 
-    assert peaks.shape == (0, 2)
-    assert peaks.dtype == np.float32
+        assert peaks.shape == (0, 2)
+        assert peaks.dtype == np.float32

@@ -170,16 +170,26 @@ def _rebuild(frame_shape: tuple[int, int]) -> None:
 
     ai.polarization(factor=POL_FACTOR, shape=frame_shape)
     polarization = ai._cached_array.get("last_polarization")
+    radius_key = unit.name.split("_")[0] + "_center"
+    radius = ai._cached_array.get(radius_key)
+    if polarization is None or radius is None:
+        raise RuntimeError(
+            f"pyFAI cached arrays missing after setup_sparse_integrator. "
+            f"Expected 'last_polarization' and '{radius_key}'. "
+            f"Available keys: {list(ai._cached_array.keys())}"
+        )
 
-    _pf = OCL_PeakFinder(
+    new_pf = OCL_PeakFinder(
         integrator.lut,
         image_size=nrows * ncols,
         bin_centers=integrator.bin_centers,
-        radius=ai._cached_array[unit.name.split("_")[0] + "_center"],
+        radius=radius,
         mask=static_mask,
         ctx=_ctx,
         unit=unit,
     )
+    # Assign atomically so a partial failure never leaves _pf/_polarization mismatched.
+    _pf = new_pf
     _polarization = polarization
     _last_shape = frame_shape
     _geometry_changed = False
