@@ -239,7 +239,7 @@ def test_gpu_hitfinder_set_geometry_passes_kwargs(tmp_path):
 
     hf = GPUHitfinder(script_path=str(script), device="cpu")
     hf.set_geometry(dist=0.15, wavelength=1.3e-10)
-    # Trigger load so module is accessible
+    # Confirm find_peaks still works after set_geometry has already triggered _load()
     hf.find_peaks(np.zeros((512, 512), dtype=np.float32))
     assert hf._mod._last_geom == {"dist": 0.15, "wavelength": 1.3e-10}
 

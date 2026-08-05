@@ -65,7 +65,7 @@ class GPUHitfinder:
 
     def set_geometry(self, **kwargs) -> None:
         """Forward geometry parameters to the script's set_geometry function if present."""
-        if self._fn is None:
+        if self._mod is None:
             self._load()
         if hasattr(self._mod, "set_geometry"):
             self._mod.set_geometry(**kwargs)  # type: ignore[union-attr]
