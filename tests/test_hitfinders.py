@@ -13,6 +13,7 @@ _PF8_SO = Path("src/hitfinders/_pf8_wrap.so")
 
 # ── MockHitfinder ─────────────────────────────────────────────────────────────
 
+
 def test_mock_hitfinder_returns_correct_shape():
     hf = MockHitfinder(peaks=np.array([[100.0, 200.0], [300.0, 400.0]]))
     frame = np.zeros((512, 512), dtype=np.float32)
@@ -28,6 +29,7 @@ def test_mock_hitfinder_empty_peaks():
 
 
 # ── Factory ───────────────────────────────────────────────────────────────────
+
 
 def test_get_hitfinder_mock():
     cfg = {"hitfinder": {"backend": "mock"}}
@@ -49,14 +51,17 @@ def test_get_hitfinder_missing_backend_raises():
 
 # ── Protocol ──────────────────────────────────────────────────────────────────
 
+
 def test_hitfinder_protocol_isinstance():
     """runtime_checkable checks method names only — not signatures."""
     from src.hitfinders.base import Hitfinder
+
     hf = MockHitfinder()
     assert isinstance(hf, Hitfinder)  # structural check: has find_peaks method
 
 
 # ── PF8Hitfinder (ctypes) ─────────────────────────────────────────────────────
+
 
 def _make_sfx_frame(
     seed: int,
@@ -123,6 +128,7 @@ def test_pf8_ctypes_multiple_spots():
 
 # ── NumpyPF8Hitfinder ─────────────────────────────────────────────────────────
 
+
 def test_numpy_pf8_finds_bright_spot():
     from src.hitfinders.numpy_pf8 import NumpyPF8Hitfinder
 
@@ -182,8 +188,10 @@ def test_get_hitfinder_pf8_numpy_backend():
 
 # ── GPUHitfinder ─────────────────────────────────────────────────────────────
 
+
 def test_gpu_hitfinder_delegates_to_callable(tmp_path):
     import textwrap
+
     script = tmp_path / "my_gpu_hf.py"
     script.write_text(textwrap.dedent("""
         import numpy as np
@@ -222,6 +230,7 @@ def test_get_hitfinder_gpu_backend_missing_script_raises():
 def test_gpu_hitfinder_set_geometry_passes_kwargs(tmp_path):
     """set_geometry on GPUHitfinder calls set_geometry on the loaded module."""
     import textwrap
+
     script = tmp_path / "hf_with_geom.py"
     script.write_text(textwrap.dedent("""
         import numpy as np
@@ -247,6 +256,7 @@ def test_gpu_hitfinder_set_geometry_passes_kwargs(tmp_path):
 def test_gpu_hitfinder_set_geometry_no_attr_does_not_raise(tmp_path):
     """set_geometry is a no-op when the script lacks set_geometry."""
     import textwrap
+
     script = tmp_path / "hf_no_geom.py"
     script.write_text(textwrap.dedent("""
         import numpy as np
@@ -257,11 +267,12 @@ def test_gpu_hitfinder_set_geometry_no_attr_does_not_raise(tmp_path):
     from src.hitfinders.gpu import GPUHitfinder
 
     hf = GPUHitfinder(script_path=str(script), device="cpu")
-    hf.set_geometry(dist=0.1)   # must not raise
+    hf.set_geometry(dist=0.1)  # must not raise
     hf.find_peaks(np.zeros((512, 512), dtype=np.float32))  # must still work
 
 
 # ── gpu_pf8 module (CI-safe: pyFAI imported lazily inside _rebuild) ───────────
+
 
 def test_gpu_pf8_set_geometry_updates_state():
     """set_geometry changes module-level state and marks geometry as changed."""
@@ -304,16 +315,20 @@ def test_gpu_pf8_find_peaks_returns_correct_shape():
     mock_pf = mock.MagicMock()
     mock_pf.peakfinder8.return_value = fake_res
 
-    with mock.patch.dict("sys.modules", {
-        "pyFAI": mock.MagicMock(),
-        "pyFAI.detector": mock.MagicMock(),
-        "pyFAI.containers": mock.MagicMock(),
-        "pyFAI.opencl": mock.MagicMock(),
-        "pyFAI.opencl.peak_finder": mock.MagicMock(),
-        "pyopencl": mock.MagicMock(),
-    }):
+    with mock.patch.dict(
+        "sys.modules",
+        {
+            "pyFAI": mock.MagicMock(),
+            "pyFAI.detector": mock.MagicMock(),
+            "pyFAI.containers": mock.MagicMock(),
+            "pyFAI.opencl": mock.MagicMock(),
+            "pyFAI.opencl.peak_finder": mock.MagicMock(),
+            "pyopencl": mock.MagicMock(),
+        },
+    ):
         sys.modules.pop("src.hitfinders.gpu_pf8", None)
         import src.hitfinders.gpu_pf8 as gpu_pf8
+
         importlib.reload(gpu_pf8)
 
         # Inject pre-built mock objects — skip _rebuild
@@ -342,16 +357,20 @@ def test_gpu_pf8_find_peaks_empty_returns_zero_shape():
     mock_pf = mock.MagicMock()
     mock_pf.peakfinder8.return_value = fake_res
 
-    with mock.patch.dict("sys.modules", {
-        "pyFAI": mock.MagicMock(),
-        "pyFAI.detector": mock.MagicMock(),
-        "pyFAI.containers": mock.MagicMock(),
-        "pyFAI.opencl": mock.MagicMock(),
-        "pyFAI.opencl.peak_finder": mock.MagicMock(),
-        "pyopencl": mock.MagicMock(),
-    }):
+    with mock.patch.dict(
+        "sys.modules",
+        {
+            "pyFAI": mock.MagicMock(),
+            "pyFAI.detector": mock.MagicMock(),
+            "pyFAI.containers": mock.MagicMock(),
+            "pyFAI.opencl": mock.MagicMock(),
+            "pyFAI.opencl.peak_finder": mock.MagicMock(),
+            "pyopencl": mock.MagicMock(),
+        },
+    ):
         sys.modules.pop("src.hitfinders.gpu_pf8", None)
         import src.hitfinders.gpu_pf8 as gpu_pf8
+
         importlib.reload(gpu_pf8)
 
         gpu_pf8._pf = mock_pf

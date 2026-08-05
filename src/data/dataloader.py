@@ -88,8 +88,10 @@ def asymmetric_loader(
         DataLoader yielding (tensor(B,1,224,224), label(B,)) pairs.
     """
     from src.hitfinders.gpu import GPUHitfinder
+
     if isinstance(hitfinder, GPUHitfinder) and num_workers > 0:
         import warnings
+
         warnings.warn(
             "GPUHitfinder requires num_workers=0 (CUDA context cannot be shared "
             "across forked DataLoader workers). Overriding num_workers to 0.",
@@ -112,5 +114,3 @@ def asymmetric_loader(
         pin_memory=torch.cuda.is_available(),
         collate_fn=none_collate_fn,
     )
-
-

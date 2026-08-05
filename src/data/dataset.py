@@ -32,7 +32,6 @@ from src.preprocessing.normalize import gcn, lcn
 from src.preprocessing.pipeline import _to_2d, assemble_only
 
 
-
 class UnlabeledDataset(Dataset):
     """Dataset of assembled diffraction images with no labels.
 
@@ -49,7 +48,6 @@ class UnlabeledDataset(Dataset):
     def __getitem__(self, idx: int) -> torch.Tensor:
         image = read_image(self._paths[idx])
         return torch.from_numpy(image).unsqueeze(0)
-
 
 
 class MultiFrameCXIDataset(Dataset):
@@ -261,10 +259,16 @@ class AsymmetricCXIDataset(Dataset):
             try:
                 with h5py.File(path, "r") as _f:
                     self._path_to_geom[path] = {
-                        "dist": float(_f["entry_1/instrument_1/detector_1/distance"][()]),
-                        "wavelength": float(_f["entry_1/instrument_1/source_1/wavelength"][()]),
+                        "dist": float(
+                            _f["entry_1/instrument_1/detector_1/distance"][()]
+                        ),
+                        "wavelength": float(
+                            _f["entry_1/instrument_1/source_1/wavelength"][()]
+                        ),
                         # x_pixel_size == y_pixel_size confirmed for all four supported detectors
-                        "pixel_size": float(_f["entry_1/instrument_1/detector_1/x_pixel_size"][()]),
+                        "pixel_size": float(
+                            _f["entry_1/instrument_1/detector_1/x_pixel_size"][()]
+                        ),
                     }
             except (KeyError, OSError) as exc:
                 warnings.warn(

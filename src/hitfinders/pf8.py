@@ -6,6 +6,7 @@ Requires _pf8_wrap.so compiled from src/hitfinders/_pf8_wrap.c:
 Worker safety: the C bridge has no shared state — safe across
 forked DataLoader worker processes.
 """
+
 from __future__ import annotations
 
 import ctypes
@@ -27,20 +28,20 @@ def _load_lib(so_path: Path) -> ctypes.CDLL:
     lib.pf8_find_peaks.restype = ctypes.c_int
     lib.pf8_find_peaks.argtypes = [
         ctypes.POINTER(ctypes.c_float),  # data
-        ctypes.c_int,                    # w
-        ctypes.c_int,                    # h
-        ctypes.c_float,                  # threshold
-        ctypes.c_float,                  # min_snr
-        ctypes.c_int,                    # min_pix_count
-        ctypes.c_int,                    # max_pix_count
-        ctypes.c_int,                    # local_bg_radius
-        ctypes.c_int,                    # min_res
-        ctypes.c_int,                    # max_res
-        ctypes.c_int,                    # use_saturated
-        ctypes.c_int,                    # max_n_peaks
+        ctypes.c_int,  # w
+        ctypes.c_int,  # h
+        ctypes.c_float,  # threshold
+        ctypes.c_float,  # min_snr
+        ctypes.c_int,  # min_pix_count
+        ctypes.c_int,  # max_pix_count
+        ctypes.c_int,  # local_bg_radius
+        ctypes.c_int,  # min_res
+        ctypes.c_int,  # max_res
+        ctypes.c_int,  # use_saturated
+        ctypes.c_int,  # max_n_peaks
         ctypes.POINTER(ctypes.c_float),  # out_x
         ctypes.POINTER(ctypes.c_float),  # out_y
-        ctypes.POINTER(ctypes.c_int),    # out_count
+        ctypes.POINTER(ctypes.c_int),  # out_count
     ]
     return lib
 
@@ -112,12 +113,21 @@ class PF8Hitfinder:
 
         self._out_count.value = 0
         rc = self._lib.pf8_find_peaks(
-            data_ptr, w, h,
-            self._threshold, self._min_snr,
-            self._min_pix_count, self._max_pix_count,
-            self._local_bg_radius, self._min_res, self._max_res,
-            self._use_saturated, _MAX_N_PEAKS,
-            self._out_x, self._out_y, ctypes.byref(self._out_count),
+            data_ptr,
+            w,
+            h,
+            self._threshold,
+            self._min_snr,
+            self._min_pix_count,
+            self._max_pix_count,
+            self._local_bg_radius,
+            self._min_res,
+            self._max_res,
+            self._use_saturated,
+            _MAX_N_PEAKS,
+            self._out_x,
+            self._out_y,
+            ctypes.byref(self._out_count),
         )
         if rc != 0:
             return np.zeros((0, 2), dtype=np.float32)

@@ -70,7 +70,9 @@ def test_crop_contains_centroid_boundary_excluded() -> None:
     top, left = 100, 100
     # x = left + size = 324 → outside (exclusive)
     centroids = np.array([[float(left + size), float(top + size)]], dtype=np.float32)
-    assert not _crop_contains_centroid(top=top, left=left, size=size, centroids=centroids)
+    assert not _crop_contains_centroid(
+        top=top, left=left, size=size, centroids=centroids
+    )
 
 
 def test_crop_contains_centroid_empty() -> None:
@@ -83,14 +85,18 @@ def test_crop_within_margin_near() -> None:
     """Centroid just outside the crop but within the margin is rejected."""
     # crop at (100, 100) size 224; centroid at x=325, y=200 — 1 px outside right edge
     centroids = np.array([[325.0, 200.0]], dtype=np.float32)
-    assert _crop_within_margin(top=100, left=100, size=224, centroids=centroids, margin=50)
+    assert _crop_within_margin(
+        top=100, left=100, size=224, centroids=centroids, margin=50
+    )
 
 
 def test_crop_within_margin_far() -> None:
     """Centroid well outside the margin is accepted (returns False)."""
     # crop at (0, 0) size 224; centroid at x=400, y=400 — well outside
     centroids = np.array([[400.0, 400.0]], dtype=np.float32)
-    assert not _crop_within_margin(top=0, left=0, size=224, centroids=centroids, margin=50)
+    assert not _crop_within_margin(
+        top=0, left=0, size=224, centroids=centroids, margin=50
+    )
 
 
 def test_crop_within_margin_empty() -> None:
@@ -167,7 +173,9 @@ def test_miss_path_returns_crop_shape_and_label_zero(synthetic_cxi: Path) -> Non
     )
     for idx in range(len(ds)):
         result = ds[idx]
-        assert result is not None, f"item {idx}: unexpected None — empty centroids always yield a valid miss crop"
+        assert (
+            result is not None
+        ), f"item {idx}: unexpected None — empty centroids always yield a valid miss crop"
         tensor, label = result
         assert tensor.shape == (1, 224, 224), f"item {idx}: wrong shape {tensor.shape}"
         assert tensor.dtype == torch.float32, f"item {idx}: wrong dtype {tensor.dtype}"
@@ -217,9 +225,9 @@ def test_hitfinder_runs_before_gcn(synthetic_cxi: Path) -> None:
 
     assert "find_peaks" in call_order
     assert "gcn" in call_order
-    assert call_order.index("find_peaks") < call_order.index("gcn"), (
-        "find_peaks must run before gcn"
-    )
+    assert call_order.index("find_peaks") < call_order.index(
+        "gcn"
+    ), "find_peaks must run before gcn"
 
 
 def test_set_geometry_called_with_cxi_params(synthetic_cxi: Path) -> None:

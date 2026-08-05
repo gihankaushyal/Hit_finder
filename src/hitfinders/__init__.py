@@ -57,6 +57,7 @@ def get_hitfinder(cfg: dict) -> Hitfinder:
         )
     if backend == "pf8_numpy":
         from src.hitfinders.numpy_pf8 import NumpyPF8Hitfinder
+
         return NumpyPF8Hitfinder(
             threshold=hf_cfg.get("pf8_threshold", 800.0),
             min_snr=hf_cfg.get("pf8_min_snr", 5.0),

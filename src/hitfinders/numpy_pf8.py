@@ -8,6 +8,7 @@ components, filter by size, and return intensity-weighted centroids.
 
 No CrystFEL or C dependencies. Worker-safe.
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -78,12 +79,12 @@ class NumpyPF8Hitfinder:
         sum_in = uniform_filter(frame, size=box_in, mode="reflect") * n_in
         bg_mean = (sum_out - sum_in) / n_ring
 
-        sq = frame ** 2
+        sq = frame**2
         ssq_out = uniform_filter(sq, size=box_out, mode="reflect") * n_out
         ssq_in = uniform_filter(sq, size=box_in, mode="reflect") * n_in
         bg_sq_mean = (ssq_out - ssq_in) / n_ring
 
-        bg_var = np.maximum(bg_sq_mean - bg_mean ** 2, 0.0)
+        bg_var = np.maximum(bg_sq_mean - bg_mean**2, 0.0)
         bg_std = np.sqrt(bg_var)
 
         above_threshold = frame > self._threshold

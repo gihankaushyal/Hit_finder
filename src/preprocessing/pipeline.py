@@ -45,7 +45,6 @@ def _to_2d(
     raise ValueError(f"Unexpected image ndim {image.ndim}; expected 1, 2, or 3.")
 
 
-
 def assemble_only(
     frame: np.ndarray,
     pads: PADGeometryList,
@@ -83,7 +82,6 @@ def assemble_only(
     if assembler is None:
         assembler = PADAssembler(pad_geometry=pads)
     return assembler.assemble_data(flat).astype(np.float32)
-
 
 
 def preprocess_eval_patches(

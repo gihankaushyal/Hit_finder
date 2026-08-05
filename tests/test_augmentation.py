@@ -167,4 +167,3 @@ class TestRandomCutout:
         img = np.random.default_rng(RNG_SEED).random((224, 224)).astype(np.float32)
         result = random_cutout(img, np.random.default_rng(RNG_SEED), n_holes=0)
         np.testing.assert_array_equal(result, img)
-

@@ -134,5 +134,3 @@ class TestSSLPretrainLoader:
         loader = ssl_pretrain_loader(paths, batch_size=2, num_workers=0, shuffle=False)
         batches = list(loader)
         assert len(batches) == _N // 2
-
-

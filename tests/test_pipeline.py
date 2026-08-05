@@ -7,8 +7,6 @@ import pytest
 
 from src.preprocessing.pipeline import _to_2d
 
-
-
 # ---------------------------------------------------------------------------
 # _to_2d
 # ---------------------------------------------------------------------------
@@ -36,4 +34,3 @@ class TestTo2D:
     def test_unexpected_ndim_raises(self) -> None:
         with pytest.raises(ValueError, match="Unexpected image ndim"):
             _to_2d(np.ones((2, 3, 4, 5)))
-

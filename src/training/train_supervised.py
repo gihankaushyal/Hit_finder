@@ -37,5 +37,3 @@ def train_one_epoch(
         total_loss += loss.item() * len(y)
         n += len(y)
     return {"loss": total_loss / max(n, 1)}
-
-

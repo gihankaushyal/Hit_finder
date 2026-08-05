@@ -81,5 +81,3 @@ class TestGetGeometry:
         pads1 = get_geometry("EIGER 4M")
         pads2 = get_geometry("EIGER 4M")
         assert pads1 is pads2
-
-

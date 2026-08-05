@@ -10,6 +10,7 @@ importable in CI without GPU hardware.
 
 All tuning knobs are overridable via environment variables set before import.
 """
+
 from __future__ import annotations
 
 import os
@@ -38,20 +39,21 @@ PATCH_SIZE: int = int(os.environ.get("HITFINDER_PATCH_SIZE", 3))
 _dist: float = DIST
 _wavelength: float = WAVELENGTH
 _pixel_size: float = PIXEL_SIZE
-_poni1: float | None = None   # None → computed from frame shape at _rebuild time
+_poni1: float | None = None  # None → computed from frame shape at _rebuild time
 _poni2: float | None = None
 
 _geometry_changed: bool = True
 _last_shape: tuple[int, int] | None = None
 
-_ctx: Any = None        # pyopencl.Context — created once
-_pf: Any = None         # OCL_PeakFinder instance
-_polarization: Any = None   # pyFAI polarization container (.array, .checksum)
+_ctx: Any = None  # pyopencl.Context — created once
+_pf: Any = None  # OCL_PeakFinder instance
+_polarization: Any = None  # pyFAI polarization container (.array, .checksum)
 
 
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
 
 def set_geometry(
     dist: float | None = None,
@@ -105,7 +107,9 @@ def find_peaks(frame: np.ndarray) -> np.ndarray:
     if _geometry_changed or _pf is None or frame.shape != _last_shape:
         _rebuild(frame.shape)
 
-    from pyFAI.containers import ErrorModel  # lazy — only reached after _rebuild has run
+    from pyFAI.containers import (
+        ErrorModel,
+    )  # lazy — only reached after _rebuild has run
 
     res = _pf.peakfinder8(
         data=frame_clean,
@@ -130,6 +134,7 @@ def find_peaks(frame: np.ndarray) -> np.ndarray:
 # ---------------------------------------------------------------------------
 # Internal
 # ---------------------------------------------------------------------------
+
 
 def _rebuild(frame_shape: tuple[int, int]) -> None:
     """Reconstruct AzimuthalIntegrator and OCL_PeakFinder."""
@@ -164,8 +169,13 @@ def _rebuild(frame_shape: tuple[int, int]) -> None:
 
     unit = units.to_unit("r_mm")
     integrator = ai.setup_sparse_integrator(
-        frame_shape, NPT, mask=static_mask,
-        unit=unit, split="no", algo="CSR", scale=False,
+        frame_shape,
+        NPT,
+        mask=static_mask,
+        unit=unit,
+        split="no",
+        algo="CSR",
+        scale=False,
     )
 
     ai.polarization(factor=POL_FACTOR, shape=frame_shape)
