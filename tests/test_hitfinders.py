@@ -259,3 +259,108 @@ def test_gpu_hitfinder_set_geometry_no_attr_does_not_raise(tmp_path):
     hf = GPUHitfinder(script_path=str(script), device="cpu")
     hf.set_geometry(dist=0.1)   # must not raise
     hf.find_peaks(np.zeros((512, 512), dtype=np.float32))  # must still work
+
+
+# ── gpu_pf8 module (CI-safe: pyFAI imported lazily inside _rebuild) ───────────
+
+def test_gpu_pf8_set_geometry_updates_state():
+    """set_geometry changes module-level state and marks geometry as changed."""
+    import src.hitfinders.gpu_pf8 as gpu_pf8
+
+    # Force a known baseline
+    gpu_pf8._dist = 0.2
+    gpu_pf8._wavelength = 1.3e-10
+    gpu_pf8._pixel_size = 75e-6
+    gpu_pf8._geometry_changed = False
+
+    gpu_pf8.set_geometry(dist=0.096, wavelength=1.305e-10, pixel_size=1e-4)
+
+    assert gpu_pf8._dist == pytest.approx(0.096)
+    assert gpu_pf8._wavelength == pytest.approx(1.305e-10)
+    assert gpu_pf8._pixel_size == pytest.approx(1e-4)
+    assert gpu_pf8._geometry_changed is True
+
+
+def test_gpu_pf8_set_geometry_none_values_are_noop():
+    """None arguments to set_geometry leave existing values unchanged."""
+    import src.hitfinders.gpu_pf8 as gpu_pf8
+
+    gpu_pf8._dist = 0.15
+    gpu_pf8._geometry_changed = False
+
+    gpu_pf8.set_geometry(dist=None, wavelength=None)
+
+    assert gpu_pf8._dist == pytest.approx(0.15)
+    assert gpu_pf8._geometry_changed is False
+
+
+def test_gpu_pf8_find_peaks_returns_correct_shape():
+    """find_peaks returns (N, 2) float32 when OCL_PeakFinder is mocked."""
+    import sys
+    import importlib
+    import unittest.mock as mock
+
+    fake_res = {"pos0": np.array([100.0, 200.0]), "pos1": np.array([150.0, 250.0])}
+    mock_pf = mock.MagicMock()
+    mock_pf.peakfinder8.return_value = fake_res
+
+    with mock.patch.dict("sys.modules", {
+        "pyFAI": mock.MagicMock(),
+        "pyFAI.detector": mock.MagicMock(),
+        "pyFAI.containers": mock.MagicMock(),
+        "pyFAI.opencl": mock.MagicMock(),
+        "pyFAI.opencl.peak_finder": mock.MagicMock(),
+        "pyopencl": mock.MagicMock(),
+    }):
+        sys.modules.pop("src.hitfinders.gpu_pf8", None)
+        import src.hitfinders.gpu_pf8 as gpu_pf8
+        importlib.reload(gpu_pf8)
+
+        # Inject pre-built mock objects — skip _rebuild
+        gpu_pf8._pf = mock_pf
+        gpu_pf8._polarization = mock.MagicMock()
+        gpu_pf8._geometry_changed = False
+        gpu_pf8._last_shape = (512, 512)
+
+        frame = np.full((512, 512), 50.0, dtype=np.float32)
+        peaks = gpu_pf8.find_peaks(frame)
+
+    assert peaks.shape == (2, 2)
+    assert peaks.dtype == np.float32
+    # columns are [x, y] = [pos1, pos0]
+    assert peaks[0, 0] == pytest.approx(150.0)  # x = pos1[0]
+    assert peaks[0, 1] == pytest.approx(100.0)  # y = pos0[0]
+
+
+def test_gpu_pf8_find_peaks_empty_returns_zero_shape():
+    """find_peaks returns (0, 2) float32 when OCL_PeakFinder finds no peaks."""
+    import sys
+    import importlib
+    import unittest.mock as mock
+
+    fake_res = {"pos0": np.array([]), "pos1": np.array([])}
+    mock_pf = mock.MagicMock()
+    mock_pf.peakfinder8.return_value = fake_res
+
+    with mock.patch.dict("sys.modules", {
+        "pyFAI": mock.MagicMock(),
+        "pyFAI.detector": mock.MagicMock(),
+        "pyFAI.containers": mock.MagicMock(),
+        "pyFAI.opencl": mock.MagicMock(),
+        "pyFAI.opencl.peak_finder": mock.MagicMock(),
+        "pyopencl": mock.MagicMock(),
+    }):
+        sys.modules.pop("src.hitfinders.gpu_pf8", None)
+        import src.hitfinders.gpu_pf8 as gpu_pf8
+        importlib.reload(gpu_pf8)
+
+        gpu_pf8._pf = mock_pf
+        gpu_pf8._polarization = mock.MagicMock()
+        gpu_pf8._geometry_changed = False
+        gpu_pf8._last_shape = (512, 512)
+
+        frame = np.zeros((512, 512), dtype=np.float32)
+        peaks = gpu_pf8.find_peaks(frame)
+
+    assert peaks.shape == (0, 2)
+    assert peaks.dtype == np.float32
