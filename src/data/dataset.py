@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 
+import warnings
+
 import h5py
 import numpy as np
 import torch
@@ -216,6 +218,8 @@ class AsymmetricCXIDataset(Dataset):
         # (not picklable); get_geometry/get_assembler use a process-local cache.
         unique_paths = set(cxi_paths)
         self._path_to_desc: dict[Path, str] = {}
+        # _path_to_geom is populated lazily in __getitem__ (CLAUDE.md rule #4:
+        # never open HDF5 in __init__ — multiprocessing DataLoader workers will deadlock).
         self._path_to_geom: dict[Path, dict[str, float]] = {}
         for p in unique_paths:
             try:
@@ -223,21 +227,6 @@ class AsymmetricCXIDataset(Dataset):
                 self._path_to_desc[p] = desc
             except (ValueError, KeyError, OSError):
                 pass
-            try:
-                with h5py.File(p, "r") as _f:
-                    self._path_to_geom[p] = {
-                        "dist": float(_f["entry_1/instrument_1/detector_1/distance"][()]),
-                        "wavelength": float(_f["entry_1/instrument_1/source_1/wavelength"][()]),
-                        # x_pixel_size == y_pixel_size confirmed for all four supported detectors
-                        "pixel_size": float(_f["entry_1/instrument_1/detector_1/x_pixel_size"][()]),
-                    }
-            except (KeyError, OSError) as exc:
-                import warnings
-                warnings.warn(
-                    f"Geometry keys missing for {p} ({exc}); "
-                    "set_geometry will be skipped for this file.",
-                    stacklevel=2,
-                )
 
         # Build flat (path, frame_idx) index and cache labels.
         self._index: list[tuple[Path, int]] = []
@@ -266,6 +255,23 @@ class AsymmetricCXIDataset(Dataset):
                 assembled = _to_2d(frame)
         else:
             assembled = _to_2d(frame)
+
+        # Lazily read geometry keys on first access (lazy per CLAUDE.md rule #4).
+        if path not in self._path_to_geom:
+            try:
+                with h5py.File(path, "r") as _f:
+                    self._path_to_geom[path] = {
+                        "dist": float(_f["entry_1/instrument_1/detector_1/distance"][()]),
+                        "wavelength": float(_f["entry_1/instrument_1/source_1/wavelength"][()]),
+                        # x_pixel_size == y_pixel_size confirmed for all four supported detectors
+                        "pixel_size": float(_f["entry_1/instrument_1/detector_1/x_pixel_size"][()]),
+                    }
+            except (KeyError, OSError) as exc:
+                warnings.warn(
+                    f"Geometry keys missing for {path} ({exc}); "
+                    "set_geometry will be skipped for this file.",
+                    stacklevel=2,
+                )
 
         # Update geometry when the CXI file changes (avoids redundant calls per frame).
         if (
