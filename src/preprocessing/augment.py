@@ -103,8 +103,8 @@ def random_cutout(
 ) -> np.ndarray:
     """Zero-fill n_holes random (hole_size × hole_size) rectangular patches.
 
-    Simulates detector panel gaps or masked regions. Applied before GCN → LCN;
-    zeroed pixels will be pulled toward the normalised mean during normalisation.
+    Simulates detector panel gaps or masked regions. Applied after GCN and before LCN;
+    zeroed pixels will be pulled toward the local mean during subsequent LCN normalisation.
 
     Args:
         image: 2D float32 array (H, W).
