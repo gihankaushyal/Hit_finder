@@ -1,6 +1,6 @@
 # Project Memory — SFX Hitfinder
 
-> Updated: 2026-06-30 | Read this at session start before anything else.
+> Updated: 2026-08-04 | Read this at session start before anything else.
 
 ---
 
@@ -8,14 +8,25 @@
 
 | Item | Value |
 |------|-------|
-| Active branch | `main` |
-| Current phase | **Phase 4 — supervised baseline (2 items remaining)** |
-| Last merge | PR #16 — geometry assembly + LODO pipeline (2026-06-30) |
-| Test suite | 198 passed, 8 skipped (fabio absent + bitshuffle) |
+| Active branch | `phase-04-augmentation` |
+| Current phase | **Phase 4 — augmentation (asymmetric pipeline implemented; inference = patch-grid aggregation)** |
+| Last commit | GCN refactor — full-frame GCN before crop/tile in both training and inference paths |
+| Test suite | 44 passed (normalize + patch_eval + asymmetric_dataset, 2026-08-04) |
 
 ---
 
 ## Phase History
+
+### Phase 4 — Augmentation / Asymmetric Pipeline (2026-07-21 → 2026-08-04)
+
+Branch `phase-04-augmentation`. Key deliverables:
+
+- **Hitfinder-guided crop** (`AsymmetricCXIDataset.__getitem__`): Path A (peaks found → crop centred on random Bragg peak, label=1); Path B (no peaks → random crop with 50 px clearance, label=0). Replaces all prior centre-crop and random-crop logic.
+- **Full-frame GCN before crop/tile (both paths)** (2026-08-04): `gcn(assembled)` is applied to the full assembled frame immediately after assembly, before padding/crop (training) or before `patch_grid` (inference). LCN is then applied per crop/patch. `gcn_apply` removed from `normalize.py` — no longer needed. Ensures both paths share the same global contrast scale.
+- **Patch-grid inference** (`run_patch_agg` in `src/evaluation/benchmark.py`): full assembled frame tiled into 224×224 patches (stride=224), GCN applied to full frame first then LCN per patch, scores aggregated per frame with `vote` (default) or `max`. Centre crop is no longer used at eval time.
+- **Inference threshold** saved in checkpoint (`val_threshold` key, 0.5 fallback).
+- **CLAUDE.md corrected** (2026-08-04): pipeline step 4 now correctly documents eval as patch-grid tiling, not centre crop.
+- Removed: LODO scripts/configs, `random_crop`, `center_crop`, deprecated loaders (all superseded).
 
 ### Phase 4 extended — Geometry Assembly & LODO (2026-06-30)
 
@@ -69,14 +80,16 @@ Full pipeline: Reborn geometry → GCN → LCN (window=9) → resize 224×224. L
 | 8 | Resonet production data root | `/data/bioxfel/user/gihan/Resonet/production/` — per-detector subdirs (agipd_20k, jungfrau_20k, epix10k_20k, eiger4m_20k) |
 | 9 | `geometry_file_to_pad_geometry_list()` is in `reborn.external.crystfel` | Always import from `reborn.external.crystfel`, not `reborn.detector`. |
 | 10 | `gh pr edit` is broken by GitHub Projects Classic deprecation warning (exit 1) | Use `gh api repos/<owner>/<repo>/pulls/<N> -X PATCH -f body="..."` instead. |
+| 11 | `gcn_apply` was removed from `normalize.py` (2026-08-04) | Do not import or use it — `gcn()` on the full assembled frame before crop/tile replaced it everywhere |
 
 ---
 
 ## Immediate Next Steps
 
-1. **Investigate AGIPD gap** — cross AP=0.565 is 30+ points below other detectors; likely causes: panel structure (16×512×128 raw), assembly path differences, or data distribution shift
-2. **Real-detector LODO baseline** — evaluate model generalisation on actual facility data
-3. **Phase 5 starts only when user confirms Phase 4 testing complete**
+1. **Run asymmetric training** — submit `scripts/train_asymmetric.py` on Sol A100 nodes; log to W&B with tag `phase-04-augmentation`
+2. **Evaluate with patch-grid aggregation** — run `run_patch_agg(..., aggregation="vote")` on held-out Resonet data; compare against LODO baseline AP/AUC/F1
+3. **Phase-closing PR** — `phase-04-augmentation` → `main`; run `/code-review ultra` before merge; update README.md phase badge
+4. **Phase 5 starts only when user confirms Phase 4 training complete**
 
 ---
 

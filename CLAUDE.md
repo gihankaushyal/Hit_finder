@@ -4,7 +4,7 @@
 
 ## Knowledge Graph
 
-Graph exists at `graphify-out/graph.json` (501 nodes, 1009 edges, 46 communities — built 2026-06-24).
+Graph exists at `graphify-out/graph.json` (501 nodes, 1009 edges, 46 communities — built 2026-06-24; **stale** — run `graphify update .` before querying).
 
 ```bash
 graphify query "how does the preprocessing pipeline work"
@@ -78,15 +78,15 @@ The comparison between Track 1 and Track 2 is itself a scientific contribution.
 1. Read HDF5/CXI metadata → identify detector type (AGIPD | JUNGFRAU | ePix10k | Eiger4M)
 2. Reborn geometry handler → PADAssembler → assemble multi-panel image (native resolution)
 3. Hitfinder (on-the-fly) → locate Bragg spots; derive hit/non-hit label and centroids
-4. Crop to 224×224 — centre crop (eval) or hitfinder-guided random crop (training)
-5. Augmentation (training only): random rot90 → random flip → random cutout
-6. Global Contrast Normalization (GCN): I_gcn = (I - μ) / (σ + ε)
-7. Local Contrast Normalization (LCN): I_lcn(x,y) = (I(x,y) - μ_W(x,y)) / (σ_W(x,y) + ε)
+4. Global Contrast Normalization (GCN) on the full assembled frame: I_gcn = (I - μ) / (σ + ε)
+5. Crop to 224×224 — training: hitfinder-guided crop (Path A: centred on random Bragg peak → label=1; Path B: random crop with 50 px clearance from all peaks → label=0); eval: patch-grid tiling of the full GCN'd frame (stride=224, score aggregated per frame with vote or max)
+6. Augmentation (training only): random rot90 → random flip → random cutout
+7. Local Contrast Normalization (LCN) per crop/patch: I_lcn(x,y) = (I(x,y) - μ_W(x,y)) / (σ_W(x,y) + ε)
 ```
 
 **Critical constraints:**
 - Detector type is ALWAYS read from metadata. Never infer it from image content.
-- Normalization after crop and augmentation. Always: crop → augment → GCN → LCN. Never reversed.
+- GCN on the full assembled frame before crop/tile. Always: GCN(full frame) → crop/tile → augment → LCN. Never reversed.
 - GCN → LCN order is fixed. Never swap them.
 - There is no resize step. 224×224 is achieved via crop only, never downsampling.
 - Pipeline must be bit-for-bit identical across both tracks for fair comparison.
@@ -109,16 +109,26 @@ sfx-hitfinder/
 │   ├── supervised/
 │   └── ssl/
 ├── src/
-│   ├── preprocessing/           # Reborn wrappers, GCN, LCN, resize
+│   ├── preprocessing/           # Reborn wrappers, GCN, LCN
 │   │   ├── io.py                # unified reader: .img (fabio) / .h5 / .cxi (h5py)
 │   │   ├── geometry.py          # Reborn geometry handling
 │   │   ├── normalize.py         # GCN and LCN implementations
-│   │   ├── pipeline.py          # full preprocessing pipeline
-│   │   └── data/                # geometry JSON files for detectors
+│   │   ├── augment.py           # random_rot90, random_flip, random_cutout, patch_grid, pad_border
+│   │   ├── pipeline.py          # geometry assembly + preprocess_eval_patches
+│   │   └── data/                # detector geometry files
+│   │       ├── agipd.geom
+│   │       ├── eiger4m.geom
+│   │       ├── eiger_resonet.geom
+│   │       ├── epix10k.geom
 │   │       └── jungfrau4m_jf4m_103mm.json
+│   ├── hitfinders/              # hitfinder backends
+│   │   ├── base.py              # Hitfinder Protocol + MockHitfinder
+│   │   ├── numpy_pf8.py         # NumPy PF8 implementation
+│   │   ├── pf8.py               # C-extension PF8 wrapper
+│   │   └── gpu.py               # GPU backend stub (NotImplementedError)
 │   ├── data/
 │   │   ├── dataset.py           # UnlabeledDataset, MultiFrameCXIDataset, AsymmetricCXIDataset
-│   │   ├── dataloader.py        # DataLoader factories (ssl_pretrain_loader, asymmetric_loader)
+│   │   ├── dataloader.py        # DataLoader factories (asymmetric_loader, none_collate_fn)
 │   │   └── synthetic.py         # synthetic data generation
 │   ├── models/
 │   │   ├── supervised.py        # ResNet18/50 fine-tuning (build_supervised_model via timm)
@@ -131,18 +141,14 @@ sfx-hitfinder/
 │   │   └── config.py            # load_config(): YAML deep-merge (model values win over base.yaml)
 │   └── evaluation/
 │       ├── metrics.py           # average_precision, auc_roc, f1_at_optimal_threshold
-│       └── benchmark.py         # cross-detector evaluation protocol
+│       └── benchmark.py         # run_patch_agg: patch-grid inference + vote/max aggregation
 ├── scripts/                     # SLURM job submission + utility scripts
-│   ├── submit_supervised.sh
-│   ├── submit_resonet_train.sh
 │   ├── submit_ssl_pretrain.sh
 │   ├── env_check.sh
 │   ├── probe_hdf5.py            # walk HDF5 key hierarchy for unknown files
-│   ├── evaluate_supervised.py   # eval checkpoint on held-out test set (AP/AUC/F1/confusion)
-│   ├── evaluate_resonet_cxi.py  # inference + metrics for Resonet CXI files
-│   ├── train_resonet_cxi.py     # training script for Resonet CXI data (70/20/10 split)
-│   ├── train_synthetic_full.py  # full synthetic baseline training run
-│   └── smoke_test_synthetic.py  # quick smoke test for synthetic pipeline
+│   ├── smoke_test_detector_shapes.py  # quick smoke test for detector assembly shapes
+│   ├── train_asymmetric.py      # asymmetric pipeline training (primary Track 1 script)
+│   └── visualize_assembled.py   # visualise assembled detector frames for QC
 ├── tests/
 │   ├── test_preprocessing.py
 │   ├── test_io.py
@@ -152,7 +158,13 @@ sfx-hitfinder/
 │   ├── test_pipeline.py
 │   ├── test_models.py
 │   ├── test_train_supervised.py
-│   └── test_evaluation.py
+│   ├── test_evaluation.py
+│   ├── test_asymmetric_dataset.py
+│   ├── test_augmentation.py
+│   ├── test_geometry_assembly.py
+│   ├── test_hitfinders.py
+│   ├── test_patch_eval.py
+│   └── test_vote_aggregation.py
 ├── notebooks/                   # exploration only, never source of truth
 │   └── lcn_ablation.ipynb       # Phase 3 LCN window ablation study
 ├── docs/
@@ -161,9 +173,9 @@ sfx-hitfinder/
 │   ├── eval_protocol.md
 │   └── figures/
 │       └── lcn_ablation/        # ablation comparison PNGs (all 4 detectors)
-├── checkpoints/                 # created at runtime by train_supervised.py; one sub-dir per run name
+├── checkpoints/                 # created at runtime; one sub-dir per run name
 │   └── <backbone>-seed<N>/
-│       └── best.pt              # saved when val F1 improves; keys: epoch, model_state_dict, val_f1
+│       └── best.pt              # saved when val F1 improves; keys: epoch, model_state_dict, val_f1, val_threshold
 └── data/                        # symlinks only — no actual data stored here
     ├── raw/                     # symlink → actual storage on Sol
     ├── processed/               # symlink → preprocessed tensor cache
@@ -236,7 +248,7 @@ python src/training/train_supervised.py --config configs/supervised/resnet18.yam
 | ePix10k | LCLS | varies | multiple configurations |
 | Eiger4M | Synchrotron/SSX | 2068 × 2162 px | monolithic |
 
-Post-assembly and post-resize: all images are 224 × 224 × 1 (single channel).
+Post-assembly and post-crop: all images are 224 × 224 × 1 (single channel).
 
 **Confirmed preprocessing parameters (Phase 3):** `lcn_window=9` (window=31 causes panel-edge ringing artifacts; 3/9/15 equivalent on non-hit frames; 9 is the smallest safe choice).
 
@@ -272,16 +284,12 @@ black src/ tests/
 pip install -r requirements-ci.txt
 
 # SLURM
-sbatch scripts/submit_supervised.sh
+sbatch scripts/submit_ssl_pretrain.sh
 squeue -u $USER
 
-# Training (local or interactive node)
-python src/training/train_supervised.py --config configs/supervised/resnet18.yaml
-python scripts/train_resonet_cxi.py --config configs/supervised/resnet18_resonet.yaml
-
-# Evaluation (Phase 4)
-python scripts/evaluate_supervised.py --checkpoint checkpoints/<run>/best.pt --config configs/supervised/resnet18.yaml
-python scripts/evaluate_resonet_cxi.py --checkpoint checkpoints/<run>/best.pt
+# Training — asymmetric pipeline (THE primary Track 1 training path; train_supervised.py is shared utilities only)
+source .secrets/wandb.env
+python scripts/train_asymmetric.py --config configs/supervised/resnet18_resonet.yaml
 ```
 
 ---
@@ -338,7 +346,7 @@ into scripts or configs.
 
 2. **Preprocessing pipeline is shared and fixed.** Any modification to GCN, LCN, crop, or Reborn geometry handling applies to BOTH tracks. Changes require explicit design review — do not patch one track silently.
 
-3. **Normalization after crop and augmentation.** Always: crop → augment → GCN → LCN. There is no resize step — 224×224 is achieved via crop only. Non-negotiable.
+3. **GCN on the full assembled frame before crop/tile.** Always: GCN(full frame) → crop/tile → augment → LCN. There is no resize step — 224×224 is achieved via crop only. Non-negotiable.
 
 4. **HDF5 files are opened lazily.** Never in `__init__`. Multiprocessing will deadlock otherwise.
 

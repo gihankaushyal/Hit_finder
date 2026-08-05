@@ -92,11 +92,12 @@ def preprocess_eval_patches(
     stride: int | None = None,
     lcn_window: int = LCN_WINDOW_DEFAULT,
 ) -> np.ndarray:
-    """GCN → LCN each patch from a patch_grid tiling of the assembled image.
+    """GCN the full assembled frame, tile into patches, then LCN each patch.
 
     Used for all evaluation paths (validation, in-domain test, cross-detector
-    test). The full native-resolution assembled frame is tiled into complete
-    (patch_size × patch_size) patches; each patch is normalised independently.
+    test). GCN is applied once to the full native-resolution frame so all patches
+    share the same global scale; then the frame is tiled into complete
+    (patch_size × patch_size) patches and each patch is LCN-normalised.
 
     Args:
         assembled: float32 array (H, W) at native detector resolution.
@@ -112,11 +113,12 @@ def preprocess_eval_patches(
     """
     from src.preprocessing.augment import patch_grid
 
-    patches = patch_grid(assembled.astype(np.float32), patch_size, stride)
+    gcn_frame = gcn(assembled.astype(np.float32))
+    patches = patch_grid(gcn_frame, patch_size, stride)
     if not patches:
         raise ValueError(
             f"preprocess_eval_patches: no complete {patch_size}×{patch_size} "
             f"patch fits in image of shape {assembled.shape}."
         )
-    normed = [lcn(gcn(p), window=lcn_window) for p in patches]
+    normed = [lcn(p, window=lcn_window) for p in patches]
     return np.stack(normed, axis=0).astype(np.float32)

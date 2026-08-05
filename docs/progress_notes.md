@@ -401,6 +401,34 @@ followed by augmentation (random rot90 → random flip → random cutout).
 
 Tests pass after the commit. The `none_collate_fn` path is exercised by a dedicated test that forces Path B to fail and confirms the collate function drops the None rather than crashing.
 
+### 11.6 Eval Crop Strategy Clarification (2026-08-04)
+
+CLAUDE.md pipeline step 4 was corrected to accurately describe the inference path. The old text said "centre crop (eval)" — this is wrong and was never implemented. Actual eval uses **patch-grid aggregation** via `run_patch_agg` in `src/evaluation/benchmark.py`:
+
+- Full assembled frame tiled into 224×224 patches (stride=224)
+- Each patch normalised independently: GCN (`gcn_apply`) → LCN (`lcn`)
+- Scores aggregated per frame: `"vote"` (hit_count / n_patches, default) or `"max"` (max softmax across patches)
+
+`center_crop` was removed from `augment.py` in commit `de9af9d` and is no longer present in the codebase. There is no centre-crop path anywhere in training or inference.
+
+### 11.7 GCN Normalisation Order Fix (2026-08-04)
+
+Identified a training/inference mismatch in how GCN was applied:
+
+| Path | Before | After |
+|------|--------|-------|
+| Training (`AsymmetricCXIDataset`) | Captured μ/σ from full frame, applied via `gcn_apply` to crop **after** augmentation | `gcn(assembled)` applied to full frame **before** padding/crop |
+| Inference (`preprocess_eval_patches`) | `gcn(patch)` per-patch after tiling — each patch normalised with its own μ/σ | `gcn(assembled)` applied to full frame **before** `patch_grid`, then `lcn` per patch |
+
+Both paths now follow: `assemble → GCN(full frame) → pad/tile → crop/patch → [augment] → LCN`.
+
+**Files changed:**
+- `src/preprocessing/normalize.py` — removed `gcn_apply` (no longer used anywhere)
+- `src/data/dataset.py` — `assembled = gcn(assembled)` before `pad_border`; import updated; `gcn_apply` call removed
+- `src/preprocessing/pipeline.py` — `gcn_frame = gcn(assembled)` before `patch_grid`; per-patch loop now just `lcn(p)`
+
+**Tests:** 44 passed (`test_normalize`, `test_patch_eval`, `test_asymmetric_dataset`).
+
 ---
 
 ## 12. Future Work — Phase 5: Self-Supervised Pretraining (Track 2)

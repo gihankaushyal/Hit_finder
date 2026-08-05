@@ -25,7 +25,7 @@ from src.preprocessing.augment import (
     random_flip,
     random_rot90,
 )
-from src.preprocessing.normalize import gcn_apply, lcn
+from src.preprocessing.normalize import gcn, lcn
 from src.preprocessing.pipeline import _to_2d, assemble_only
 
 
@@ -174,7 +174,7 @@ class AsymmetricCXIDataset(Dataset):
 
     For each frame:
       1. Read + assemble to native resolution
-      2. Capture full-frame GCN statistics (μ, σ) before padding
+      2. Apply GCN to the full assembled frame before padding
       3. Run hitfinder → centroids (N_peaks, 2)
       4. Pad frame by PAD_BORDER_DEFAULT px on each edge; shift centroids
       5. Guided crop (224×224) → derived label:
@@ -248,9 +248,8 @@ class AsymmetricCXIDataset(Dataset):
         else:
             assembled = _to_2d(frame)
 
-        # Full-frame GCN stats captured before padding for consistent scale across crops.
-        gcn_mu = float(assembled.mean())
-        gcn_sigma = float(assembled.std())
+        # GCN applied to the full assembled frame before padding/crop.
+        assembled = gcn(assembled)
 
         # --- Run hitfinder ---
         centroids = self._hitfinder.find_peaks(assembled)  # (N, 2) float32 [x, y]
@@ -292,8 +291,7 @@ class AsymmetricCXIDataset(Dataset):
         crop = random_flip(crop, rng)
         crop = random_cutout(crop, rng)
 
-        # --- Normalisation: full-frame GCN stats → LCN ---
-        crop = gcn_apply(crop, gcn_mu, gcn_sigma)
+        # --- Normalisation: LCN (GCN already applied to full frame above) ---
         crop = lcn(crop)
 
         tensor = torch.from_numpy(np.ascontiguousarray(crop)).unsqueeze(0).float()
