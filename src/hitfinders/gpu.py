@@ -40,6 +40,7 @@ class GPUHitfinder:
         self._script_path = Path(script_path)
         self._device = device
         self._fn: Callable[[np.ndarray], np.ndarray] | None = None
+        self._mod: object | None = None
 
     def _load(self) -> None:
         if not self._script_path.exists():
@@ -59,7 +60,15 @@ class GPUHitfinder:
                 f"GPU hitfinder script at {self._script_path} must expose "
                 "a top-level 'find_peaks(frame: np.ndarray) -> np.ndarray' function."
             )
+        self._mod = mod
         self._fn = mod.find_peaks
+
+    def set_geometry(self, **kwargs) -> None:
+        """Forward geometry parameters to the script's set_geometry function if present."""
+        if self._fn is None:
+            self._load()
+        if hasattr(self._mod, "set_geometry"):
+            self._mod.set_geometry(**kwargs)  # type: ignore[union-attr]
 
     def find_peaks(self, assembled: np.ndarray) -> np.ndarray:
         """Locate peaks using the user-provided GPU hitfinder script.

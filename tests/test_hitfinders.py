@@ -217,3 +217,45 @@ def test_get_hitfinder_gpu_backend_missing_script_raises():
     cfg = {"hitfinder": {"backend": "gpu", "gpu_script_path": ""}}
     with pytest.raises(ValueError, match="gpu_script_path"):
         get_hitfinder(cfg)
+
+
+def test_gpu_hitfinder_set_geometry_passes_kwargs(tmp_path):
+    """set_geometry on GPUHitfinder calls set_geometry on the loaded module."""
+    import textwrap
+    script = tmp_path / "hf_with_geom.py"
+    script.write_text(textwrap.dedent("""
+        import numpy as np
+
+        _last_geom = {}
+
+        def set_geometry(**kwargs):
+            _last_geom.update(kwargs)
+
+        def find_peaks(frame):
+            return np.zeros((0, 2), dtype=np.float32)
+    """))
+
+    from src.hitfinders.gpu import GPUHitfinder
+
+    hf = GPUHitfinder(script_path=str(script), device="cpu")
+    hf.set_geometry(dist=0.15, wavelength=1.3e-10)
+    # Trigger load so module is accessible
+    hf.find_peaks(np.zeros((512, 512), dtype=np.float32))
+    assert hf._mod._last_geom == {"dist": 0.15, "wavelength": 1.3e-10}
+
+
+def test_gpu_hitfinder_set_geometry_no_attr_does_not_raise(tmp_path):
+    """set_geometry is a no-op when the script lacks set_geometry."""
+    import textwrap
+    script = tmp_path / "hf_no_geom.py"
+    script.write_text(textwrap.dedent("""
+        import numpy as np
+        def find_peaks(frame):
+            return np.zeros((0, 2), dtype=np.float32)
+    """))
+
+    from src.hitfinders.gpu import GPUHitfinder
+
+    hf = GPUHitfinder(script_path=str(script), device="cpu")
+    hf.set_geometry(dist=0.1)   # must not raise
+    hf.find_peaks(np.zeros((512, 512), dtype=np.float32))  # must still work
