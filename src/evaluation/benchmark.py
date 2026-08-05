@@ -194,7 +194,7 @@ def run_patch_agg(
     min_hit_patches: int = 3,
     device: str = "cpu",
     inference_batch_size: int = 64,
-    aggregation: str = "max",
+    aggregation: str = "vote",
 ) -> dict[str, float]:
     """Evaluate a model on full frames using patch-grid aggregation.
 
@@ -325,11 +325,12 @@ def run_fold(
     patch_stride: int = 224,
     min_hit_patches: int = 3,
     label_key: str = "entry_1/labels/hit",
+    aggregation: str = "vote",
 ) -> dict[str, float]:
     """Evaluate model on the held-out cross-detector sessions for one fold.
 
     Uses patch-grid aggregation: tiles each frame into 224×224 patches, runs
-    all patches through the model, and reduces to a frame-level max score.
+    all patches through the model, and reduces to a frame-level vote score.
     """
     held_out_ids = [
         sid
@@ -344,6 +345,7 @@ def run_fold(
         patch_stride=patch_stride,
         min_hit_patches=min_hit_patches,
         device=device,
+        aggregation=aggregation,
     )
     metrics["test_detector"] = split_artifact["test_detector"]
     return metrics
@@ -357,6 +359,7 @@ def run_benchmark(
     patch_stride: int = 224,
     min_hit_patches: int = 3,
     label_key: str = "entry_1/labels/hit",
+    aggregation: str = "vote",
 ) -> dict:
     """Run all folds and return per-fold results plus mean_ap and std_ap."""
     results: dict = {}
@@ -375,6 +378,7 @@ def run_benchmark(
             patch_stride=patch_stride,
             min_hit_patches=min_hit_patches,
             label_key=label_key,
+            aggregation=aggregation,
         )
 
     ap_values = [v["ap"] for v in results.values()]
