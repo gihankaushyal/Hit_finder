@@ -34,8 +34,8 @@
 | 1 | Proposal & methodology finalization | COMPLETE |
 | 2 | Data infrastructure (real + synthetic) | COMPLETE |
 | 3 | Preprocessing implementation | COMPLETE |
-| **4** | **Supervised baseline (ResNet18 → ResNet50)** | **CURRENT** |
-| 5 | SSL model (MAE pretraining → fine-tune) | Pending |
+| 4 | Supervised baseline (ResNet18 → ResNet50) | COMPLETE |
+| **5** | **SSL model (MAE pretraining → fine-tune)** | **CURRENT** |
 | 6 | Ablations & cross-detector benchmarking | Pending |
 | 7 | Deployment preparation | Future |
 | 8 | Thesis writing | Future |

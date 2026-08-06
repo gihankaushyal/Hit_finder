@@ -1,19 +1,17 @@
-"""Tests for UnlabeledDataset, SFXDataset, and DataLoader factories."""
+"""Tests for UnlabeledDataset, MultiFrameCXIDataset, and DataLoader factories."""
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import h5py
 import numpy as np
-import pytest
 import torch
 
-from src.data.dataloader import ssl_pretrain_loader, supervised_loader
-from src.data.dataset import MultiFrameCXIDataset, SFXDataset, UnlabeledDataset
+from src.data.dataloader import ssl_pretrain_loader
+from src.data.dataset import MultiFrameCXIDataset, UnlabeledDataset
 
-_H, _W = 32, 32
+_H, _W = 256, 256
 _N = 4
 _N_FRAMES = 6
 _LABEL_KEY = "entry_1/labels/hit"
@@ -46,19 +44,6 @@ def _make_h5_files(tmp_path: Path, n: int = _N) -> list[Path]:
     return paths
 
 
-def _make_split_file(tmp_path: Path, paths: list[Path]) -> Path:
-    split = tmp_path / "split.txt"
-    split.write_text("\n".join(str(p) for p in paths))
-    return split
-
-
-def _make_labels_file(tmp_path: Path, paths: list[Path]) -> Path:
-    labels = {str(p): i % 2 for i, p in enumerate(paths)}
-    labels_file = tmp_path / "labels.json"
-    labels_file.write_text(json.dumps(labels))
-    return labels_file
-
-
 class TestUnlabeledDataset:
     def test_len(self, tmp_path: Path) -> None:
         paths = _make_h5_files(tmp_path)
@@ -83,55 +68,6 @@ class TestUnlabeledDataset:
         _ = ds[1]
         with h5py.File(paths[0], "r") as f:
             assert "entry/data/data" in f
-
-
-class TestSFXDataset:
-    def test_len(self, tmp_path: Path) -> None:
-        paths = _make_h5_files(tmp_path)
-        split = _make_split_file(tmp_path, paths)
-        labels = _make_labels_file(tmp_path, paths)
-        ds = SFXDataset(split, labels)
-        assert len(ds) == _N
-
-    def test_getitem_returns_tensor_and_label(self, tmp_path: Path) -> None:
-        paths = _make_h5_files(tmp_path, n=2)
-        split = _make_split_file(tmp_path, paths)
-        labels = _make_labels_file(tmp_path, paths)
-        ds = SFXDataset(split, labels)
-        tensor, label = ds[0]
-        assert tensor.shape == (1, _H, _W)
-        assert tensor.dtype == torch.float32
-        assert label in (0, 1)
-
-    def test_labels_correct(self, tmp_path: Path) -> None:
-        paths = _make_h5_files(tmp_path, n=4)
-        split = _make_split_file(tmp_path, paths)
-        labels_dict = {str(p): i % 2 for i, p in enumerate(paths)}
-        labels_file = tmp_path / "labels.json"
-        labels_file.write_text(json.dumps(labels_dict))
-        ds = SFXDataset(split, labels_file)
-        for i, p in enumerate(paths):
-            _, label = ds[i]
-            assert label == i % 2
-
-    def test_missing_label_raises_key_error(self, tmp_path: Path) -> None:
-        paths = _make_h5_files(tmp_path, n=2)
-        split = _make_split_file(tmp_path, paths)
-        # labels file only covers the first path
-        labels_file = tmp_path / "labels.json"
-        labels_file.write_text(json.dumps({str(paths[0]): 1}))
-        ds = SFXDataset(split, labels_file)
-        ds[0]  # should succeed
-        with pytest.raises(KeyError):
-            ds[1]  # missing label
-
-    def test_blank_lines_in_split_ignored(self, tmp_path: Path) -> None:
-        paths = _make_h5_files(tmp_path, n=2)
-        split = tmp_path / "split.txt"
-        split.write_text(f"{paths[0]}\n\n{paths[1]}\n")
-        labels = _make_labels_file(tmp_path, paths)
-        ds = SFXDataset(split, labels)
-        assert len(ds) == 2
 
 
 class TestMultiFrameCXIDataset:
@@ -160,12 +96,6 @@ class TestMultiFrameCXIDataset:
         for i in range(_N_FRAMES):
             _, label = ds[i]
             assert label == i % 2, f"Frame {i}: expected {i % 2}, got {label}"
-
-    def test_default_preprocess_gives_224x224(self, tmp_path: Path) -> None:
-        path = _make_multiframe_cxi(tmp_path)
-        ds = MultiFrameCXIDataset([path])  # default preprocess_fn
-        tensor, _ = ds[0]
-        assert tensor.shape == (1, 224, 224)
 
     def test_no_preprocess_preserves_raw_shape(self, tmp_path: Path) -> None:
         path = _make_multiframe_cxi(tmp_path)
@@ -204,25 +134,3 @@ class TestSSLPretrainLoader:
         loader = ssl_pretrain_loader(paths, batch_size=2, num_workers=0, shuffle=False)
         batches = list(loader)
         assert len(batches) == _N // 2
-
-
-class TestSupervisedLoader:
-    def test_batch_shape_and_labels(self, tmp_path: Path) -> None:
-        paths = _make_h5_files(tmp_path)
-        split = _make_split_file(tmp_path, paths)
-        labels = _make_labels_file(tmp_path, paths)
-        loader = supervised_loader(
-            split, labels, batch_size=2, num_workers=0, shuffle=False
-        )
-        images, lbls = next(iter(loader))
-        assert images.shape == (2, 1, _H, _W)
-        assert lbls.shape == (2,)
-
-    def test_full_epoch(self, tmp_path: Path) -> None:
-        paths = _make_h5_files(tmp_path)
-        split = _make_split_file(tmp_path, paths)
-        labels = _make_labels_file(tmp_path, paths)
-        loader = supervised_loader(
-            split, labels, batch_size=2, num_workers=0, shuffle=False
-        )
-        assert len(list(loader)) == _N // 2

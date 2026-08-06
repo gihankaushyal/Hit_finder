@@ -9,7 +9,6 @@ import numpy as np
 import pytest
 
 from src.preprocessing.geometry import _EIGER4M_GEOM, get_geometry
-from src.preprocessing.pipeline import preprocess_with_geometry
 
 # ---------------------------------------------------------------------------
 # read_detector_description
@@ -82,60 +81,3 @@ class TestGetGeometry:
         pads1 = get_geometry("EIGER 4M")
         pads2 = get_geometry("EIGER 4M")
         assert pads1 is pads2
-
-
-# ---------------------------------------------------------------------------
-# preprocess_with_geometry — shape / dtype
-# ---------------------------------------------------------------------------
-
-
-class TestPreprocessWithGeometry:
-    """Smoke tests using synthetic frames at detector-native shapes."""
-
-    @pytest.mark.parametrize(
-        "detector_desc,frame_shape",
-        [
-            ("AGIPD 1M", (16, 512, 128)),
-            ("ePix10k 2.2M", (5632, 384)),
-            ("EIGER 4M", (5632, 384)),
-        ],
-    )
-    def test_output_shape_and_dtype(self, detector_desc, frame_shape):
-        pads = get_geometry(detector_desc)
-        rng = np.random.default_rng(0)
-        frame = rng.standard_normal(frame_shape).astype(np.float32)
-
-        result = preprocess_with_geometry(frame, pads, detector_desc)
-
-        assert result.shape == (224, 224), f"Expected (224,224), got {result.shape}"
-        assert result.dtype == np.float32
-
-    def test_raises_for_jungfrau(self):
-        pads = MagicMock()
-        frame = np.zeros((2164, 2068), dtype=np.float32)
-        with pytest.raises(ValueError, match="unrecognised"):
-            preprocess_with_geometry(frame, pads, "Jungfrau 4M")
-
-    def test_raises_for_unknown_desc(self):
-        pads = MagicMock()
-        frame = np.zeros((100, 100), dtype=np.float32)
-        with pytest.raises(ValueError, match="unrecognised"):
-            preprocess_with_geometry(frame, pads, "MYSTERY 99")
-
-
-# ---------------------------------------------------------------------------
-# preprocess_assembled still works for Jungfrau 4M
-# ---------------------------------------------------------------------------
-
-
-class TestPreprocessAssembledJungfrau:
-    def test_jungfrau_preassembled_output(self):
-        from src.preprocessing.pipeline import preprocess_assembled
-
-        # Jungfrau 4M arrives as a 2D canvas (2164, 2068)
-        frame = (
-            np.random.default_rng(1).standard_normal((2164, 2068)).astype(np.float32)
-        )
-        result = preprocess_assembled(frame)
-        assert result.shape == (224, 224)
-        assert result.dtype == np.float32

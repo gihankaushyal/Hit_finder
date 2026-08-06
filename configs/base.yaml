@@ -1,10 +1,12 @@
 seed: 42
 
+# Preprocessing constants are fixed in code (src/preprocessing/normalize.py and
+# pipeline.py), not runtime-wired. GCN/LCN epsilons live in normalize.py
+# (GCN_EPSILON / LCN_EPSILON). The values below are reference-only and must be
+# kept in sync with those modules.
 preprocessing:
-  gcn_eps: 1.0e-5
-  lcn_window_size: 9
-  lcn_eps: 1.0e-5
-  output_size: 224
+  lcn_window_size: 9      # normalize.LCN_WINDOW_DEFAULT
+  output_size: 224        # pipeline.TARGET_SIZE
 
 training:
   batch_size: 32

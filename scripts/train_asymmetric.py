@@ -1,25 +1,14 @@
-"""Leave-One-Detector-Out (LODO) training and evaluation for SFX hitfinding.
+"""Asymmetric pipeline training: hitfinder-guided crop labeling with ResNet18.
 
-Trains a fresh ResNet18 for each of the 4 LODO folds (one detector held out
-per fold). Uses the full benchmark.py session-split infrastructure.
-
-Session granularity: one CXI file = one session.
-  AGIPD:       5 files × 4000 frames = 20 000 frames, 5 sessions
-  JUNGFRAU_4M: 10 files × 2000 frames = 20 000 frames, 10 sessions
-  ePix10k:     5 files × 4000 frames = 20 000 frames, 5 sessions
-  Eiger4M:     5 files × 4000 frames = 20 000 frames, 5 sessions
-  Total: 25 sessions, 80 000 frames
+Train a fresh ResNet18 for each LODO fold using AsymmetricCXIDataset:
+  - Training: hitfinder assigns per-crop labels based on peak centroid content
+  - Validation: blind 224×224 grid with vote-count aggregation
+  - Test: cross-detector frames with same aggregation
 
 Usage:
-    /home/gketawal/.conda/envs/sfx-hitfinder/bin/python \\
-        scripts/train_lodo.py \\
-        --config configs/supervised/resnet18_lodo.yaml
-
-    # single fold for smoke-testing:
-    scripts/train_lodo.py --config ... --folds 1
-
-SLURM:
-    sbatch scripts/submit_lodo.sh
+    python scripts/train_asymmetric.py --config configs/supervised/resnet18_asymmetric.yaml
+    python scripts/train_asymmetric.py --config ... --folds 1   # single fold smoke test
+    python scripts/train_asymmetric.py --config ... --device cpu
 """
 
 from __future__ import annotations
@@ -36,7 +25,7 @@ import torch.nn as nn
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.data.dataloader import cxi_session_loader
+from src.data.dataloader import asymmetric_loader
 from src.evaluation.benchmark import (
     SPLIT_CROSS_DETECTOR,
     SPLIT_IN_DOMAIN_TEST,
@@ -45,11 +34,13 @@ from src.evaluation.benchmark import (
     build_lodo_folds,
     build_session_stratified_split,
     format_results_table,
-    run_on_loader,
+    run_patch_agg,
     save_split_artifact,
 )
+from src.hitfinders import get_hitfinder
+from src.hitfinders.base import Hitfinder
 from src.models.supervised import build_supervised_model
-from src.training.train_supervised import _set_seeds, evaluate, train_one_epoch
+from src.training.train_supervised import _set_seeds, train_one_epoch
 from src.utils.config import load_config
 
 
@@ -81,87 +72,69 @@ def build_sessions(
     return sessions, session_map
 
 
-def _make_loader(
-    split_artifact: dict,
-    split_name: str,
-    session_map: dict[str, Path],
-    batch_size: int,
-    num_workers: int,
-    shuffle: bool,
-    label_key: str = "entry_1/labels/hit",
-):
-    ids = [sid for sid, s in split_artifact["splits"].items() if s == split_name]
-    return cxi_session_loader(
-        session_map, ids, batch_size, num_workers, shuffle, label_key=label_key
-    )
-
-
 def _train_fold(
     fold: dict,
     split_artifact: dict,
     session_map: dict[str, Path],
     cfg: dict,
+    hitfinder: Hitfinder,
     device: str,
+    num_workers_override: int | None = None,
 ) -> dict:
-    """Train one LODO fold from scratch; return cross-detector and in-domain metrics."""
+    """Train one LODO fold from scratch using asymmetric loader; return metrics."""
     import wandb
 
     backbone = cfg["model"]["backbone"]
     seed = cfg["seed"]
     fold_id = fold["fold_id"]
     batch_size = cfg["training"]["batch_size"]
-    num_workers = cfg["training"]["num_workers"]
+    num_workers = (
+        num_workers_override
+        if num_workers_override is not None
+        else cfg["training"]["num_workers"]
+    )
     epochs = cfg["training"]["epochs"]
     patience = cfg["training"].get("early_stopping_patience", 10)
-    run_name = f"{backbone}-lodo-fold{fold_id}-seed{seed}"
+    run_name = f"{backbone}-asymmetric-fold{fold_id}-seed{seed}"
 
     label_key = cfg["lodo"].get("label_key", "entry_1/labels/hit")
-    train_dl = _make_loader(
-        split_artifact,
-        SPLIT_TRAIN,
-        session_map,
-        batch_size,
-        num_workers,
+    asym_cfg = cfg.get("asymmetric", {})
+
+    # Build training IDs from the split artifact
+    train_ids = [sid for sid, s in split_artifact["splits"].items() if s == SPLIT_TRAIN]
+
+    train_dl = asymmetric_loader(
+        session_map=session_map,
+        session_ids=train_ids,
+        hitfinder=hitfinder,
+        batch_size=batch_size,
+        num_workers=num_workers,
         shuffle=True,
         label_key=label_key,
     )
-    val_dl = _make_loader(
-        split_artifact,
-        SPLIT_VAL,
-        session_map,
-        batch_size,
-        num_workers,
-        shuffle=False,
-        label_key=label_key,
-    )
-    in_domain_dl = _make_loader(
-        split_artifact,
-        SPLIT_IN_DOMAIN_TEST,
-        session_map,
-        batch_size,
-        num_workers,
-        shuffle=False,
-        label_key=label_key,
-    )
-    cross_dl = _make_loader(
-        split_artifact,
-        SPLIT_CROSS_DETECTOR,
-        session_map,
-        batch_size,
-        num_workers,
-        shuffle=False,
-        label_key=label_key,
-    )
+
+    bench_cfg = cfg.get("benchmark", {})
+    patch_stride = bench_cfg.get("patch_stride", 224)
+    min_hit_patches = bench_cfg.get("min_hit_patches", 3)
+    aggregation = bench_cfg.get("aggregation", "vote")
+
+    val_ids = [sid for sid, s in split_artifact["splits"].items() if s == SPLIT_VAL]
+    in_domain_ids = [
+        sid for sid, s in split_artifact["splits"].items() if s == SPLIT_IN_DOMAIN_TEST
+    ]
+    cross_ids = [
+        sid for sid, s in split_artifact["splits"].items() if s == SPLIT_CROSS_DETECTOR
+    ]
 
     n_train = len(train_dl.dataset)
-    n_val = len(val_dl.dataset)
-    n_indomain = len(in_domain_dl.dataset)
-    n_cross = len(cross_dl.dataset)
+    n_val = len(val_ids)
+    n_indomain = len(in_domain_ids)
+    n_cross = len(cross_ids)
 
     print(
         f"\n{'='*60}\n"
         f"Fold {fold_id}  |  held-out: {fold['test_detector']}\n"
-        f"  train={n_train}  val={n_val}  in_domain_test={n_indomain}  cross={n_cross}\n"
+        f"  train={n_train} patches  val={n_val} sessions  in_domain_test={n_indomain} sessions  cross={n_cross} sessions\n"
         f"{'='*60}"
     )
 
@@ -188,6 +161,9 @@ def _train_fold(
         resume="allow",
     )
 
+    # Log hitfinder backend once at run start
+    wandb.log({"hitfinder/backend": cfg["hitfinder"]["backend"]})
+
     if resume_eval_only:
         print(
             f"  Checkpoint found at {ckpt_path} — skipping training, resuming from evaluation."
@@ -205,26 +181,36 @@ def _train_fold(
 
         for epoch in range(1, epochs + 1):
             train_m = train_one_epoch(model, train_dl, optimizer, criterion, device)
-            val_m = evaluate(model, val_dl, criterion, device)
+            val_m = run_patch_agg(
+                model,
+                session_map,
+                val_ids,
+                label_key=label_key,
+                patch_stride=patch_stride,
+                min_hit_patches=min_hit_patches,
+                device=device,
+                aggregation=aggregation,
+            )
 
             print(
                 f"  Epoch {epoch:3d}/{epochs}  "
                 f"train_loss={train_m['loss']:.4f}  "
-                f"val_loss={val_m['loss']:.4f}  "
                 f"val_AP={val_m['ap']:.4f}  val_F1={val_m['f1']:.4f}"
             )
             wandb.log(
                 {
                     "epoch": epoch,
                     "train/loss": train_m["loss"],
-                    "val/loss": val_m["loss"],
                     "val/ap": val_m["ap"],
-                    "val/auc": val_m["auc"],
+                    "val/auc": val_m["auc_roc"],
                     "val/f1": val_m["f1"],
+                    # n_peaks_mean requires hooking into the DataLoader worker where
+                    # AsymmetricCXIDataset computes peaks; deferred to a future iteration.
+                    "hitfinder/n_peaks_mean": float("nan"),
                 }
             )
 
-            if val_m["f1"] > best_f1:
+            if not np.isnan(val_m["f1"]) and val_m["f1"] > best_f1:
                 best_f1 = val_m["f1"]
                 epochs_no_improve = 0
                 torch.save(
@@ -232,6 +218,10 @@ def _train_fold(
                         "epoch": epoch,
                         "model_state_dict": model.state_dict(),
                         "val_f1": best_f1,
+                        # Option 1 (default): val-set optimal F1 threshold saved here so
+                        # inference can apply `frame_score >= inference_threshold` without
+                        # needing labels.  Option 2 fallback: use 0.5 if this is NaN.
+                        "inference_threshold": val_m["threshold"],
                         "backbone": backbone,
                         "num_classes": cfg["model"]["num_classes"],
                     },
@@ -245,6 +235,25 @@ def _train_fold(
                         f"  Early stopping at epoch {epoch} (no improvement for {patience} epochs)"
                     )
                     break
+
+        if not ckpt_path.exists():
+            # No epoch improved val F1 (e.g. an empty or degenerate val split gives
+            # nan metrics). Save the final model so the evaluation section below
+            # always has a checkpoint to load instead of crashing on torch.load.
+            print(
+                "  No val-F1 improvement recorded — saving final epoch as checkpoint."
+            )
+            torch.save(
+                {
+                    "epoch": epochs,
+                    "model_state_dict": model.state_dict(),
+                    "val_f1": float("nan"),
+                    "inference_threshold": float("nan"),
+                    "backbone": backbone,
+                    "num_classes": cfg["model"]["num_classes"],
+                },
+                ckpt_path,
+            )
 
     # Evaluate best checkpoint on in-domain and cross-detector test sets
     ckpt = torch.load(ckpt_path, map_location=device, weights_only=True)
@@ -262,8 +271,35 @@ def _train_fold(
         )
     model.load_state_dict(ckpt["model_state_dict"])
 
-    in_domain_m = run_on_loader(model, in_domain_dl, device)
-    cross_m = run_on_loader(model, cross_dl, device)
+    # Option 1 (default): use the val-set threshold saved during training.
+    # Option 2 fallback: if the checkpoint pre-dates this change or val metrics
+    # were degenerate (NaN), fall back to a fixed 0.5 frame-score threshold.
+    _saved_thresh = ckpt.get("inference_threshold", float("nan"))
+    inference_threshold: float = (
+        _saved_thresh if not np.isnan(_saved_thresh) else 0.5
+    )
+    print(f"  Inference threshold: {inference_threshold:.4f} (option {'1 — val-set' if not np.isnan(_saved_thresh) else '2 — fixed 0.5'})")
+
+    in_domain_m = run_patch_agg(
+        model,
+        session_map,
+        in_domain_ids,
+        label_key=label_key,
+        patch_stride=patch_stride,
+        min_hit_patches=min_hit_patches,
+        device=device,
+        aggregation=aggregation,
+    )
+    cross_m = run_patch_agg(
+        model,
+        session_map,
+        cross_ids,
+        label_key=label_key,
+        patch_stride=patch_stride,
+        min_hit_patches=min_hit_patches,
+        device=device,
+        aggregation=aggregation,
+    )
 
     print(
         f"  In-domain test:    AP={in_domain_m['ap']:.4f}  AUC={in_domain_m['auc_roc']:.4f}  F1={in_domain_m['f1']:.4f}"
@@ -280,6 +316,7 @@ def _train_fold(
             "cross/ap": cross_m["ap"],
             "cross/auc": cross_m["auc_roc"],
             "cross/f1": cross_m["f1"],
+            "inference_threshold": inference_threshold,
         }
     )
     wandb.finish()
@@ -287,6 +324,7 @@ def _train_fold(
     result = {
         "fold_id": fold_id,
         "test_detector": fold["test_detector"],
+        "inference_threshold": inference_threshold,
         "cross": {
             "ap": cross_m["ap"],
             "auc_roc": cross_m["auc_roc"],
@@ -314,12 +352,30 @@ def _train_fold(
     }
 
 
-def main(config_path: str | Path, folds: list[int] | None = None) -> None:
+def main(
+    config_path: str | Path,
+    folds: list[int] | None = None,
+    device: str | None = None,
+) -> None:
     cfg = load_config(config_path)
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    if device is None:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
 
     print(f"Device: {device}")
     print(f"Config: {config_path}")
+
+    # GPU hitfinder + multiprocessing DataLoader workers do not mix:
+    # the hitfinder holds CUDA tensors that cannot be forked into worker processes.
+    num_workers = cfg["training"]["num_workers"]
+    if cfg["hitfinder"]["backend"] == "gpu" and num_workers > 0:
+        print(
+            "WARNING: hitfinder.backend='gpu' is incompatible with num_workers > 0. "
+            "Overriding to num_workers=0 for this run to avoid CUDA fork issues."
+        )
+        num_workers = 0
+
+    hitfinder = get_hitfinder(cfg)
 
     sessions, session_map = build_sessions(cfg["lodo"])
     total_frames = sum(s["frame_count"] for s in sessions)
@@ -345,7 +401,7 @@ def main(config_path: str | Path, folds: list[int] | None = None) -> None:
             )
 
     # Save split artifacts alongside checkpoints for reproducibility
-    artifacts_dir = Path("checkpoints") / "lodo_splits"
+    artifacts_dir = Path("checkpoints") / "asymmetric_splits"
     artifacts_dir.mkdir(parents=True, exist_ok=True)
 
     fold_results: dict[str, dict] = {}
@@ -362,7 +418,15 @@ def main(config_path: str | Path, folds: list[int] | None = None) -> None:
             artifacts_dir / f"fold_{fold['fold_id']}.json",
         )
 
-        result = _train_fold(fold, split_artifact, session_map, cfg, device)
+        result = _train_fold(
+            fold,
+            split_artifact,
+            session_map,
+            cfg,
+            hitfinder,
+            device,
+            num_workers_override=num_workers,
+        )
         fold_results[f"fold_{fold['fold_id']}"] = result
 
     # Summary table over completed folds
@@ -383,14 +447,21 @@ def main(config_path: str | Path, folds: list[int] | None = None) -> None:
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="LODO training for SFX hitfinder")
+    parser = argparse.ArgumentParser(
+        description="Asymmetric pipeline training for SFX hitfinder"
+    )
     parser.add_argument("--config", required=True, help="Path to YAML config")
     parser.add_argument(
         "--folds",
         nargs="+",
         type=int,
         default=None,
-        help="Fold IDs to run (1–4). Omit to run all four.",
+        help="Fold IDs to run (1-4). Omit to run all four.",
+    )
+    parser.add_argument(
+        "--device",
+        default=None,
+        help="Device to use: 'cpu' or 'cuda'. Default: auto-detect.",
     )
     args = parser.parse_args()
-    main(args.config, folds=args.folds)
+    main(args.config, folds=args.folds, device=args.device)

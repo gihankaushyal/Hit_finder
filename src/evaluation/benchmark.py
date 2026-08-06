@@ -23,6 +23,7 @@ __all__ = [
     "save_split_artifact",
     "load_split_artifact",
     "run_on_loader",
+    "run_patch_agg",
     "run_fold",
     "run_benchmark",
     "format_results_table",
@@ -92,6 +93,24 @@ def build_session_stratified_split(
         chosen = int(np.argmax(deficits))
         splits[s["session_id"]] = bucket_names[chosen]
         bucket_counts[chosen] += 1
+
+    # Guarantee every bucket is non-empty when there are enough sessions to fill
+    # them. With a small train_pool the greedy fill can starve val/in_domain_test
+    # (all sessions land in train), and an empty val set yields nan eval metrics
+    # that break checkpoint selection downstream. Deterministic repair: move one
+    # session from the largest bucket into each empty one.
+    if len(train_pool) >= len(bucket_names):
+        train_pool_ids = [s["session_id"] for s in train_pool]
+        for i in range(len(bucket_names)):
+            if bucket_counts[i] == 0:
+                donor = int(np.argmax(bucket_counts))
+                donor_ids = [
+                    sid for sid in train_pool_ids if splits[sid] == bucket_names[donor]
+                ]
+                move_id = donor_ids[-1]
+                splits[move_id] = bucket_names[i]
+                bucket_counts[donor] -= 1
+                bucket_counts[i] += 1
 
     for s in held_out:
         splits[s["session_id"]] = SPLIT_CROSS_DETECTOR
@@ -165,23 +184,169 @@ def run_on_loader(
     }
 
 
+def run_patch_agg(
+    model: torch.nn.Module,
+    session_map: dict[str, Path],
+    session_ids: list[str],
+    label_key: str = "entry_1/labels/hit",
+    patch_size: int = 224,
+    patch_stride: int = 224,
+    min_hit_patches: int = 3,
+    device: str = "cpu",
+    inference_batch_size: int = 64,
+    aggregation: str = "vote",
+) -> dict[str, float]:
+    """Evaluate a model on full frames using patch-grid aggregation.
+
+    For each frame: tile into complete patch_size×patch_size patches → GCN →
+    LCN each patch → run all patches through the model in mini-batches →
+    reduce to a single frame-level score (max softmax over patches or vote).
+
+    Replaces run_on_loader for all evaluation steps (validation during training,
+    in-domain test, and cross-detector test). The gradient-update training loop
+    is unaffected.
+
+    Args:
+        model: Trained classifier with 2-class head.
+        session_map: Mapping from session_id to CXI file path.
+        session_ids: Subset of sessions to evaluate.
+        label_key: HDF5 key for per-frame labels.
+        patch_size: Patch side length in pixels (default 224).
+        patch_stride: Step between patches in pixels.
+        min_hit_patches: Reserved for future vote-based binary thresholding.
+            Currently not used in any computation inside this function.
+        device: Torch device string ('cpu' or 'cuda').
+        inference_batch_size: Patches per forward pass.
+        aggregation: Frame-score reduction over patches. "max" (default,
+            backward-compatible): max softmax across patches. "vote":
+            hit_count/n_patches where hit_count = patches with softmax[:,1] > 0.5.
+
+    Returns:
+        dict with keys: ap, auc_roc, f1, threshold.
+    """
+    from src.preprocessing.geometry import get_assembler, get_geometry
+    from src.preprocessing.io import (
+        read_detector_description,
+        read_embedded_labels,
+        read_frame,
+    )
+    from src.preprocessing.pipeline import (
+        _to_2d,
+        assemble_only,
+        preprocess_eval_patches,
+    )
+
+    model.to(device)
+    model.eval()
+
+    all_scores: list[float] = []
+    all_labels: list[int] = []
+
+    for sid in session_ids:
+        path = Path(session_map[sid])
+        # Read labels once; read frames lazily one at a time (never load the whole
+        # dataset into RAM). Frame reads use the same candidate-key reader as the
+        # training path, so eval works for every detector's CXI key layout — not
+        # just files whose data lives under entry_1/data_1/data.
+        labels_arr = read_embedded_labels(path, label_key)
+        try:
+            desc = read_detector_description(path)
+        except (ValueError, KeyError, OSError):
+            desc = None
+
+        for frame_idx in range(len(labels_arr)):
+            frame = read_frame(path, frame_idx)
+            # Assemble to native resolution exactly as AsymmetricCXIDataset does,
+            # so train and eval see identically-assembled images. Detectors with no
+            # description (or pre-assembled canvases like Jungfrau 4M) fall back to
+            # _to_2d, matching the dataset's own fallback.
+            if desc is not None:
+                try:
+                    pads = get_geometry(desc)
+                    assembler = get_assembler(desc)
+                    assembled = assemble_only(frame, pads, desc, assembler=assembler)
+                except (ValueError, KeyError, OSError):
+                    assembled = _to_2d(frame)
+            else:
+                assembled = _to_2d(frame)
+            try:
+                patches_np = preprocess_eval_patches(
+                    assembled, patch_size=patch_size, stride=patch_stride
+                )
+            except ValueError:
+                continue
+
+            patch_tensors = torch.from_numpy(patches_np).unsqueeze(1).to(device)
+            patch_scores_list: list[np.ndarray] = []
+            with torch.no_grad():
+                for i in range(0, len(patch_tensors), inference_batch_size):
+                    batch = patch_tensors[i : i + inference_batch_size]
+                    logits = model(batch)
+                    if logits.ndim == 2 and logits.shape[1] == 2:
+                        s = torch.softmax(logits, dim=1)[:, 1].cpu().numpy()
+                    else:
+                        s = torch.sigmoid(logits.squeeze(-1)).cpu().numpy()
+                    patch_scores_list.append(s)
+
+            patch_scores = np.concatenate(patch_scores_list)
+            n_patches = len(patch_scores)
+            if aggregation == "vote":
+                hit_count = int((patch_scores > 0.5).sum())
+                frame_score = float(hit_count) / max(n_patches, 1)
+            elif aggregation == "max":
+                frame_score = float(patch_scores.max())
+            else:
+                raise ValueError(
+                    f"aggregation must be 'max' or 'vote', got {aggregation!r}"
+                )
+            all_scores.append(frame_score)
+            all_labels.append(int(round(float(labels_arr[frame_idx]))))
+
+    if not all_scores:
+        nan = float("nan")
+        return {"ap": nan, "auc_roc": nan, "f1": nan, "threshold": nan}
+
+    y_score = np.array(all_scores)
+    y_true = np.array(all_labels)
+    best_f1, threshold = f1_at_optimal_threshold(y_true, y_score)
+    return {
+        "ap": average_precision(y_true, y_score),
+        "auc_roc": auc_roc(y_true, y_score),
+        "f1": best_f1,
+        "threshold": threshold,
+    }
+
+
 def run_fold(
     model: torch.nn.Module,
     split_artifact: dict,
-    dataloader_factory: Callable[[list[str]], DataLoader],
+    session_map: dict[str, Path],
     device: str = "cpu",
+    patch_stride: int = 224,
+    min_hit_patches: int = 3,
+    label_key: str = "entry_1/labels/hit",
+    aggregation: str = "vote",
 ) -> dict[str, float]:
-    """Evaluate model on the held-out test-detector sessions for one fold.
+    """Evaluate model on the held-out cross-detector sessions for one fold.
 
-    dataloader_factory(session_ids) must return a DataLoader over those sessions.
+    Uses patch-grid aggregation: tiles each frame into 224×224 patches, runs
+    all patches through the model, and reduces to a frame-level vote score.
     """
     held_out_ids = [
         sid
         for sid, split in split_artifact["splits"].items()
         if split == SPLIT_CROSS_DETECTOR
     ]
-    loader = dataloader_factory(held_out_ids)
-    metrics = run_on_loader(model, loader, device)
+    metrics = run_patch_agg(
+        model,
+        session_map,
+        held_out_ids,
+        label_key=label_key,
+        patch_stride=patch_stride,
+        min_hit_patches=min_hit_patches,
+        device=device,
+        aggregation=aggregation,
+    )
     metrics["test_detector"] = split_artifact["test_detector"]
     return metrics
 
@@ -189,8 +354,12 @@ def run_fold(
 def run_benchmark(
     model: torch.nn.Module,
     split_artifacts: list[dict],
-    dataloader_factory: Callable[[list[str]], DataLoader],
+    session_map: dict[str, Path],
     device: str = "cpu",
+    patch_stride: int = 224,
+    min_hit_patches: int = 3,
+    label_key: str = "entry_1/labels/hit",
+    aggregation: str = "vote",
 ) -> dict:
     """Run all folds and return per-fold results plus mean_ap and std_ap."""
     results: dict = {}
@@ -202,7 +371,14 @@ def run_benchmark(
                 "has fold=None. Pass fold=<int> to build_session_stratified_split."
             )
         results[f"fold_{fold_id}"] = run_fold(
-            model, artifact, dataloader_factory, device
+            model,
+            artifact,
+            session_map,
+            device,
+            patch_stride=patch_stride,
+            min_hit_patches=min_hit_patches,
+            label_key=label_key,
+            aggregation=aggregation,
         )
 
     ap_values = [v["ap"] for v in results.values()]

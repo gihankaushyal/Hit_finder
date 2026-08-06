@@ -25,12 +25,8 @@ from src.preprocessing.geometry import (
     get_geometry,
 )
 from src.preprocessing.io import read_detector_description, read_frame
-from src.preprocessing.pipeline import (
-    TARGET_SIZE,
-    _to_2d,
-    preprocess_assembled,
-    preprocess_with_geometry,
-)
+from src.preprocessing.augment import PAD_BORDER_DEFAULT, pad_border
+from src.preprocessing.pipeline import _to_2d
 
 DATA_ROOT = Path("/data/bioxfel/user/gihan/Resonet/production")
 
@@ -82,15 +78,22 @@ def run():
 
             assembled_shape, path_label = _assemble_intermediate(raw, desc)
 
-            # Full preprocessing
-            if desc == "Jungfrau 4M":
-                out = preprocess_assembled(raw)
+            # Assembly + symmetric border padding (new pipeline: no resize to 224)
+            pads = get_geometry(desc) if desc != "Jungfrau 4M" else None
+            if pads is not None:
+                from src.preprocessing.geometry import get_assembler
+                from src.preprocessing.pipeline import assemble_only
+                assembler = get_assembler(desc)
+                assembled_raw = assemble_only(raw, pads, desc, assembler=assembler)
             else:
-                pads = get_geometry(desc)
-                out = preprocess_with_geometry(raw, pads, desc)
-
-            out_shape = out.shape
-            ok = out_shape == TARGET_SIZE
+                assembled_raw = _to_2d(raw)
+            padded = pad_border(assembled_raw)
+            out_shape = padded.shape
+            expected = (
+                assembled_shape[0] + 2 * PAD_BORDER_DEFAULT,
+                assembled_shape[1] + 2 * PAD_BORDER_DEFAULT,
+            )
+            ok = out_shape == expected
             status = PASS if ok else FAIL
             if not ok:
                 all_passed = False

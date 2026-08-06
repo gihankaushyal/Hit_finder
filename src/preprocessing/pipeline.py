@@ -1,13 +1,13 @@
-"""Full preprocessing pipeline: geometry → GCN → LCN → resize to 224×224."""
+"""Full preprocessing pipeline: geometry → crop 224×224 → augment → GCN → LCN."""
 
 from __future__ import annotations
 
 import numpy as np
-from skimage.transform import resize as sk_resize
 
 from reborn.detector import PADAssembler, PADGeometryList
 
-from src.preprocessing.geometry import assemble_image, extract_panels_from_canvas
+
+from src.preprocessing.geometry import extract_panels_from_canvas
 from src.preprocessing.normalize import LCN_WINDOW_DEFAULT, gcn, lcn
 
 TARGET_SIZE: tuple[int, int] = (224, 224)
@@ -45,136 +45,78 @@ def _to_2d(
     raise ValueError(f"Unexpected image ndim {image.ndim}; expected 1, 2, or 3.")
 
 
-def preprocess_assembled(
-    image_2d: np.ndarray,
-    lcn_window: int = LCN_WINDOW_DEFAULT,
-) -> np.ndarray:
-    """GCN → LCN → resize on a pre-assembled image, skipping geometry.
-
-    Use for formats where the stored array is already a spatial image:
-    Resonet Eiger/ePix10k CXI (5632×384 stacked panels), .img files, or any
-    case where Reborn geometry assembly has already been applied externally.
-    3D input (AGIPD modules, shape N×ss×fs) is row-stacked to 2D via _to_2d.
-
-    Pipeline order is identical to preprocess() from step 3 onward, so both
-    paths produce comparable outputs after normalization.
-
-    Args:
-        image_2d: float32 array, shape (H, W) or (N, ss, fs) for AGIPD modules.
-        lcn_window: LCN neighbourhood size (default 9, from Phase 3 ablation).
-
-    Returns:
-        float32 array of shape (224, 224).
-    """
-    image_2d = _to_2d(image_2d)
-    image_gcn = gcn(image_2d.astype(np.float32))
-    image_lcn = lcn(image_gcn, window=lcn_window)
-    resized = sk_resize(
-        image_lcn,
-        TARGET_SIZE,
-        anti_aliasing=True,
-        preserve_range=True,
-    )
-    return resized.astype(np.float32)
-
-
-def preprocess(
-    panel_data: list[np.ndarray],
-    pads: object,
-    lcn_window: int = LCN_WINDOW_DEFAULT,
-) -> np.ndarray:
-    """Full pipeline: assemble → GCN → LCN → resize to 224×224.
-
-    This pipeline is shared and identical for both Track 1 (supervised) and
-    Track 2 (SSL/MAE). Do not modify one track's preprocessing without
-    applying the same change to both.
-
-    Steps (order is non-negotiable):
-        1. Reborn geometry assembly (multi-panel → single array)
-        2. Flatten to 2D if needed (AGIPD 3D → 2D, Eiger4M 1D → 2D)
-        3. GCN: global mean/std normalization
-        4. LCN: local mean/std normalization
-        5. Resize to TARGET_SIZE (224 × 224), anti-aliased
-
-    Args:
-        panel_data: List of 2D arrays (one per detector panel).
-        pads: PADGeometryList from load_pad_geometry().
-        lcn_window: LCN neighbourhood size (ablation parameter, default 9).
-
-    Returns:
-        float32 array of shape (224, 224).
-    """
-    assembled = assemble_image(pads, panel_data)
-
-    pad_ss = pads[0].n_ss if len(pads) == 1 else None
-    pad_fs = pads[0].n_fs if len(pads) == 1 else None
-    image_2d = _to_2d(assembled, pad_ss=pad_ss, pad_fs=pad_fs)
-
-    image_gcn = gcn(image_2d)
-    image_lcn = lcn(image_gcn, window=lcn_window)
-
-    resized = sk_resize(
-        image_lcn,
-        TARGET_SIZE,
-        anti_aliasing=True,
-        preserve_range=True,
-    )
-    return resized.astype(np.float32)
-
-
-def preprocess_with_geometry(
+def assemble_only(
     frame: np.ndarray,
     pads: PADGeometryList,
     detector_desc: str,
-    lcn_window: int = LCN_WINDOW_DEFAULT,
     assembler: PADAssembler | None = None,
 ) -> np.ndarray:
-    """Geometry-aware preprocessing: flatten pixels → PADAssembler → GCN → LCN → resize.
+    """Assemble raw detector frame to native-resolution 2D without normalisation.
 
-    Assembly strategy (confirmed by visual inspection 2026-06-26):
-      - AGIPD 1M:     Reborn standard pads + PADAssembler(frame.ravel())
-      - ePix10k 2.2M: Reborn standard pads + PADAssembler(frame.ravel())
-      - EIGER 4M:     CrystFEL geom pads  + PADAssembler(concat panel ravels)
-
-    Jungfrau 4M is pre-assembled — use preprocess_assembled() for that detector.
+    Mirrors the assembly logic in preprocess_with_geometry but stops before
+    GCN/LCN/resize — used by the augmentation pipeline to get the full-size
+    image for random cropping.
 
     Args:
-        frame: Raw frame read from CXI file (float32 array, detector-native shape).
-        pads: PADGeometryList loaded via get_geometry(detector_desc).
-        detector_desc: Detector description string from CXI metadata
-            (entry_1/instrument_1/detector_1/description).
-        lcn_window: LCN neighbourhood size (default 9, from Phase 3 ablation).
-        assembler: Optional pre-constructed PADAssembler (pass get_assembler() result
-            to avoid recreating flat_indices on every call in tight loops).
+        frame: Raw frame from CXI file (detector-native shape).
+        pads: PADGeometryList from get_geometry(detector_desc).
+        detector_desc: Detector description string from CXI metadata.
+        assembler: Optional pre-built PADAssembler (avoids recomputing flat_indices).
 
     Returns:
-        float32 array of shape (224, 224).
+        float32 array of shape (H, W) at native detector resolution.
 
     Raises:
         ValueError: If detector_desc is unrecognised.
     """
     if detector_desc in ("AGIPD 1M", "ePix10k 2.2M"):
-        # Reborn standard pads — flat pixel order matches raw array ravel.
         flat = frame.ravel().astype(np.float32)
     elif detector_desc == "EIGER 4M":
-        # CrystFEL geom — extract panels via parent_data_slice, then flatten.
         panels = extract_panels_from_canvas(frame.astype(np.float32), pads)
         flat = np.concatenate([p.ravel() for p in panels])
     else:
         raise ValueError(
-            f"preprocess_with_geometry: unrecognised detector_desc '{detector_desc}'. "
-            "Use preprocess_assembled() for Jungfrau 4M."
+            f"assemble_only: unrecognised detector_desc '{detector_desc}'. "
+            "For Jungfrau 4M use _to_2d() directly (pre-assembled canvas)."
         )
-
     if assembler is None:
         assembler = PADAssembler(pad_geometry=pads)
-    assembled = assembler.assemble_data(flat)  # always 2D
-    image_gcn = gcn(assembled.astype(np.float32))
-    image_lcn = lcn(image_gcn, window=lcn_window)
-    resized = sk_resize(
-        image_lcn,
-        TARGET_SIZE,
-        anti_aliasing=True,
-        preserve_range=True,
-    )
-    return resized.astype(np.float32)
+    return assembler.assemble_data(flat).astype(np.float32)
+
+
+def preprocess_eval_patches(
+    assembled: np.ndarray,
+    patch_size: int = TARGET_SIZE[0],
+    stride: int | None = None,
+    lcn_window: int = LCN_WINDOW_DEFAULT,
+) -> np.ndarray:
+    """GCN the full assembled frame, tile into patches, then LCN each patch.
+
+    Used for all evaluation paths (validation, in-domain test, cross-detector
+    test). GCN is applied once to the full native-resolution frame so all patches
+    share the same global scale; then the frame is tiled into complete
+    (patch_size × patch_size) patches and each patch is LCN-normalised.
+
+    Args:
+        assembled: float32 array (H, W) at native detector resolution.
+        patch_size: Patch side length in pixels (default 224).
+        stride: Step between patch origins (default = patch_size, non-overlapping).
+        lcn_window: LCN neighbourhood size (default 9, Phase 3 ablation).
+
+    Returns:
+        float32 array of shape (N, patch_size, patch_size) where N ≥ 1.
+
+    Raises:
+        ValueError: If the image produces zero complete patches.
+    """
+    from src.preprocessing.augment import patch_grid
+
+    gcn_frame = gcn(assembled.astype(np.float32))
+    patches = patch_grid(gcn_frame, patch_size, stride)
+    if not patches:
+        raise ValueError(
+            f"preprocess_eval_patches: no complete {patch_size}×{patch_size} "
+            f"patch fits in image of shape {assembled.shape}."
+        )
+    normed = [lcn(p, window=lcn_window) for p in patches]
+    return np.stack(normed, axis=0).astype(np.float32)

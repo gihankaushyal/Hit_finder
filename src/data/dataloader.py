@@ -7,7 +7,28 @@ from pathlib import Path
 import torch
 from torch.utils.data import DataLoader
 
-from src.data.dataset import MultiFrameCXIDataset, SFXDataset, UnlabeledDataset
+from src.data.dataset import (
+    AsymmetricCXIDataset,
+    MultiFrameCXIDataset,
+    UnlabeledDataset,
+)
+from src.hitfinders.base import Hitfinder
+
+
+def none_collate_fn(
+    batch: list,
+) -> tuple[torch.Tensor, torch.Tensor] | None:
+    """Collate function that silently drops None items from the batch.
+
+    AsymmetricCXIDataset.__getitem__ returns None when no valid miss crop can be
+    found after 50 random attempts. This collate function filters those out so
+    the DataLoader can continue without error. Returns None for an all-None batch
+    (the training loop must skip it with ``if batch is None: continue``).
+    """
+    batch = [b for b in batch if b is not None]
+    if not batch:
+        return None
+    return torch.utils.data.dataloader.default_collate(batch)
 
 
 def ssl_pretrain_loader(
@@ -37,66 +58,59 @@ def ssl_pretrain_loader(
     )
 
 
-def cxi_session_loader(
+def asymmetric_loader(
     session_map: dict[str, Path],
     session_ids: list[str],
+    hitfinder: Hitfinder,
     batch_size: int,
     num_workers: int = 4,
     shuffle: bool = True,
     label_key: str = "entry_1/labels/hit",
 ) -> DataLoader:
-    """DataLoader over a subset of CXI sessions identified by session_id.
+    """DataLoader for asymmetric hitfinder-guided training.
 
-    Used by the LODO dataloader_factory closure in scripts/train_lodo.py.
+    Each item is a (1, 224, 224) float32 tensor and a crop-derived binary label
+    (1 = hit crop centred on a Bragg peak, 0 = miss crop with 50 px clearance).
+    None items (rare fallback when no valid miss crop is found) are filtered by
+    none_collate_fn; the training loop must skip any None batch.
 
     Args:
-        session_map: Mapping from session_id to CXI file path.
-        session_ids: Subset of session_ids to include in this loader.
-        batch_size: Number of frames per batch.
-        num_workers: Parallel worker processes.
-        shuffle: Whether to shuffle each epoch.
-        label_key: HDF5 key for per-frame labels; must match the key used
-            in build_sessions() so frame counts and label reads are consistent.
+        session_map: Maps session_id → CXI file path.
+        session_ids: Session IDs to include.
+        hitfinder: Hitfinder instance (PF8Hitfinder or GPUHitfinder).
+            GPU hitfinder requires num_workers=0 (no fork-safe GPU context).
+        batch_size: Crops per batch.
+        num_workers: DataLoader worker processes. Must be 0 for GPU hitfinder.
+        shuffle: Shuffle each epoch.
+        label_key: HDF5 key for per-frame labels (used only to build the index).
 
     Returns:
-        DataLoader yielding (image, label) pairs; image shape (B, 1, 224, 224).
+        DataLoader yielding (tensor(B,1,224,224), label(B,)) pairs.
     """
-    paths = [session_map[sid] for sid in session_ids]
-    dataset = MultiFrameCXIDataset(paths, label_key=label_key)
-    return DataLoader(
-        dataset,
-        batch_size=batch_size,
-        shuffle=shuffle,
-        num_workers=num_workers,
-        pin_memory=torch.cuda.is_available(),
+    from src.hitfinders.gpu import GPUHitfinder
+
+    if isinstance(hitfinder, GPUHitfinder) and num_workers > 0:
+        import warnings
+
+        warnings.warn(
+            "GPUHitfinder requires num_workers=0 (CUDA context cannot be shared "
+            "across forked DataLoader workers). Overriding num_workers to 0.",
+            UserWarning,
+            stacklevel=2,
+        )
+        num_workers = 0
+
+    dataset = AsymmetricCXIDataset(
+        session_ids=session_ids,
+        session_map=session_map,
+        hitfinder=hitfinder,
+        label_key=label_key,
     )
-
-
-def supervised_loader(
-    split_file: str | Path,
-    labels_file: str | Path,
-    batch_size: int,
-    num_workers: int = 4,
-    shuffle: bool = True,
-) -> DataLoader:
-    """DataLoader over labeled images for supervised training.
-
-    Args:
-        split_file: Plaintext file listing absolute image paths, one per line.
-        labels_file: JSON file mapping absolute path strings to int labels
-            (1 = hit, 0 = non-hit).
-        batch_size: Number of images per batch.
-        num_workers: Parallel worker processes for data loading.
-        shuffle: Whether to shuffle the dataset each epoch.
-
-    Returns:
-        DataLoader yielding (image, label) pairs; image shape (B, 1, H, W).
-    """
-    dataset = SFXDataset(split_file, labels_file)
     return DataLoader(
         dataset,
         batch_size=batch_size,
         shuffle=shuffle,
         num_workers=num_workers,
         pin_memory=torch.cuda.is_available(),
+        collate_fn=none_collate_fn,
     )

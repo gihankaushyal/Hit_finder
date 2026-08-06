@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-import json
 from collections.abc import Callable
 from pathlib import Path
 
+import warnings
+
+import h5py
 import numpy as np
 import torch
 from torch.utils.data import Dataset
@@ -18,7 +20,16 @@ from src.preprocessing.io import (
     read_frame,
     read_image,
 )
-from src.preprocessing.pipeline import preprocess_assembled, preprocess_with_geometry
+from src.hitfinders.base import Hitfinder
+from src.preprocessing.augment import (
+    PAD_BORDER_DEFAULT,
+    pad_border,
+    random_cutout,
+    random_flip,
+    random_rot90,
+)
+from src.preprocessing.normalize import gcn, lcn
+from src.preprocessing.pipeline import _to_2d, assemble_only
 
 
 class UnlabeledDataset(Dataset):
@@ -39,53 +50,10 @@ class UnlabeledDataset(Dataset):
         return torch.from_numpy(image).unsqueeze(0)
 
 
-class SFXDataset(Dataset):
-    """Dataset of labeled diffraction images for supervised training.
-
-    Reads a plaintext split file (one absolute image path per line) and a
-    JSON labels file mapping absolute path strings to integer labels
-    (1 = hit, 0 = non-hit).
-
-    Labels file format (labels.json):
-        {
-            "/absolute/path/to/frame_001.h5": 1,
-            "/absolute/path/to/frame_002.h5": 0
-        }
-
-    Detector type is always read from file metadata — never inferred.
-    HDF5 files are opened lazily in __getitem__ to support multiprocessing.
-    """
-
-    def __init__(self, split_file: str | Path, labels_file: str | Path) -> None:
-        split_file = Path(split_file)
-        self._paths = [
-            Path(line.strip())
-            for line in split_file.read_text().splitlines()
-            if line.strip()
-        ]
-        labels_file = Path(labels_file)
-        self._labels: dict[str, int] = json.loads(labels_file.read_text())
-
-    def __len__(self) -> int:
-        return len(self._paths)
-
-    def __getitem__(self, idx: int) -> tuple[torch.Tensor, int]:
-        image = read_image(self._paths[idx])
-        tensor = torch.from_numpy(image).unsqueeze(0)
-        label = self._load_label(idx)
-        return tensor, label
-
-    def _load_label(self, idx: int) -> int:
-        key = str(self._paths[idx])
-        if key not in self._labels:
-            raise KeyError(
-                f"No label for '{key}'. Verify the path appears in labels_file."
-            )
-        return int(self._labels[key])
-
-
 class MultiFrameCXIDataset(Dataset):
-    """Dataset over multi-frame CXI files with embedded hit labels.
+    """DEPRECATED: Use AsymmetricCXIDataset for new training pipelines.
+
+    Dataset over multi-frame CXI files with embedded hit labels.
 
     Each CXI file contributes N frames. The dataset expands all files into a
     flat (file_path, frame_idx) index so a DataLoader can iterate frames
@@ -100,38 +68,16 @@ class MultiFrameCXIDataset(Dataset):
         cxi_paths: List of paths to multi-frame CXI/HDF5 files.
         label_key: HDF5 key for the per-frame label array in each file.
         preprocess_fn: Optional callable applied to each raw (H, W) float32
-            frame before converting to a tensor. Defaults to
-            preprocess_assembled (GCN → LCN → resize 224×224). Pass None to
-            return raw frames.
+            frame before converting to a tensor. Pass None to return raw frames.
     """
 
     def __init__(
         self,
         cxi_paths: list[str | Path],
         label_key: str = "entry_1/labels/hit",
-        preprocess_fn: Callable[[np.ndarray], np.ndarray] | None = preprocess_assembled,
+        preprocess_fn: Callable[[np.ndarray], np.ndarray] | None = None,
     ) -> None:
         self._preprocess_fn = preprocess_fn
-        # Checked once at init so __getitem__ does not use `is` identity, which
-        # breaks for any wrapped/partial version of preprocess_assembled.
-        self._use_geometry = preprocess_fn is preprocess_assembled
-
-        # Read detector descriptions eagerly so __getitem__ can route to
-        # geometry-aware preprocessing. Geometry objects (PADGeometryList,
-        # PADAssembler) are NOT stored as instance attributes — they are not
-        # picklable under spawn/forkserver DataLoader workers. Instead we call
-        # get_geometry/get_assembler lazily in __getitem__; both functions use
-        # a module-level cache that is process-local and safe under any start method.
-        unique_paths = {Path(p) for p in cxi_paths}
-        self._path_to_desc: dict[Path, str] = {}
-        for p in unique_paths:
-            try:
-                desc = read_detector_description(p)
-                self._path_to_desc[p] = desc
-            except (ValueError, KeyError, OSError):
-                # File lacks description key or is unreadable — falls back to
-                # preprocess_assembled.
-                pass
 
         # Build flat index and cache labels eagerly — label arrays are small
         # and reading them per __getitem__ caused O(N) file opens per epoch.
@@ -151,19 +97,240 @@ class MultiFrameCXIDataset(Dataset):
         path, frame_idx = self._index[idx]
         frame = read_frame(path, frame_idx)
         if self._preprocess_fn is not None:
-            if self._use_geometry and path in self._path_to_desc:
-                desc = self._path_to_desc[path]
-                try:
-                    pads = get_geometry(desc)
-                    assembler = get_assembler(desc)
-                    frame = preprocess_with_geometry(
-                        frame, pads, desc, assembler=assembler
-                    )
-                except (ValueError, KeyError):
-                    frame = preprocess_assembled(
-                        frame
-                    )  # e.g. Jungfrau 4M — already assembled
-            else:
-                frame = self._preprocess_fn(frame)
+            frame = self._preprocess_fn(frame)
         tensor = torch.from_numpy(frame).unsqueeze(0)
         return tensor, self._labels[idx]
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _crop_contains_centroid(
+    top: int, left: int, size: int, centroids: np.ndarray
+) -> bool:
+    """Return True if any centroid falls inside the crop region.
+
+    Centroid (x, y) is inside if: left <= x < left+size AND top <= y < top+size.
+
+    Args:
+        top: Row offset of the crop's top-left corner.
+        left: Column offset of the crop's top-left corner.
+        size: Side length of the square crop in pixels.
+        centroids: (N, 2) float32 array of [x, y] pairs. Empty array → False.
+
+    Returns:
+        True if at least one centroid lies strictly inside the crop region.
+    """
+    if centroids.shape[0] == 0:
+        return False
+    xs = centroids[:, 0]
+    ys = centroids[:, 1]
+    inside = (xs >= left) & (xs < left + size) & (ys >= top) & (ys < top + size)
+    return bool(inside.any())
+
+
+def _crop_within_margin(
+    top: int, left: int, size: int, centroids: np.ndarray, margin: int = 50
+) -> bool:
+    """Return True if any centroid is within margin px of the crop region.
+
+    Used for hard-negative mining: rejects crops where a Bragg peak sits just
+    outside the boundary but its diffuse halo still overlaps the tile.
+
+    A centroid (x, y) is "too close" if it lies in the expanded region
+    [left-margin, left+size+margin) × [top-margin, top+size+margin).
+
+    Args:
+        top: Row offset of the crop's top-left corner.
+        left: Column offset of the crop's top-left corner.
+        size: Side length of the square crop in pixels.
+        centroids: (N, 2) float32 array of [x, y] pairs. Empty array → False.
+        margin: Clearance buffer in pixels around the crop boundary (default 50).
+
+    Returns:
+        True if at least one centroid is inside or within margin px of the crop.
+    """
+    if centroids.shape[0] == 0:
+        return False
+    xs = centroids[:, 0]
+    ys = centroids[:, 1]
+    near = (
+        (xs >= left - margin)
+        & (xs < left + size + margin)
+        & (ys >= top - margin)
+        & (ys < top + size + margin)
+    )
+    return bool(near.any())
+
+
+# ---------------------------------------------------------------------------
+# AsymmetricCXIDataset
+# ---------------------------------------------------------------------------
+
+
+class AsymmetricCXIDataset(Dataset):
+    """Primary training dataset: hitfinder-guided crop with augmentation and normalisation.
+
+    For each frame:
+      1. Read + assemble to native resolution
+      2. Call set_geometry on hitfinder (if supported) with CXI dist/wavelength/pixel_size
+      3. Run hitfinder on raw assembled frame → centroids (N_peaks, 2)
+      4. Apply GCN to the full assembled frame
+      5. Pad frame by PAD_BORDER_DEFAULT px on each edge; shift centroids
+      6. Guided crop (224×224) → derived label:
+           Path A (peaks found): crop centred on a random Bragg peak → label=1
+           Path B (no peaks):    random crop with 50 px clearance from all peaks → label=0
+      7. Augment: random_rot90 → random_flip → random_cutout
+      8. Normalise: LCN (GCN already applied to full frame in step 4)
+      9. Return (tensor(1, 224, 224) float32, derived_label)
+
+    Args:
+        session_ids: Session IDs to include.
+        session_map: Maps session_id → Path to CXI file.
+        hitfinder: Hitfinder Protocol instance (find_peaks method).
+        label_key: HDF5 key for per-frame labels (used only to build the flat index).
+        seed: Base RNG seed; per-sample seed is seed+idx for reproducibility.
+    """
+
+    def __init__(
+        self,
+        session_ids: list[str],
+        session_map: dict[str, str | Path],
+        hitfinder: Hitfinder,
+        label_key: str = "entry_1/labels/hit",
+        seed: int = 42,
+    ) -> None:
+        self._hitfinder = hitfinder
+        self._label_key = label_key
+        self._seed = seed
+        self._last_geom_path: Path | None = None
+
+        # Resolve session_map to Path objects for requested session_ids only.
+        cxi_paths: list[Path] = []
+        for sid in session_ids:
+            cxi_paths.append(Path(session_map[sid]))
+
+        # Read detector descriptions eagerly — geometry objects are NOT stored
+        # (not picklable); get_geometry/get_assembler use a process-local cache.
+        unique_paths = set(cxi_paths)
+        self._path_to_desc: dict[Path, str] = {}
+        # _path_to_geom is populated lazily in __getitem__ (CLAUDE.md rule #4:
+        # never open HDF5 in __init__ — multiprocessing DataLoader workers will deadlock).
+        self._path_to_geom: dict[Path, dict[str, float]] = {}
+        for p in unique_paths:
+            try:
+                desc = read_detector_description(p)
+                self._path_to_desc[p] = desc
+            except (ValueError, KeyError, OSError):
+                pass
+
+        # Build flat (path, frame_idx) index and cache labels.
+        self._index: list[tuple[Path, int]] = []
+        self._labels: list[int] = []
+        for p in cxi_paths:
+            arr = read_embedded_labels(p, label_key)
+            for i, raw in enumerate(arr):
+                self._index.append((p, i))
+                self._labels.append(int(round(float(raw))))
+
+    def __len__(self) -> int:
+        return len(self._index)
+
+    def __getitem__(self, idx: int) -> tuple[torch.Tensor, int] | None:
+        path, frame_idx = self._index[idx]
+        frame = read_frame(path, frame_idx)
+
+        # --- Assemble to native resolution ---
+        if path in self._path_to_desc:
+            desc = self._path_to_desc[path]
+            try:
+                pads = get_geometry(desc)
+                assembler = get_assembler(desc)
+                assembled = assemble_only(frame, pads, desc, assembler=assembler)
+            except (ValueError, KeyError, OSError):
+                assembled = _to_2d(frame)
+        else:
+            assembled = _to_2d(frame)
+
+        # Lazily read geometry keys on first access (lazy per CLAUDE.md rule #4).
+        if path not in self._path_to_geom:
+            try:
+                with h5py.File(path, "r") as _f:
+                    self._path_to_geom[path] = {
+                        "dist": float(
+                            _f["entry_1/instrument_1/detector_1/distance"][()]
+                        ),
+                        "wavelength": float(
+                            _f["entry_1/instrument_1/source_1/wavelength"][()]
+                        ),
+                        # x_pixel_size == y_pixel_size confirmed for all four supported detectors
+                        "pixel_size": float(
+                            _f["entry_1/instrument_1/detector_1/x_pixel_size"][()]
+                        ),
+                    }
+            except (KeyError, OSError) as exc:
+                warnings.warn(
+                    f"Geometry keys missing for {path} ({exc}); "
+                    "set_geometry will be skipped for this file.",
+                    stacklevel=2,
+                )
+
+        # Update geometry when the CXI file changes (avoids redundant calls per frame).
+        if (
+            path != self._last_geom_path
+            and path in self._path_to_geom
+            and hasattr(self._hitfinder, "set_geometry")
+        ):
+            self._hitfinder.set_geometry(**self._path_to_geom[path])
+            self._last_geom_path = path
+
+        # --- Run hitfinder on raw assembled frame (before GCN) ---
+        centroids = self._hitfinder.find_peaks(assembled)  # (N, 2) float32 [x, y]
+
+        # GCN applied to the full assembled frame before padding/crop.
+        assembled = gcn(assembled)
+
+        # --- Pad and shift centroids into padded coordinate frame ---
+        padded = pad_border(assembled)
+        centroids = centroids + PAD_BORDER_DEFAULT
+
+        ph, pw = padded.shape
+        rng = np.random.default_rng(self._seed + idx)
+
+        _CROP = 224
+
+        # --- Guided crop ---
+        if centroids.shape[0] > 0:
+            # Path A: hit crop centred on a randomly chosen Bragg peak → label=1
+            peak = centroids[int(rng.integers(0, len(centroids)))]
+            cx = int(round(float(peak[0])))  # column
+            cy = int(round(float(peak[1])))  # row
+            left = int(np.clip(cx - _CROP // 2, 0, pw - _CROP))
+            top = int(np.clip(cy - _CROP // 2, 0, ph - _CROP))
+            crop = padded[top : top + _CROP, left : left + _CROP].copy()
+            derived_label = 1
+        else:
+            # Path B: miss crop — random position with 50 px clearance from all peaks → label=0
+            crop = None
+            for _ in range(50):
+                top = int(rng.integers(0, ph - _CROP + 1))
+                left = int(rng.integers(0, pw - _CROP + 1))
+                if not _crop_within_margin(top, left, _CROP, centroids, margin=50):
+                    crop = padded[top : top + _CROP, left : left + _CROP].copy()
+                    break
+            if crop is None:
+                return None
+            derived_label = 0
+
+        # --- Augmentation: rot90 → flip → cutout ---
+        crop = random_rot90(crop, rng)
+        crop = random_flip(crop, rng)
+        crop = random_cutout(crop, rng)
+
+        # --- Normalisation: LCN (GCN already applied to full frame above) ---
+        crop = lcn(crop)
+
+        tensor = torch.from_numpy(np.ascontiguousarray(crop)).unsqueeze(0).float()
+        return tensor, derived_label

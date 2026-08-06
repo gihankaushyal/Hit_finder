@@ -1,0 +1,47 @@
+model:
+  backbone: resnet18
+  pretrained: true
+  num_classes: 2
+
+training:
+  epochs: 100
+  learning_rate: 1.0e-4
+  early_stopping_patience: 10
+
+lodo:
+  detector_dirs:
+    AGIPD:       /data/bioxfel/user/gihan/Resonet/production/agipd_20k
+    JUNGFRAU_4M: /data/bioxfel/user/gihan/Resonet/production/jungfrau_20k
+    ePix10k:     /data/bioxfel/user/gihan/Resonet/production/epix10k_20k
+    Eiger4M:     /data/bioxfel/user/gihan/Resonet/production/eiger4m_20k
+  cxi_pattern: "compressed*.cxi"
+  label_key: entry_1/labels/hit
+
+hitfinder:
+  backend: pf8          # "pf8" (ctypes) | "pf8_numpy" | "gpu" | "mock"
+  # PF8 parameters (used by both "pf8" and "pf8_numpy" backends):
+  pf8_threshold: 800.0
+  pf8_min_snr: 5.0
+  pf8_min_pix_count: 2
+  pf8_max_pix_count: 200
+  pf8_local_bg_radius: 3
+  pf8_min_res: 0
+  pf8_max_res: 0
+  pf8_use_saturated: false
+  # GPU backend:
+  gpu_script_path: ""   # absolute path to user GPU hitfinder script
+  gpu_device: cuda
+
+asymmetric:
+  hit_frac: 0.5
+  hard_neg_max_attempts: 50
+  n_cutout_holes: 3
+  cutout_hole_size: 32
+
+benchmark:
+  aggregation: vote
+  min_hit_patches: 3
+  patch_stride: 224
+
+wandb:
+  tags: [supervised, resnet18, asymmetric-pipeline]

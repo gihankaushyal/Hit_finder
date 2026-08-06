@@ -138,3 +138,36 @@ Probed against real detector files in `/Users/gketawal/Desktop/detector-images/`
 - `io.py` tries keys in this priority order: `entry/data/data` → `entry_1/instrument_1/detector_1/detector_corrected/data` → `entry_1/data_1/data` → `entry_0000/instrument/Simulator/data`.
 - The JUNGFRAU file was renamed from `JUNFRAU.h5` to `Jungfrau.h5` when it was replaced.
 - The JUNGFRAU file also contains embedded hit labels at `entry_0000/processing/peakfinder/isHit` (shape: N×uint8) — useful for Phase 4 supervised training.
+
+---
+
+## Confirmed CXI Geometry Keys (verified 2026-08-04, Resonet production files)
+
+Probed against all four detector CXI files in
+`/data/bioxfel/user/gihan/Resonet/production/`.
+
+All four detectors share identical HDF5 paths:
+
+| Parameter | HDF5 key | Units |
+|-----------|----------|-------|
+| Detector distance | `entry_1/instrument_1/detector_1/distance` | metres |
+| X-ray wavelength | `entry_1/instrument_1/source_1/wavelength` | metres |
+| Pixel size (x) | `entry_1/instrument_1/detector_1/x_pixel_size` | metres |
+| Pixel size (y) | `entry_1/instrument_1/detector_1/y_pixel_size` | metres |
+
+Beam centre is **not stored** in any CXI file.
+`gpu_pf8.py` computes it as `(frame_rows / 2) × pixel_size` and
+`(frame_cols / 2) × pixel_size`. All four detectors have equal x/y pixel sizes.
+
+Observed pixel sizes per detector:
+
+| Detector | Description in CXI | Pixel size |
+|----------|---------------------|-----------|
+| ePix10k 2.2M | `b'ePix10k 2.2M'` | 100 µm |
+| AGIPD 1M | `b'AGIPD 1M'` | 200 µm |
+| EIGER 4M | `b'EIGER 4M'` | 100 µm |
+| Jungfrau 4M | `b'Jungfrau 4M'` | 75 µm |
+
+`AsymmetricCXIDataset` reads `x_pixel_size`, `distance`, and `wavelength` at
+`__init__` time and passes them to `hitfinder.set_geometry()` before each frame's
+`find_peaks` call (short-circuited when the CXI path has not changed).

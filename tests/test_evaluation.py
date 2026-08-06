@@ -261,11 +261,25 @@ def test_run_on_loader_keys():
     assert set(result.keys()) == {"ap", "auc_roc", "f1", "threshold"}
 
 
-def _fixed_factory(loader: DataLoader):
-    return lambda session_ids: loader
+def _make_cxi(tmp_path, name="test.cxi", n_frames=4, n_hits=2, shape=(500, 500)):
+    import h5py
+
+    path = tmp_path / name
+    rng = np.random.default_rng(0)
+    with h5py.File(path, "w") as f:
+        f.create_dataset(
+            "entry_1/data_1/data",
+            data=rng.random((n_frames, *shape)).astype(np.float32),
+        )
+        labels = np.array(
+            [1.0] * n_hits + [0.0] * (n_frames - n_hits), dtype=np.float32
+        )
+        f.create_dataset("entry_1/labels/hit", data=labels)
+    return path
 
 
-def test_run_fold_returns_metrics_and_detector():
+def test_run_fold_returns_metrics_and_detector(tmp_path):
+    path = _make_cxi(tmp_path)
     artifact = {
         "fold": 1,
         "variant": "strict_lodo",
@@ -273,18 +287,20 @@ def test_run_fold_returns_metrics_and_detector():
         "splits": {"sess_a": SPLIT_CROSS_DETECTOR, "sess_b": SPLIT_TRAIN},
     }
     result = run_fold(
-        _PerfectModel(), artifact, _fixed_factory(_make_perfect_loader()), device="cpu"
+        _PerfectModel2Class(), artifact, session_map={"sess_a": path}, device="cpu"
     )
     assert result["test_detector"] == "AGIPD"
     assert "ap" in result
 
 
-def test_run_benchmark_covers_all_folds():
+def test_run_benchmark_covers_all_folds(tmp_path):
+    shared = _make_cxi(tmp_path)
     sessions = [
         {"session_id": f"sess_{d}_{i}", "detector": d, "frame_count": 100}
         for d in ["AGIPD", "JUNGFRAU_4M", "ePix10k", "Eiger4M"]
         for i in range(5)
     ]
+    session_map = {s["session_id"]: shared for s in sessions}
     folds = build_lodo_folds()
     artifacts = [
         build_session_stratified_split(
@@ -292,9 +308,7 @@ def test_run_benchmark_covers_all_folds():
         )
         for f in folds
     ]
-    results = run_benchmark(
-        _PerfectModel(), artifacts, _fixed_factory(_make_perfect_loader()), device="cpu"
-    )
+    results = run_benchmark(_PerfectModel2Class(), artifacts, session_map, device="cpu")
     for fold_id in range(1, 5):
         assert f"fold_{fold_id}" in results
     assert "mean_ap" in results
@@ -378,9 +392,7 @@ def test_run_benchmark_raises_on_none_fold():
         "splits": {"sess_a": SPLIT_CROSS_DETECTOR},
     }
     with pytest.raises(ValueError, match="fold=None"):
-        run_benchmark(
-            _PerfectModel(), [artifact_no_fold], _fixed_factory(_make_perfect_loader())
-        )
+        run_benchmark(_PerfectModel2Class(), [artifact_no_fold], session_map={})
 
 
 # ---------------------------------------------------------------------------
@@ -388,13 +400,15 @@ def test_run_benchmark_raises_on_none_fold():
 # ---------------------------------------------------------------------------
 
 
-def test_run_benchmark_std_ap_uses_sample_std():
+def test_run_benchmark_std_ap_uses_sample_std(tmp_path):
     """std_ap must use ddof=1 (sample std), not ddof=0 (population std)."""
+    shared = _make_cxi(tmp_path)
     sessions = [
         {"session_id": f"sess_{d}_{i}", "detector": d, "frame_count": 100}
         for d in ["AGIPD", "JUNGFRAU_4M", "ePix10k", "Eiger4M"]
         for i in range(5)
     ]
+    session_map = {s["session_id"]: shared for s in sessions}
     folds = build_lodo_folds()
     artifacts = [
         build_session_stratified_split(
@@ -402,9 +416,7 @@ def test_run_benchmark_std_ap_uses_sample_std():
         )
         for f in folds
     ]
-    results = run_benchmark(
-        _PerfectModel(), artifacts, _fixed_factory(_make_perfect_loader()), device="cpu"
-    )
+    results = run_benchmark(_PerfectModel2Class(), artifacts, session_map, device="cpu")
     ap_values = [results[f"fold_{i}"]["ap"] for i in range(1, 5)]
     expected_std = float(np.std(ap_values, ddof=1))
     assert abs(results["std_ap"] - expected_std) < 1e-9
