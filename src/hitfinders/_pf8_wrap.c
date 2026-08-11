@@ -78,8 +78,8 @@ int pf8_find_peaks(
     struct detgeom_panel panel;
     memset(&panel, 0, sizeof(panel));
     panel.name           = "assembled";
-    panel.cnx            = 0.0;
-    panel.cny            = 0.0;
+    panel.cnx            = -(w / 2.0);  /* corner relative to beam centre */
+    panel.cny            = -(h / 2.0);
     panel.cnz            = 0.0;
     panel.pixel_pitch    = 1.0e-4;
     panel.adu_per_photon = 1.0;
