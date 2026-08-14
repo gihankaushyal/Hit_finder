@@ -146,7 +146,7 @@ def _process_frame(
         pixel_size = float(f["entry_1/instrument_1/detector_1/x_pixel_size"][()])
     hitfinder.set_geometry(dist=dist, wavelength=wavelength, pixel_size=pixel_size)
 
-    peaks = hitfinder.find_peaks(np.asarray(assembled, dtype=np.float32))
+    peaks = hitfinder.find_peaks(np.ascontiguousarray(assembled, dtype=np.float32))
     n_peaks = len(peaks)
     has_peaks = n_peaks > 0
 
@@ -186,10 +186,11 @@ def _process_frame(
     if has_peaks:
         coin = int(rng.integers(0, 2))  # 0 = non-hit path, 1 = hit path
         if coin == 1:
-            # Path A — hit crop centred on a random Bragg peak
+            # Path A — hit crop centred on a random Bragg peak.
+            # peaks[:, 0] = x (col), peaks[:, 1] = y (row) — GPUHitfinder/gpu_pf8 convention.
             peak_i = int(rng.integers(0, len(shifted)))
-            cx = int(round(float(shifted[peak_i, 0])))
-            cy = int(round(float(shifted[peak_i, 1])))
+            cx = int(round(float(shifted[peak_i, 0])))  # x = column
+            cy = int(round(float(shifted[peak_i, 1])))  # y = row
             left = int(np.clip(cx - 112, 0, pw - 224))
             top = int(np.clip(cy - 112, 0, ph - 224))
             crop: np.ndarray = padded[top : top + 224, left : left + 224].copy()
