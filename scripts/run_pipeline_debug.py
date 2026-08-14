@@ -4,8 +4,11 @@
 Samples ~10 frames across all four detectors and executes the full
 SFX preprocessing pipeline with per-step console logging.
 
-Augmentation order differs from training: rot90 → flip → LCN → cutout.
-Cutout is applied after LCN (intentional — requested for this runner).
+NOTE: Augmentation order intentionally differs from the training pipeline.
+Training order: rot90 → flip → cutout → LCN.
+This runner's order: rot90 → flip → LCN → cutout (cutout applied after LCN).
+This is a deliberate deviation for debugging purposes — results from this
+runner are NOT directly representative of the training data distribution.
 
 Usage:
     python scripts/run_pipeline_debug.py [--config <path>] [--seed <int>] [--device <str>]
