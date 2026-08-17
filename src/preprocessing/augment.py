@@ -111,8 +111,9 @@ def random_cutout(
 ) -> np.ndarray:
     """Zero-fill n_holes random (hole_size × hole_size) rectangular patches.
 
-    Simulates detector panel gaps or masked regions. Applied after GCN and before LCN;
-    with masked LCN the zeroed mask channel makes holes invalid, like real gaps.
+    Simulates detector panel gaps or masked regions. Applied after LCN (training
+    order: rot90 → flip → LCN → cutout), so holes are exact 0 in LCN space and
+    never enter the local statistics.
 
     When ``avoid`` is given, hole positions are rejection-sampled so the hole
     footprint (expanded by ``avoid_margin`` on every side) contains no protected

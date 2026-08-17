@@ -187,9 +187,11 @@ class AsymmetricCXIDataset(Dataset):
       6. Guided crop (224×224) → derived label:
            Path A (peaks found): crop centred on a random Bragg peak → label=1
            Path B (no peaks):    random crop with 50 px clearance from all peaks → label=0
-      7. Augment: random_rot90 → random_flip → random_cutout
-      8. Normalise: LCN (GCN already applied to full frame in step 4)
-      9. Return (tensor(1, 224, 224) float32, derived_label)
+      7. Augment (geometric): random_rot90 → random_flip
+      8. Normalise: masked LCN (GCN already applied to full frame in step 4)
+      9. Augment: peak-aware random_cutout (after LCN — holes are exact 0
+         in LCN space and never enter the local statistics)
+      10. Return (tensor(1, 224, 224) float32, derived_label)
 
     Args:
         session_ids: Session IDs to include.
@@ -348,18 +350,22 @@ class AsymmetricCXIDataset(Dataset):
                 return None
             derived_label = 0
 
-        # --- Augmentation: rot90 → flip → cutout (all channels together) ---
+        # --- Augmentation + normalisation: rot90 → flip → LCN → cutout ---
         crop = random_rot90(crop, rng)
         crop = random_flip(crop, rng)
-        # Peak-aware cutout: holes avoid the (co-transformed) peak-protection
-        # channel so Bragg evidence is never erased; zeroed image+mask channels
-        # make holes invalid for masked LCN.
-        crop = random_cutout(crop, rng, avoid=crop[:, :, 2] > 0.5)
 
-        # --- Normalisation: masked LCN (GCN already applied to full frame above) ---
         crop_img = crop[:, :, 0]
         crop_mask = crop[:, :, 1] > 0.5
+        crop_protect = crop[:, :, 2] > 0.5
+
+        # Masked LCN before cutout (GCN already applied to full frame above),
+        # so holes never enter the local statistics.
         crop_img = lcn(crop_img, mask=crop_mask)
+
+        # Peak-aware cutout after LCN: holes are exact 0 in LCN space; positions
+        # avoid the (co-transformed) peak-protection channel so Bragg evidence
+        # is never erased.
+        crop_img = random_cutout(crop_img, rng, avoid=crop_protect)
 
         tensor = torch.from_numpy(np.ascontiguousarray(crop_img)).unsqueeze(0).float()
         return tensor, derived_label
