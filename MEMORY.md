@@ -81,6 +81,7 @@ Full pipeline: Reborn geometry → GCN → LCN (window=9) → resize 224×224. L
 | 9 | `geometry_file_to_pad_geometry_list()` is in `reborn.external.crystfel` | Always import from `reborn.external.crystfel`, not `reborn.detector`. |
 | 10 | `gh pr edit` is broken by GitHub Projects Classic deprecation warning (exit 1) | Use `gh api repos/<owner>/<repo>/pulls/<N> -X PATCH -f body="..."` instead. |
 | 11 | `gcn_apply` was removed from `normalize.py` (2026-08-04) | Do not import or use it — `gcn()` on the full assembled frame before crop/tile replaced it everywhere |
+| 12 | LCN changed to variance form `(I−μ_W)/sqrt(σ²_W+ε)` with `LCN_EPSILON=1e-2` (2026-08-17) | Old std-form ε=1e-6 amplified background readout noise to unit variance (salt-and-pepper on JUNGFRAU non-hits). Checkpoints trained before 2026-08-17 (LODO folds, synthetic baseline) used the old form — retrain before comparing against new runs. Ablation in `notebooks/pipeline_debug.ipynb`. |
 
 ---
 

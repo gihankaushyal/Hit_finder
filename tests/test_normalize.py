@@ -92,6 +92,14 @@ class TestLCN:
         out_large = lcn(img, window=31)
         assert not np.allclose(out_small, out_large)
 
+    def test_low_variance_noise_not_amplified(self) -> None:
+        # Near-constant background + tiny readout noise must NOT be inflated
+        # to unit variance (the old std-form eps=1e-6 salt-and-pepper bug).
+        rng = np.random.default_rng(0)
+        noise = rng.normal(0.0, 0.01, size=(_H, _W))
+        out = lcn(noise)
+        assert out.std() < 0.5
+
 
 # ---------------------------------------------------------------------------
 # Order enforcement: GCN → LCN must differ from LCN → GCN

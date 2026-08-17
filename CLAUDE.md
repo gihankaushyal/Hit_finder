@@ -18,6 +18,16 @@ graphify update .   # after modifying code — AST-only, no API cost
 - Read `graphify-out/GRAPH_REPORT.md` only for full architecture overview.
 - **Subagent write quirk:** spawned subagents cannot write to the project directory — main session must write chunk JSON files manually when running `/graphify` extraction.
 
+### Graph Routing — pick the matching graph for each question
+
+| Topic | Graph | Command |
+|-------|-------|---------|
+| Our training pipeline, datasets, models, preprocessing, augmentation, hitfinders | `graphify-out/` (this repo) | `graphify query "..."` |
+| Reborn internals — PADAssembler, PADGeometry, PADGeometryList, Beam, FrameGetter, detector geometry APIs | `../reborn/graphify-out/` | `cd ../reborn && graphify query "..."` |
+| CXI generation, simulation, CXIWriter, geom_parser, Resonet pipeline | `../Resonet/graphify-out/` | `cd ../Resonet && graphify query "..."` |
+
+**Cross-boundary questions** (e.g. "how does our `assemble_only` connect to reborn's `PADAssembler`"): query the reborn graph first for the API side, then the Hit_finder graph for our usage. Always `cd /data/bioxfel/user/gihan/Hit_finder` back to the project root after querying an external graph.
+
 ---
 
 ## Key Paths — verify before Read
@@ -81,7 +91,7 @@ The comparison between Track 1 and Track 2 is itself a scientific contribution.
 4. Global Contrast Normalization (GCN) on the full assembled frame: I_gcn = (I - μ) / (σ + ε)
 5. Crop to 224×224 — training: hitfinder-guided crop (Path A: centred on random Bragg peak → label=1; Path B: random crop with 50 px clearance from all peaks → label=0); eval: patch-grid tiling of the full GCN'd frame (stride=224, score aggregated per frame with vote or max)
 6. Augmentation (training only): random rot90 → random flip → random cutout
-7. Local Contrast Normalization (LCN) per crop/patch: I_lcn(x,y) = (I(x,y) - μ_W(x,y)) / (σ_W(x,y) + ε)
+7. Local Contrast Normalization (LCN) per crop/patch: I_lcn(x,y) = (I(x,y) - μ_W(x,y)) / sqrt(σ²_W(x,y) + ε), ε=1e-2 (variance-form ε floors the denominator at 0.1 GCN units — prevents noise explosion on low-variance background patches)
 ```
 
 **Critical constraints:**
@@ -250,7 +260,7 @@ python src/training/train_supervised.py --config configs/supervised/resnet18.yam
 
 Post-assembly and post-crop: all images are 224 × 224 × 1 (single channel).
 
-**Confirmed preprocessing parameters (Phase 3):** `lcn_window=9` (window=31 causes panel-edge ringing artifacts; 3/9/15 equivalent on non-hit frames; 9 is the smallest safe choice).
+**Confirmed preprocessing parameters:** `lcn_window=9` (Phase 3 ablation: window=31 causes panel-edge ringing artifacts; 3/9/15 equivalent on non-hit frames; 9 is the smallest safe choice); `lcn_eps=1e-2` in variance form `sqrt(σ²_W + ε)` (Phase 4 ablation, 2026-08-17: std-form ε=1e-6 amplified readout noise to unit variance on background-only patches — salt-and-pepper static on JUNGFRAU non-hits; 1e-2 suppresses it while preserving Bragg peak amplitude).
 
 ### HDF5 Access Pattern
 

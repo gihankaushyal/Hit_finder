@@ -13,6 +13,7 @@ runner are NOT directly representative of the training data distribution.
 Usage:
     python scripts/run_pipeline_debug.py [--config <path>] [--seed <int>] [--device <str>]
 """
+
 from __future__ import annotations
 
 import argparse
@@ -33,7 +34,7 @@ from src.preprocessing.io import (
 from src.preprocessing.geometry import get_assembler, get_geometry
 from src.preprocessing.normalize import gcn, lcn
 from src.preprocessing.augment import pad_border
-from src.preprocessing.pipeline import assemble_only
+from src.preprocessing.pipeline import _to_2d, assemble_only
 from src.hitfinders.gpu import GPUHitfinder
 from src.data.dataset import _crop_within_margin
 from src.utils.config import load_config
@@ -63,9 +64,7 @@ def _build_frame_list(
         det_dir = Path(lodo_cfg["detector_dirs"][det_name])
         files = sorted(det_dir.glob(pattern))
         if not files:
-            raise FileNotFoundError(
-                f"No files matching '{pattern}' in {det_dir}"
-            )
+            raise FileNotFoundError(f"No files matching '{pattern}' in {det_dir}")
         cxi_path = files[int(rng.integers(0, len(files)))]
         n_frames = count_frames(cxi_path)
         indices = rng.choice(n_frames, size=min(n, n_frames), replace=False)
@@ -77,13 +76,16 @@ def _build_frame_list(
 
 # ── Task 2: logging helpers ────────────────────────────────────────────────────
 
+
 def _log(step: int | None, label: str, msg: str) -> None:
     """Print a single step log line: [Step  N] Label    message"""
     prefix = f"  [Step {step:2d}]" if step is not None else "          →"
     print(f"{prefix} {label:<14s} {msg}")
 
 
-def _frame_header(frame_no: int, total: int, det: str, filename: str, frame_idx: int) -> None:
+def _frame_header(
+    frame_no: int, total: int, det: str, filename: str, frame_idx: int
+) -> None:
     bar = "━" * 62
     print(f"\n{bar}")
     print(f"FRAME {frame_no}/{total}  {det}  {filename}  frame {frame_idx}")
@@ -91,6 +93,7 @@ def _frame_header(frame_no: int, total: int, det: str, filename: str, frame_idx:
 
 
 # ── Task 3: per-frame pipeline ─────────────────────────────────────────────────
+
 
 def _process_frame(
     frame_no: int,
@@ -118,26 +121,43 @@ def _process_frame(
     labels = read_embedded_labels(cxi_path, label_key)
     true_label = int(labels[frame_idx]) if frame_idx < len(labels) else -1
     elapsed = time.perf_counter() - t0
-    _log(1, "Read", f"{elapsed:.3f}s  shape={frame.shape}  dtype={frame.dtype}  true_label={true_label}")
+    _log(
+        1,
+        "Read",
+        f"{elapsed:.3f}s  shape={frame.shape}  dtype={frame.dtype}  true_label={true_label}",
+    )
     result.update({"true_label": true_label, "read_time_s": elapsed})
 
     # ── Step 2: Geometry ───────────────────────────────────────────────────────
     desc = read_detector_description(cxi_path)
-    pads = get_geometry(desc)
-    assembler = get_assembler(desc)
-    _log(2, "Geometry", f"{desc}  ({len(pads)} panels)")
+    if desc == "Jungfrau 4M":
+        _log(2, "Geometry", f"{desc}  (pre-assembled — skipping Reborn assembly)")
+        pads = assembler = None
+    else:
+        pads = get_geometry(desc)
+        assembler = get_assembler(desc)
+        _log(2, "Geometry", f"{desc}  ({len(pads)} panels)")
     result["detector_desc"] = desc
 
     # ── Step 3: Assembly ───────────────────────────────────────────────────────
     t0 = time.perf_counter()
-    assembled = assemble_only(frame, pads, desc, assembler)
+    if desc == "Jungfrau 4M":
+        assembled = _to_2d(frame)
+    else:
+        assembled = assemble_only(frame, pads, desc, assembler)
     elapsed = time.perf_counter() - t0
-    _log(3, "Assembly", f"{elapsed:.3f}s  shape={assembled.shape}  min={assembled.min():.0f}  max={assembled.max():.0f}")
-    result.update({
-        "assembled_shape": assembled.shape,
-        "assembled_range": (float(assembled.min()), float(assembled.max())),
-        "assembly_time_s": elapsed,
-    })
+    _log(
+        3,
+        "Assembly",
+        f"{elapsed:.3f}s  shape={assembled.shape}  min={assembled.min():.0f}  max={assembled.max():.0f}",
+    )
+    result.update(
+        {
+            "assembled_shape": assembled.shape,
+            "assembled_range": (float(assembled.min()), float(assembled.max())),
+            "assembly_time_s": elapsed,
+        }
+    )
 
     # ── Step 4: Hitfinder ──────────────────────────────────────────────────────
     with h5py.File(cxi_path, "r") as f:
@@ -158,7 +178,13 @@ def _process_frame(
             print("             ⚠ metadata=hit  hitfinder=no peaks")
         else:
             print(f"             ⚠ metadata=non-hit  hitfinder={n_peaks} peaks")
-    result.update({"n_peaks": n_peaks, "hitfinder_name": "GPUHitfinder (gpu_pf8)", "label_mismatch": mismatch})
+    result.update(
+        {
+            "n_peaks": n_peaks,
+            "hitfinder_name": "GPUHitfinder (gpu_pf8)",
+            "label_mismatch": mismatch,
+        }
+    )
 
     # ── Step 5: GCN ───────────────────────────────────────────────────────────
     assembled_gcn = gcn(assembled)
@@ -168,7 +194,11 @@ def _process_frame(
         "min": float(assembled_gcn.min()),
         "max": float(assembled_gcn.max()),
     }
-    _log(5, "GCN", f"μ={gs['mean']:.3f}  σ={gs['std']:.3f}  min={gs['min']:.2f}  max={gs['max']:.2f}")
+    _log(
+        5,
+        "GCN",
+        f"μ={gs['mean']:.3f}  σ={gs['std']:.3f}  min={gs['min']:.2f}  max={gs['max']:.2f}",
+    )
     result["gcn_stats"] = gs
 
     # ── Step 6: Pad + shift centroids ─────────────────────────────────────────
@@ -222,7 +252,13 @@ def _process_frame(
         decision = f"forced-non-hit  crop_tl=({top},{left})"
 
     _log(7, "Crop", f"{decision}  label={derived_label}")
-    result.update({"crop_decision": decision, "crop_top_left": (top, left), "derived_label": derived_label})
+    result.update(
+        {
+            "crop_decision": decision,
+            "crop_top_left": (top, left),
+            "derived_label": derived_label,
+        }
+    )
 
     # ── Step 8: Augment — rot90 + flip (before LCN) ───────────────────────────
     # Draw values explicitly so they can be logged before application.
@@ -241,6 +277,7 @@ def _process_frame(
     result["augment"] = {"rot90_k": k, "flip_h": h_flip, "flip_v": v_flip}
 
     # ── Step 9: LCN ───────────────────────────────────────────────────────────
+    result["crop_pre_lcn"] = crop.copy()  # for the eps ablation in the notebook
     crop = lcn(crop)
     ls = {
         "mean": float(crop.mean()),
@@ -248,7 +285,11 @@ def _process_frame(
         "min": float(crop.min()),
         "max": float(crop.max()),
     }
-    _log(9, "LCN", f"μ={ls['mean']:.3f}  σ={ls['std']:.3f}  min={ls['min']:.2f}  max={ls['max']:.2f}")
+    _log(
+        9,
+        "LCN",
+        f"μ={ls['mean']:.3f}  σ={ls['std']:.3f}  min={ls['min']:.2f}  max={ls['max']:.2f}",
+    )
     result["lcn_stats"] = ls
 
     # ── Step 10: Cutout — applied AFTER LCN (debug runner only) ───────────────
@@ -266,13 +307,18 @@ def _process_frame(
 
     # ── Final tensor ───────────────────────────────────────────────────────────
     tensor = torch.from_numpy(np.ascontiguousarray(crop)).unsqueeze(0).float()
-    _log(None, "Tensor", f"shape={tuple(tensor.shape)}  dtype={tensor.dtype}  derived_label={derived_label}")
+    _log(
+        None,
+        "Tensor",
+        f"shape={tuple(tensor.shape)}  dtype={tensor.dtype}  derived_label={derived_label}",
+    )
     result["tensor"] = tensor
 
     return result
 
 
 # ── Task 4: public entry point + CLI ──────────────────────────────────────────
+
 
 def run(
     config_path: str = "configs/supervised/resnet18_asymmetric.yaml",
@@ -307,7 +353,9 @@ def run(
 
     bar = "═" * 62
     print(f"\n{bar}")
-    print(f"SFX PREPROCESSING DEBUG RUN — {len(frame_list)} frames  seed={seed}  device={device}")
+    print(
+        f"SFX PREPROCESSING DEBUG RUN — {len(frame_list)} frames  seed={seed}  device={device}"
+    )
     print(bar)
     for i, (det, path, idx) in enumerate(frame_list, 1):
         print(f"  [{i:2d}] {det:<14s} {path.name}  frame {idx}")
@@ -337,8 +385,12 @@ def run(
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="SFX preprocessing pipeline debug runner")
-    parser.add_argument("--config", default="configs/supervised/resnet18_asymmetric.yaml")
+    parser = argparse.ArgumentParser(
+        description="SFX preprocessing pipeline debug runner"
+    )
+    parser.add_argument(
+        "--config", default="configs/supervised/resnet18_asymmetric.yaml"
+    )
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--device", default="cuda")
     args = parser.parse_args()
