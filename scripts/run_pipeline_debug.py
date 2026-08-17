@@ -216,13 +216,25 @@ def _process_frame(
 
     # ── Step 6: Pad + shift centroids ─────────────────────────────────────────
     PAD = 112
-    # Image and mask stacked (H, W, 2) so crop/rot90/flip transform both together.
-    padded = np.dstack(
-        [pad_border(assembled_gcn, PAD), pad_border(valid_mask.astype(np.float64), PAD)]
-    )
+    # Image, valid-pixel mask, and a peak-protection map stacked (H, W, 3) so
+    # crop/rot90/flip transform all three together. The protection map marks
+    # hitfinder centroids so cutout never occludes Bragg evidence.
     shifted = (peaks + PAD).astype(np.float32) if has_peaks else peaks
+    padded_img = pad_border(assembled_gcn, PAD)
+    peak_protect = np.zeros(padded_img.shape, dtype=np.float64)
+    for x, y in shifted:
+        r, c = int(round(float(y))), int(round(float(x)))
+        if 0 <= r < peak_protect.shape[0] and 0 <= c < peak_protect.shape[1]:
+            peak_protect[r, c] = 1.0
+    padded = np.dstack(
+        [padded_img, pad_border(valid_mask.astype(np.float64), PAD), peak_protect]
+    )
     ph, pw = padded.shape[:2]
-    _log(6, "Pad+shift", f"padded={padded.shape[:2]}+mask  centroids shifted +{PAD}px")
+    _log(
+        6,
+        "Pad+shift",
+        f"padded={padded.shape[:2]}+mask+protect  centroids shifted +{PAD}px",
+    )
 
     # ── Step 7: Crop decision ──────────────────────────────────────────────────
     derived_label: int
@@ -294,6 +306,7 @@ def _process_frame(
 
     # ── Step 9: masked LCN ────────────────────────────────────────────────────
     crop_mask = crop[:, :, 1] > 0.5
+    crop_protect = crop[:, :, 2] > 0.5
     crop = crop[:, :, 0]
     result["crop_pre_lcn"] = crop.copy()  # for the eps ablation in the notebook
     result["crop_mask"] = crop_mask.copy()
@@ -312,17 +325,39 @@ def _process_frame(
     result["lcn_stats"] = ls
 
     # ── Step 10: Cutout — applied AFTER LCN (debug runner only) ───────────────
-    N_HOLES, HOLE_SIZE = 3, 32
+    # Peak-aware: hole positions are rejection-sampled so the hole footprint
+    # (+margin) contains no protected peak pixel; a hole is skipped (not
+    # force-placed) after MAX_TRIES failed draws. Mirrors random_cutout().
+    N_HOLES, HOLE_SIZE, MARGIN, MAX_TRIES = 3, 24, 8, 20
     h_img, w_img = crop.shape
     holes: list[tuple[int, int]] = []
+    n_skipped = 0
     for _ in range(N_HOLES):
-        r = int(rng.integers(0, max(1, h_img - HOLE_SIZE + 1)))
-        c = int(rng.integers(0, max(1, w_img - HOLE_SIZE + 1)))
-        crop[r : r + HOLE_SIZE, c : c + HOLE_SIZE] = 0.0
-        holes.append((r, c))
+        placed = False
+        for _try in range(MAX_TRIES):
+            r = int(rng.integers(0, max(1, h_img - HOLE_SIZE + 1)))
+            c = int(rng.integers(0, max(1, w_img - HOLE_SIZE + 1)))
+            r0, c0 = max(0, r - MARGIN), max(0, c - MARGIN)
+            r1, c1 = min(h_img, r + HOLE_SIZE + MARGIN), min(
+                w_img, c + HOLE_SIZE + MARGIN
+            )
+            if crop_protect[r0:r1, c0:c1].any():
+                continue
+            crop[r : r + HOLE_SIZE, c : c + HOLE_SIZE] = 0.0
+            holes.append((r, c))
+            placed = True
+            break
+        if not placed:
+            n_skipped += 1
     holes_str = "  ".join(f"({r},{c})" for r, c in holes)
-    _log(10, "Cutout", f"3×32² holes at {holes_str}")
+    skip_str = f"  ({n_skipped} skipped: no peak-free spot)" if n_skipped else ""
+    _log(
+        10,
+        "Cutout",
+        f"{len(holes)}×{HOLE_SIZE}² peak-aware holes at {holes_str}{skip_str}",
+    )
     result["cutout_holes"] = holes
+    result["cutout_skipped"] = n_skipped
 
     # ── Final tensor ───────────────────────────────────────────────────────────
     tensor = torch.from_numpy(np.ascontiguousarray(crop)).unsqueeze(0).float()

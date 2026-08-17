@@ -304,12 +304,21 @@ class AsymmetricCXIDataset(Dataset):
         assembled = fill_gaps_after_gcn(assembled, desc, mask=valid_mask)
 
         # --- Pad and shift centroids into padded coordinate frame ---
-        # Image and mask are stacked (H, W, 2) so every geometric op (crop,
-        # rot90, flip, cutout) transforms both with the same random draws.
-        padded = np.dstack(
-            [pad_border(assembled), pad_border(valid_mask.astype(np.float64))]
-        )
+        # Image, valid-pixel mask, and a peak-protection map are stacked
+        # (H, W, 3) so every geometric op (crop, rot90, flip) transforms all
+        # three with the same random draws. The protection map marks hitfinder
+        # centroids so cutout never occludes the Bragg evidence for label=1
+        # (no coordinate transforms needed — the channel travels with the image).
         centroids = centroids + PAD_BORDER_DEFAULT
+        padded_img = pad_border(assembled)
+        peak_protect = np.zeros(padded_img.shape, dtype=np.float64)
+        for x, y in centroids:
+            r, c = int(round(float(y))), int(round(float(x)))
+            if 0 <= r < peak_protect.shape[0] and 0 <= c < peak_protect.shape[1]:
+                peak_protect[r, c] = 1.0
+        padded = np.dstack(
+            [padded_img, pad_border(valid_mask.astype(np.float64)), peak_protect]
+        )
 
         ph, pw = padded.shape[:2]
         rng = np.random.default_rng(self._seed + idx)
@@ -339,10 +348,13 @@ class AsymmetricCXIDataset(Dataset):
                 return None
             derived_label = 0
 
-        # --- Augmentation: rot90 → flip → cutout (image + mask together) ---
+        # --- Augmentation: rot90 → flip → cutout (all channels together) ---
         crop = random_rot90(crop, rng)
         crop = random_flip(crop, rng)
-        crop = random_cutout(crop, rng)  # zeroes both channels: holes become invalid
+        # Peak-aware cutout: holes avoid the (co-transformed) peak-protection
+        # channel so Bragg evidence is never erased; zeroed image+mask channels
+        # make holes invalid for masked LCN.
+        crop = random_cutout(crop, rng, avoid=crop[:, :, 2] > 0.5)
 
         # --- Normalisation: masked LCN (GCN already applied to full frame above) ---
         crop_img = crop[:, :, 0]

@@ -167,3 +167,44 @@ class TestRandomCutout:
         img = np.random.default_rng(RNG_SEED).random((224, 224)).astype(np.float32)
         result = random_cutout(img, np.random.default_rng(RNG_SEED), n_holes=0)
         np.testing.assert_array_equal(result, img)
+
+    def test_avoid_protects_peak_pixels(self):
+        # With protected pixels scattered across the image, no hole (expanded
+        # by the margin) may ever touch them — over many seeded draws.
+        img = np.ones((224, 224), dtype=np.float32)
+        avoid = np.zeros((224, 224), dtype=bool)
+        peaks = [(40, 60), (112, 112), (180, 30), (70, 200)]
+        for r, c in peaks:
+            avoid[r, c] = True
+        for seed in range(50):
+            result = random_cutout(
+                img, np.random.default_rng(seed), n_holes=3, avoid=avoid
+            )
+            for r, c in peaks:
+                assert result[r, c] == 1.0, f"peak ({r},{c}) occluded at seed {seed}"
+
+    def test_avoid_margin_respected(self):
+        # Every zeroed pixel must lie at least avoid_margin away from any
+        # protected pixel.
+        img = np.ones((224, 224), dtype=np.float32)
+        avoid = np.zeros((224, 224), dtype=bool)
+        avoid[112, 112] = True
+        margin = 8
+        for seed in range(50):
+            result = random_cutout(
+                img,
+                np.random.default_rng(seed),
+                n_holes=3,
+                avoid=avoid,
+                avoid_margin=margin,
+            )
+            zr, zc = np.nonzero(result == 0.0)
+            if len(zr):
+                dist = np.maximum(np.abs(zr - 112), np.abs(zc - 112)).min()
+                assert dist > margin
+
+    def test_fully_protected_image_skips_all_holes(self):
+        img = np.ones((224, 224), dtype=np.float32)
+        avoid = np.ones((224, 224), dtype=bool)
+        result = random_cutout(img, np.random.default_rng(RNG_SEED), avoid=avoid)
+        np.testing.assert_array_equal(result, img)

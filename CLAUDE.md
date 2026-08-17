@@ -90,7 +90,7 @@ The comparison between Track 1 and Track 2 is itself a scientific contribution.
 3. Hitfinder (on-the-fly) → locate Bragg spots; derive hit/non-hit label and centroids
 4. Global Contrast Normalization (GCN) on the full assembled frame: I_gcn = (I - μ) / (σ + ε)
 5. Crop to 224×224 — training: hitfinder-guided crop (Path A: centred on random Bragg peak → label=1; Path B: random crop with 50 px clearance from all peaks → label=0); eval: patch-grid tiling of the full GCN'd frame (stride=224, score aggregated per frame with vote or max)
-6. Augmentation (training only): random rot90 → random flip → random cutout
+6. Augmentation (training only): random rot90 → random flip → peak-aware random cutout (3 holes of 24×24; hole positions rejection-sampled to keep an 8 px margin from every hitfinder centroid so Bragg evidence for label=1 is never occluded; a hole is skipped, not force-placed, after 20 failed draws; holes zero the valid-pixel mask so masked LCN treats them as gaps)
 7. Local Contrast Normalization (LCN) per crop/patch: I_lcn(x,y) = (I(x,y) - μ_W(x,y)) / sqrt(σ²_W(x,y) + ε), ε=1e-2 (variance-form ε floors the denominator at 0.1 GCN units — prevents noise explosion on low-variance background patches). LCN is masked: gap/padding/edge pixels (geometry-derived valid-pixel mask, eroded 2 px to drop physically double-size panel-edge pixels) are excluded from μ_W/σ_W and zeroed in the output — prevents halo/ringing at panel boundaries. After GCN, invalid pixels are also filled with 0 (= global mean in GCN units).
 ```
 

@@ -95,16 +95,30 @@ def patch_grid(
     return patches
 
 
+CUTOUT_HOLE_SIZE_DEFAULT = 24
+CUTOUT_AVOID_MARGIN_DEFAULT = 8
+CUTOUT_MAX_TRIES = 20
+
+
 def random_cutout(
     image: np.ndarray,
     rng: np.random.Generator,
     n_holes: int = 3,
-    hole_size: int = 32,
+    hole_size: int = CUTOUT_HOLE_SIZE_DEFAULT,
+    avoid: np.ndarray | None = None,
+    avoid_margin: int = CUTOUT_AVOID_MARGIN_DEFAULT,
+    max_tries: int = CUTOUT_MAX_TRIES,
 ) -> np.ndarray:
     """Zero-fill n_holes random (hole_size × hole_size) rectangular patches.
 
     Simulates detector panel gaps or masked regions. Applied after GCN and before LCN;
-    zeroed pixels will be pulled toward the local mean during subsequent LCN normalisation.
+    with masked LCN the zeroed mask channel makes holes invalid, like real gaps.
+
+    When ``avoid`` is given, hole positions are rejection-sampled so the hole
+    footprint (expanded by ``avoid_margin`` on every side) contains no protected
+    pixel — used to keep cutout from occluding Bragg peaks on hit crops, which
+    would erase the evidence for the crop's label. A hole is skipped entirely
+    (not force-placed) if no valid position is found within ``max_tries`` draws.
 
     Args:
         image: 2D float32 array (H, W), or (H, W, C) — e.g. image stacked with
@@ -113,14 +127,28 @@ def random_cutout(
         rng: Numpy Generator.
         n_holes: Number of rectangular cutout patches to apply.
         hole_size: Side length of each square cutout patch in pixels.
+        avoid: Optional boolean (H, W) map; True = protected pixel (e.g. painted
+            at hitfinder peak centroids, co-transformed with the image).
+        avoid_margin: Clearance in pixels between a hole edge and any protected
+            pixel.
+        max_tries: Position draws per hole before the hole is skipped.
 
     Returns:
-        float32 array of the same shape, with n_holes regions zeroed out.
+        float32 array of the same shape, with up to n_holes regions zeroed out.
     """
     result = image.copy()
     h, w = image.shape[:2]
     for _ in range(n_holes):
-        top = int(rng.integers(0, max(1, h - hole_size + 1)))
-        left = int(rng.integers(0, max(1, w - hole_size + 1)))
-        result[top : top + hole_size, left : left + hole_size] = 0.0
+        for _try in range(max_tries if avoid is not None else 1):
+            top = int(rng.integers(0, max(1, h - hole_size + 1)))
+            left = int(rng.integers(0, max(1, w - hole_size + 1)))
+            if avoid is not None:
+                r0 = max(0, top - avoid_margin)
+                c0 = max(0, left - avoid_margin)
+                r1 = min(h, top + hole_size + avoid_margin)
+                c1 = min(w, left + hole_size + avoid_margin)
+                if avoid[r0:r1, c0:c1].any():
+                    continue
+            result[top : top + hole_size, left : left + hole_size] = 0.0
+            break
     return result
