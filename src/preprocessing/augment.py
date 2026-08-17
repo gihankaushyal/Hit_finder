@@ -107,7 +107,9 @@ def random_cutout(
     zeroed pixels will be pulled toward the local mean during subsequent LCN normalisation.
 
     Args:
-        image: 2D float32 array (H, W).
+        image: 2D float32 array (H, W), or (H, W, C) — e.g. image stacked with
+            its valid-pixel mask, so holes are zeroed in both (a zeroed mask
+            channel makes masked LCN treat the hole as invalid, like a real gap).
         rng: Numpy Generator.
         n_holes: Number of rectangular cutout patches to apply.
         hole_size: Side length of each square cutout patch in pixels.
@@ -116,7 +118,7 @@ def random_cutout(
         float32 array of the same shape, with n_holes regions zeroed out.
     """
     result = image.copy()
-    h, w = image.shape
+    h, w = image.shape[:2]
     for _ in range(n_holes):
         top = int(rng.integers(0, max(1, h - hole_size + 1)))
         left = int(rng.integers(0, max(1, w - hole_size + 1)))

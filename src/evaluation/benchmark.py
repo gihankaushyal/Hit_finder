@@ -271,7 +271,10 @@ def run_patch_agg(
                 assembled = _to_2d(frame)
             try:
                 patches_np = preprocess_eval_patches(
-                    assembled, patch_size=patch_size, stride=patch_stride
+                    assembled,
+                    patch_size=patch_size,
+                    stride=patch_stride,
+                    detector_desc=desc,
                 )
             except ValueError:
                 continue

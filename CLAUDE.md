@@ -91,7 +91,7 @@ The comparison between Track 1 and Track 2 is itself a scientific contribution.
 4. Global Contrast Normalization (GCN) on the full assembled frame: I_gcn = (I - μ) / (σ + ε)
 5. Crop to 224×224 — training: hitfinder-guided crop (Path A: centred on random Bragg peak → label=1; Path B: random crop with 50 px clearance from all peaks → label=0); eval: patch-grid tiling of the full GCN'd frame (stride=224, score aggregated per frame with vote or max)
 6. Augmentation (training only): random rot90 → random flip → random cutout
-7. Local Contrast Normalization (LCN) per crop/patch: I_lcn(x,y) = (I(x,y) - μ_W(x,y)) / sqrt(σ²_W(x,y) + ε), ε=1e-2 (variance-form ε floors the denominator at 0.1 GCN units — prevents noise explosion on low-variance background patches)
+7. Local Contrast Normalization (LCN) per crop/patch: I_lcn(x,y) = (I(x,y) - μ_W(x,y)) / sqrt(σ²_W(x,y) + ε), ε=1e-2 (variance-form ε floors the denominator at 0.1 GCN units — prevents noise explosion on low-variance background patches). LCN is masked: gap/padding/edge pixels (geometry-derived valid-pixel mask, eroded 2 px to drop physically double-size panel-edge pixels) are excluded from μ_W/σ_W and zeroed in the output — prevents halo/ringing at panel boundaries. After GCN, invalid pixels are also filled with 0 (= global mean in GCN units).
 ```
 
 **Critical constraints:**
@@ -260,7 +260,7 @@ python src/training/train_supervised.py --config configs/supervised/resnet18.yam
 
 Post-assembly and post-crop: all images are 224 × 224 × 1 (single channel).
 
-**Confirmed preprocessing parameters:** `lcn_window=9` (Phase 3 ablation: window=31 causes panel-edge ringing artifacts; 3/9/15 equivalent on non-hit frames; 9 is the smallest safe choice); `lcn_eps=1e-2` in variance form `sqrt(σ²_W + ε)` (Phase 4 ablation, 2026-08-17: std-form ε=1e-6 amplified readout noise to unit variance on background-only patches — salt-and-pepper static on JUNGFRAU non-hits; 1e-2 suppresses it while preserving Bragg peak amplitude).
+**Confirmed preprocessing parameters:** `lcn_window=9` (Phase 3 ablation: window=31 causes panel-edge ringing artifacts; 3/9/15 equivalent on non-hit frames; 9 is the smallest safe choice); `lcn_eps=1e-2` in variance form `sqrt(σ²_W + ε)` (Phase 4 ablation, 2026-08-17: std-form ε=1e-6 amplified readout noise to unit variance on background-only patches — salt-and-pepper static on JUNGFRAU non-hits; 1e-2 suppresses it while preserving Bragg peak amplitude); `EDGE_EROSION_PX=2` valid-pixel mask erosion (Phase 4, 2026-08-17: masked LCN via normalized convolution excludes gap/padding pixels from local stats — fixes gap-boundary halos; measured JF panel-edge pixels ~33% brighter than interior, so the mask is eroded 2 px).
 
 ### HDF5 Access Pattern
 

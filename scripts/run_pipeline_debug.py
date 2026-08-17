@@ -34,7 +34,12 @@ from src.preprocessing.io import (
 from src.preprocessing.geometry import get_assembler, get_geometry
 from src.preprocessing.normalize import gcn, lcn
 from src.preprocessing.augment import pad_border
-from src.preprocessing.pipeline import _to_2d, assemble_only
+from src.preprocessing.pipeline import (
+    _to_2d,
+    assemble_only,
+    fill_gaps_after_gcn,
+    get_valid_mask_for_frame,
+)
 from src.hitfinders.gpu import GPUHitfinder
 from src.data.dataset import _crop_within_margin
 from src.utils.config import load_config
@@ -186,8 +191,14 @@ def _process_frame(
         }
     )
 
-    # ── Step 5: GCN ───────────────────────────────────────────────────────────
+    # ── Step 5: GCN + gap fill ────────────────────────────────────────────────
+    valid_mask = get_valid_mask_for_frame(result.get("detector_desc"), assembled.shape)
+    if valid_mask is None:
+        valid_mask = np.ones(assembled.shape, dtype=bool)
     assembled_gcn = gcn(assembled)
+    n_before = int((assembled_gcn == 0.0).sum())
+    assembled_gcn = fill_gaps_after_gcn(assembled_gcn, mask=valid_mask)
+    n_gap = int((assembled_gcn == 0.0).sum()) - n_before
     gs = {
         "mean": float(assembled_gcn.mean()),
         "std": float(assembled_gcn.std()),
@@ -197,16 +208,21 @@ def _process_frame(
     _log(
         5,
         "GCN",
-        f"μ={gs['mean']:.3f}  σ={gs['std']:.3f}  min={gs['min']:.2f}  max={gs['max']:.2f}",
+        f"μ={gs['mean']:.3f}  σ={gs['std']:.3f}  min={gs['min']:.2f}  max={gs['max']:.2f}"
+        f"  gap_filled={n_gap}px",
     )
     result["gcn_stats"] = gs
+    result["gap_filled_px"] = n_gap
 
     # ── Step 6: Pad + shift centroids ─────────────────────────────────────────
     PAD = 112
-    padded = pad_border(assembled_gcn, PAD)
+    # Image and mask stacked (H, W, 2) so crop/rot90/flip transform both together.
+    padded = np.dstack(
+        [pad_border(assembled_gcn, PAD), pad_border(valid_mask.astype(np.float64), PAD)]
+    )
     shifted = (peaks + PAD).astype(np.float32) if has_peaks else peaks
-    ph, pw = padded.shape
-    _log(6, "Pad+shift", f"padded={padded.shape}  centroids shifted +{PAD}px")
+    ph, pw = padded.shape[:2]
+    _log(6, "Pad+shift", f"padded={padded.shape[:2]}+mask  centroids shifted +{PAD}px")
 
     # ── Step 7: Crop decision ──────────────────────────────────────────────────
     derived_label: int
@@ -276,9 +292,12 @@ def _process_frame(
     _log(8, "Augment", f"rot90=k{k}  flip={flip_str}")
     result["augment"] = {"rot90_k": k, "flip_h": h_flip, "flip_v": v_flip}
 
-    # ── Step 9: LCN ───────────────────────────────────────────────────────────
+    # ── Step 9: masked LCN ────────────────────────────────────────────────────
+    crop_mask = crop[:, :, 1] > 0.5
+    crop = crop[:, :, 0]
     result["crop_pre_lcn"] = crop.copy()  # for the eps ablation in the notebook
-    crop = lcn(crop)
+    result["crop_mask"] = crop_mask.copy()
+    crop = lcn(crop, mask=crop_mask)
     ls = {
         "mean": float(crop.mean()),
         "std": float(crop.std()),

@@ -34,3 +34,46 @@ class TestTo2D:
     def test_unexpected_ndim_raises(self) -> None:
         with pytest.raises(ValueError, match="Unexpected image ndim"):
             _to_2d(np.ones((2, 3, 4, 5)))
+
+
+# ---------------------------------------------------------------------------
+# fill_gaps_after_gcn
+# ---------------------------------------------------------------------------
+
+
+class TestFillGapsAfterGCN:
+    def test_invalid_pixels_set_to_zero(self) -> None:
+        from src.preprocessing.pipeline import fill_gaps_after_gcn
+
+        frame = np.full((10, 10), -2.5)
+        mask = np.ones((10, 10), dtype=bool)
+        mask[:, 4:6] = False  # vertical gap
+        out = fill_gaps_after_gcn(frame, mask=mask)
+        assert (out[:, 4:6] == 0.0).all()
+        assert (out[:, :4] == -2.5).all()
+        assert (out[:, 6:] == -2.5).all()
+
+    def test_no_desc_no_mask_is_noop(self) -> None:
+        from src.preprocessing.pipeline import fill_gaps_after_gcn
+
+        frame = np.full((8, 8), 1.5)
+        out = fill_gaps_after_gcn(frame)
+        assert (out == 1.5).all()
+
+    def test_shape_mismatch_skips_fill_with_warning(self) -> None:
+        from src.preprocessing.pipeline import fill_gaps_after_gcn
+
+        frame = np.full((8, 8), 1.5)
+        mask = np.zeros((4, 4), dtype=bool)
+        with pytest.warns(UserWarning, match="gap fill skipped"):
+            out = fill_gaps_after_gcn(frame, mask=mask)
+        assert (out == 1.5).all()
+
+    def test_unknown_desc_skips_fill_with_warning(self) -> None:
+        from src.preprocessing.pipeline import _MASK_WARNED, fill_gaps_after_gcn
+
+        _MASK_WARNED.discard("NotADetector 9000")
+        frame = np.full((8, 8), 1.5)
+        with pytest.warns(UserWarning, match="skipped"):
+            out = fill_gaps_after_gcn(frame, "NotADetector 9000")
+        assert (out == 1.5).all()

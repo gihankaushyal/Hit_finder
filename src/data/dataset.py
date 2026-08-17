@@ -29,7 +29,12 @@ from src.preprocessing.augment import (
     random_rot90,
 )
 from src.preprocessing.normalize import gcn, lcn
-from src.preprocessing.pipeline import _to_2d, assemble_only
+from src.preprocessing.pipeline import (
+    _to_2d,
+    assemble_only,
+    fill_gaps_after_gcn,
+    get_valid_mask_for_frame,
+)
 
 
 class UnlabeledDataset(Dataset):
@@ -243,8 +248,8 @@ class AsymmetricCXIDataset(Dataset):
         frame = read_frame(path, frame_idx)
 
         # --- Assemble to native resolution ---
-        if path in self._path_to_desc:
-            desc = self._path_to_desc[path]
+        desc = self._path_to_desc.get(path)
+        if desc is not None:
             try:
                 pads = get_geometry(desc)
                 assembler = get_assembler(desc)
@@ -289,14 +294,24 @@ class AsymmetricCXIDataset(Dataset):
         # --- Run hitfinder on raw assembled frame (before GCN) ---
         centroids = self._hitfinder.find_peaks(assembled)  # (N, 2) float32 [x, y]
 
-        # GCN applied to the full assembled frame before padding/crop.
+        # GCN applied to the full assembled frame before padding/crop; then gap/
+        # padding/edge pixels are set to 0 (= global mean in GCN units) and
+        # tracked in a valid-pixel mask so LCN can exclude them from local stats.
+        valid_mask = get_valid_mask_for_frame(desc, assembled.shape)
+        if valid_mask is None:
+            valid_mask = np.ones(assembled.shape, dtype=bool)
         assembled = gcn(assembled)
+        assembled = fill_gaps_after_gcn(assembled, desc, mask=valid_mask)
 
         # --- Pad and shift centroids into padded coordinate frame ---
-        padded = pad_border(assembled)
+        # Image and mask are stacked (H, W, 2) so every geometric op (crop,
+        # rot90, flip, cutout) transforms both with the same random draws.
+        padded = np.dstack(
+            [pad_border(assembled), pad_border(valid_mask.astype(np.float64))]
+        )
         centroids = centroids + PAD_BORDER_DEFAULT
 
-        ph, pw = padded.shape
+        ph, pw = padded.shape[:2]
         rng = np.random.default_rng(self._seed + idx)
 
         _CROP = 224
@@ -324,13 +339,15 @@ class AsymmetricCXIDataset(Dataset):
                 return None
             derived_label = 0
 
-        # --- Augmentation: rot90 → flip → cutout ---
+        # --- Augmentation: rot90 → flip → cutout (image + mask together) ---
         crop = random_rot90(crop, rng)
         crop = random_flip(crop, rng)
-        crop = random_cutout(crop, rng)
+        crop = random_cutout(crop, rng)  # zeroes both channels: holes become invalid
 
-        # --- Normalisation: LCN (GCN already applied to full frame above) ---
-        crop = lcn(crop)
+        # --- Normalisation: masked LCN (GCN already applied to full frame above) ---
+        crop_img = crop[:, :, 0]
+        crop_mask = crop[:, :, 1] > 0.5
+        crop_img = lcn(crop_img, mask=crop_mask)
 
-        tensor = torch.from_numpy(np.ascontiguousarray(crop)).unsqueeze(0).float()
+        tensor = torch.from_numpy(np.ascontiguousarray(crop_img)).unsqueeze(0).float()
         return tensor, derived_label
