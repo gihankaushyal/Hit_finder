@@ -251,12 +251,12 @@ class AsymmetricCXIDataset(Dataset):
 
         # --- Assemble to native resolution ---
         desc = self._path_to_desc.get(path)
-        if desc is not None:
+        if desc is not None and "JUNGFRAU" not in desc.upper():
             try:
                 pads = get_geometry(desc)
                 assembler = get_assembler(desc)
                 assembled = assemble_only(frame, pads, desc, assembler=assembler)
-            except (ValueError, KeyError, OSError):
+            except (KeyError, OSError):
                 assembled = _to_2d(frame)
         else:
             assembled = _to_2d(frame)
@@ -301,6 +301,11 @@ class AsymmetricCXIDataset(Dataset):
         # tracked in a valid-pixel mask so LCN can exclude them from local stats.
         valid_mask = get_valid_mask_for_frame(desc, assembled.shape)
         if valid_mask is None:
+            warnings.warn(
+                f"No valid-pixel mask for desc={desc!r} shape={assembled.shape}; "
+                "gap fill and masked LCN disabled for this frame.",
+                stacklevel=2,
+            )
             valid_mask = np.ones(assembled.shape, dtype=bool)
         assembled = gcn(assembled)
         assembled = fill_gaps_after_gcn(assembled, desc, mask=valid_mask)
