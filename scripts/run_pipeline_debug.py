@@ -133,7 +133,7 @@ def _process_frame(
 
     # ── Step 2: Geometry ───────────────────────────────────────────────────────
     desc = read_detector_description(cxi_path)
-    if desc == "Jungfrau 4M":
+    if "JUNGFRAU" in desc.upper():
         _log(2, "Geometry", f"{desc}  (pre-assembled — skipping Reborn assembly)")
         pads = assembler = None
     else:

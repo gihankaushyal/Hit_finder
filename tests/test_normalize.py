@@ -7,12 +7,11 @@ import pytest
 
 from src.preprocessing.normalize import GCN_EPSILON, LCN_EPSILON, gcn, lcn
 
-_RNG = np.random.default_rng(0)
 _H, _W = 64, 64
 
 
-def _random_image(h: int = _H, w: int = _W) -> np.ndarray:
-    return _RNG.standard_normal((h, w)).astype(np.float32)
+def _random_image(h: int = _H, w: int = _W, seed: int = 0) -> np.ndarray:
+    return np.random.default_rng(seed).standard_normal((h, w)).astype(np.float32)
 
 
 # ---------------------------------------------------------------------------
@@ -51,7 +50,8 @@ class TestGCN:
         a = gcn(np.ones((_H, _W)) * 1.0)
         b = gcn(np.ones((_H, _W)) * 2.0)
         # Both uniform → both zero after GCN, but let's test non-uniform
-        img1 = _RNG.standard_normal((_H, _W))
+        rng = np.random.default_rng(7)
+        img1 = rng.standard_normal((_H, _W))
         img2 = img1 * 2 + 3
         # Linear transform → GCN output should be identical (scale/shift invariant)
         assert np.allclose(gcn(img1), gcn(img2), atol=1e-6)

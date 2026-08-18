@@ -139,10 +139,14 @@ def random_cutout(
     """
     result = image.copy()
     h, w = image.shape[:2]
+    h_range = h - hole_size + 1
+    w_range = w - hole_size + 1
     for _ in range(n_holes):
+        if h_range <= 0 or w_range <= 0:
+            break  # image smaller than one hole in some dimension; skip all holes
         for _try in range(max_tries if avoid is not None else 1):
-            top = int(rng.integers(0, max(1, h - hole_size + 1)))
-            left = int(rng.integers(0, max(1, w - hole_size + 1)))
+            top = int(rng.integers(0, h_range))
+            left = int(rng.integers(0, w_range))
             if avoid is not None:
                 r0 = max(0, top - avoid_margin)
                 c0 = max(0, left - avoid_margin)
