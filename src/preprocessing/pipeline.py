@@ -89,6 +89,9 @@ def assemble_only(
 # Valid-pixel masks cached per detector description (built once per process).
 _MASK_CACHE: dict[str, np.ndarray] = {}
 _MASK_WARNED: set[str] = set()
+# Per-(desc, frame_shape) cache so two files with the same detector description
+# but different assembled canvas sizes each get their own validated entry.
+_FRAME_MASK_CACHE: dict[tuple[str | None, tuple[int, ...]], np.ndarray | None] = {}
 
 # Panel-edge pixels are physically larger on JUNGFRAU/Eiger sensors and collect
 # more charge (measured: JF border pixels ~33% brighter than interior). They are
@@ -161,30 +164,45 @@ def get_valid_mask_for_frame(
     returns None (warning once per detector) if the description is missing,
     the geometry is unavailable, or the mask shape does not match the frame.
     Masks are never guessed from pixel values.
+
+    Results are cached per (detector_desc, frame_shape) so two CXI files with
+    the same detector description but different assembled canvas sizes each get
+    their own validated entry rather than colliding on the shape-mismatch path.
     """
+    cache_key: tuple[str | None, tuple[int, ...]] = (detector_desc, frame_shape)
+    if cache_key in _FRAME_MASK_CACHE:
+        return _FRAME_MASK_CACHE[cache_key]
+
+    result: np.ndarray | None
     if detector_desc is None:
-        return None
-    try:
-        mask = valid_pixel_mask(detector_desc)
-    except (ValueError, KeyError, OSError) as exc:
-        if detector_desc not in _MASK_WARNED:
-            _MASK_WARNED.add(detector_desc)
-            warnings.warn(
-                f"get_valid_mask_for_frame: no valid-pixel mask for "
-                f"'{detector_desc}' ({exc}); mask-aware steps skipped.",
-                stacklevel=2,
-            )
-        return None
-    if mask.shape != frame_shape:
-        if detector_desc not in _MASK_WARNED:
-            _MASK_WARNED.add(detector_desc)
-            warnings.warn(
-                f"get_valid_mask_for_frame: mask shape {mask.shape} != frame "
-                f"shape {frame_shape} for '{detector_desc}'; mask-aware steps skipped.",
-                stacklevel=2,
-            )
-        return None
-    return mask
+        result = None
+    else:
+        try:
+            mask = valid_pixel_mask(detector_desc)
+        except (ValueError, KeyError, OSError) as exc:
+            if detector_desc not in _MASK_WARNED:
+                _MASK_WARNED.add(detector_desc)
+                warnings.warn(
+                    f"get_valid_mask_for_frame: no valid-pixel mask for "
+                    f"'{detector_desc}' ({exc}); mask-aware steps skipped.",
+                    stacklevel=2,
+                )
+            result = None
+        else:
+            if mask.shape != frame_shape:
+                if detector_desc not in _MASK_WARNED:
+                    _MASK_WARNED.add(detector_desc)
+                    warnings.warn(
+                        f"get_valid_mask_for_frame: mask shape {mask.shape} != frame "
+                        f"shape {frame_shape} for '{detector_desc}'; mask-aware steps skipped.",
+                        stacklevel=2,
+                    )
+                result = None
+            else:
+                result = mask
+
+    _FRAME_MASK_CACHE[cache_key] = result
+    return result
 
 
 def fill_gaps_after_gcn(
