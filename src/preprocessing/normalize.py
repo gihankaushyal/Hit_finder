@@ -70,14 +70,19 @@ def lcn(
         local_sq_mean = uniform_filter(image**2, size=window)
     else:
         m = mask.astype(np.float64)
+        # Zero invalid pixels before convolution: NaN * 0.0 = NaN (IEEE 754),
+        # so multiplying by m is unsafe when image has NaN at gap locations.
+        # np.where(mask, image, 0.0) correctly returns 0.0 where mask=False
+        # regardless of the image value there (no NaN propagation).
+        image_clean = np.where(mask, image, 0.0)
         count = np.maximum(
             uniform_filter(m, size=window, mode="constant", cval=0), 1e-12
         )
         local_mean = (
-            uniform_filter(image * m, size=window, mode="constant", cval=0) / count
+            uniform_filter(image_clean, size=window, mode="constant", cval=0) / count
         )
         local_sq_mean = (
-            uniform_filter(image**2 * m, size=window, mode="constant", cval=0) / count
+            uniform_filter(image_clean**2, size=window, mode="constant", cval=0) / count
         )
     local_var = np.maximum(local_sq_mean - local_mean**2, 0.0)
     out = (image - local_mean) / np.sqrt(local_var + eps)

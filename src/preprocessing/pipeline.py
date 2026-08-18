@@ -179,7 +179,7 @@ def get_valid_mask_for_frame(
     else:
         try:
             mask = valid_pixel_mask(detector_desc)
-        except (ValueError, KeyError, OSError) as exc:
+        except (ValueError, KeyError, OSError, AttributeError) as exc:
             if detector_desc not in _MASK_WARNED:
                 _MASK_WARNED.add(detector_desc)
                 warnings.warn(

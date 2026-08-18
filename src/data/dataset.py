@@ -237,7 +237,15 @@ class AsymmetricCXIDataset(Dataset):
         self._index: list[tuple[Path, int]] = []
         self._labels: list[int] = []
         for p in cxi_paths:
-            arr = read_embedded_labels(p, label_key)
+            try:
+                arr = read_embedded_labels(p, label_key)
+            except (KeyError, OSError) as e:
+                warnings.warn(
+                    f"AsymmetricCXIDataset: cannot read labels from {p}: {e}; "
+                    "file skipped.",
+                    stacklevel=2,
+                )
+                continue
             for i, raw in enumerate(arr):
                 self._index.append((p, i))
                 self._labels.append(int(round(float(raw))))
@@ -256,7 +264,9 @@ class AsymmetricCXIDataset(Dataset):
                 pads = get_geometry(desc)
                 assembler = get_assembler(desc)
                 assembled = assemble_only(frame, pads, desc, assembler=assembler)
-            except (KeyError, OSError):
+            except (ValueError, KeyError, OSError):
+                # ValueError: unrecognised descriptor that slipped past the
+                # JUNGFRAU guard (e.g. novel variant); fall back to _to_2d.
                 assembled = _to_2d(frame)
         else:
             assembled = _to_2d(frame)
