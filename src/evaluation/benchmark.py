@@ -249,7 +249,14 @@ def run_patch_agg(
         # dataset into RAM). Frame reads use the same candidate-key reader as the
         # training path, so eval works for every detector's CXI key layout — not
         # just files whose data lives under entry_1/data_1/data.
-        labels_arr = read_embedded_labels(path, label_key)
+        try:
+            labels_arr = read_embedded_labels(path, label_key)
+        except (KeyError, OSError) as e:
+            warnings.warn(
+                f"run_patch_agg: cannot read labels from {path}: {e}; session skipped.",
+                stacklevel=2,
+            )
+            continue
         try:
             desc = read_detector_description(path)
         except (ValueError, KeyError, OSError) as e:
@@ -266,7 +273,7 @@ def run_patch_agg(
             # so train and eval see identically-assembled images. Detectors with no
             # description (or pre-assembled canvases like Jungfrau 4M) fall back to
             # _to_2d, matching the dataset's own fallback.
-            if desc is not None:
+            if desc is not None and "JUNGFRAU" not in desc.upper():
                 try:
                     pads = get_geometry(desc)
                     assembler = get_assembler(desc)
@@ -283,6 +290,12 @@ def run_patch_agg(
                     detector_desc=desc,
                 )
             except ValueError:
+                warnings.warn(
+                    f"preprocess_eval_patches: no complete patch fits in frame "
+                    f"{frame_idx} of {path} (shape {assembled.shape}); "
+                    "frame excluded from eval metrics.",
+                    stacklevel=2,
+                )
                 continue
 
             patch_tensors = torch.from_numpy(patches_np).unsqueeze(1).to(device)

@@ -61,13 +61,15 @@ class TestFillGapsAfterGCN:
         assert (out == 1.5).all()
 
     def test_shape_mismatch_skips_fill_with_warning(self) -> None:
-        from src.preprocessing.pipeline import fill_gaps_after_gcn
+        from src.preprocessing.pipeline import _MASK_WARNED, fill_gaps_after_gcn
 
+        _MASK_WARNED.discard("<explicit mask>")
         frame = np.full((8, 8), 1.5)
         mask = np.zeros((4, 4), dtype=bool)
         with pytest.warns(UserWarning, match="gap fill skipped"):
             out = fill_gaps_after_gcn(frame, mask=mask)
         assert (out == 1.5).all()
+        _MASK_WARNED.discard("<explicit mask>")
 
     def test_unknown_desc_skips_fill_with_warning(self) -> None:
         from src.preprocessing.pipeline import _MASK_WARNED, fill_gaps_after_gcn
