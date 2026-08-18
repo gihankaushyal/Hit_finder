@@ -217,9 +217,9 @@ def run_patch_agg(
             Currently not used in any computation inside this function.
         device: Torch device string ('cpu' or 'cuda').
         inference_batch_size: Patches per forward pass.
-        aggregation: Frame-score reduction over patches. "max" (default,
-            backward-compatible): max softmax across patches. "vote":
+        aggregation: Frame-score reduction over patches. "vote" (default):
             hit_count/n_patches where hit_count = patches with softmax[:,1] > 0.5.
+            "max": max softmax across patches (kept for backward compat).
 
     Returns:
         dict with keys: ap, auc_roc, f1, threshold.
