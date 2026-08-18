@@ -18,6 +18,16 @@ graphify update .   # after modifying code — AST-only, no API cost
 - Read `graphify-out/GRAPH_REPORT.md` only for full architecture overview.
 - **Subagent write quirk:** spawned subagents cannot write to the project directory — main session must write chunk JSON files manually when running `/graphify` extraction.
 
+### Graph Routing — pick the matching graph for each question
+
+| Topic | Graph | Command |
+|-------|-------|---------|
+| Our training pipeline, datasets, models, preprocessing, augmentation, hitfinders | `graphify-out/` (this repo) | `graphify query "..."` |
+| Reborn internals — PADAssembler, PADGeometry, PADGeometryList, Beam, FrameGetter, detector geometry APIs | `../reborn/graphify-out/` | `cd ../reborn && graphify query "..."` |
+| CXI generation, simulation, CXIWriter, geom_parser, Resonet pipeline | `../Resonet/graphify-out/` | `cd ../Resonet && graphify query "..."` |
+
+**Cross-boundary questions** (e.g. "how does our `assemble_only` connect to reborn's `PADAssembler`"): query the reborn graph first for the API side, then the Hit_finder graph for our usage. Always `cd /data/bioxfel/user/gihan/Hit_finder` back to the project root after querying an external graph.
+
 ---
 
 ## Key Paths — verify before Read
@@ -80,13 +90,14 @@ The comparison between Track 1 and Track 2 is itself a scientific contribution.
 3. Hitfinder (on-the-fly) → locate Bragg spots; derive hit/non-hit label and centroids
 4. Global Contrast Normalization (GCN) on the full assembled frame: I_gcn = (I - μ) / (σ + ε)
 5. Crop to 224×224 — training: hitfinder-guided crop (Path A: centred on random Bragg peak → label=1; Path B: random crop with 50 px clearance from all peaks → label=0); eval: patch-grid tiling of the full GCN'd frame (stride=224, score aggregated per frame with vote or max)
-6. Augmentation (training only): random rot90 → random flip → random cutout
-7. Local Contrast Normalization (LCN) per crop/patch: I_lcn(x,y) = (I(x,y) - μ_W(x,y)) / (σ_W(x,y) + ε)
+6. Geometric augmentation (training only): random rot90 → random flip
+7. Local Contrast Normalization (LCN) per crop/patch: I_lcn(x,y) = (I(x,y) - μ_W(x,y)) / sqrt(σ²_W(x,y) + ε), ε=1e-2 (variance-form ε floors the denominator at 0.1 GCN units — prevents noise explosion on low-variance background patches). LCN is masked: gap/padding/edge pixels (geometry-derived valid-pixel mask, eroded 2 px to drop physically double-size panel-edge pixels) are excluded from μ_W/σ_W and zeroed in the output — prevents halo/ringing at panel boundaries. After GCN, invalid pixels are also filled with 0 (= global mean in GCN units).
+8. Cutout augmentation (training only, AFTER LCN): peak-aware random cutout — 3 holes of 24×24, exact 0 in LCN space so they never enter the local statistics; hole positions rejection-sampled to keep an 8 px margin from every hitfinder centroid so Bragg evidence for label=1 is never occluded; a hole is skipped, not force-placed, after 20 failed draws
 ```
 
 **Critical constraints:**
 - Detector type is ALWAYS read from metadata. Never infer it from image content.
-- GCN on the full assembled frame before crop/tile. Always: GCN(full frame) → crop/tile → augment → LCN. Never reversed.
+- GCN on the full assembled frame before crop/tile. Always: GCN(full frame) → crop/tile → rot90/flip → LCN → cutout. Never reversed.
 - GCN → LCN order is fixed. Never swap them.
 - There is no resize step. 224×224 is achieved via crop only, never downsampling.
 - Pipeline must be bit-for-bit identical across both tracks for fair comparison.
@@ -250,7 +261,7 @@ python src/training/train_supervised.py --config configs/supervised/resnet18.yam
 
 Post-assembly and post-crop: all images are 224 × 224 × 1 (single channel).
 
-**Confirmed preprocessing parameters (Phase 3):** `lcn_window=9` (window=31 causes panel-edge ringing artifacts; 3/9/15 equivalent on non-hit frames; 9 is the smallest safe choice).
+**Confirmed preprocessing parameters:** `lcn_window=9` (Phase 3 ablation: window=31 causes panel-edge ringing artifacts; 3/9/15 equivalent on non-hit frames; 9 is the smallest safe choice); `lcn_eps=1e-2` in variance form `sqrt(σ²_W + ε)` (Phase 4 ablation, 2026-08-17: std-form ε=1e-6 amplified readout noise to unit variance on background-only patches — salt-and-pepper static on JUNGFRAU non-hits; 1e-2 suppresses it while preserving Bragg peak amplitude); `EDGE_EROSION_PX=2` valid-pixel mask erosion (Phase 4, 2026-08-17: masked LCN via normalized convolution excludes gap/padding pixels from local stats — fixes gap-boundary halos; measured JF panel-edge pixels ~33% brighter than interior, so the mask is eroded 2 px).
 
 ### HDF5 Access Pattern
 
@@ -346,7 +357,7 @@ into scripts or configs.
 
 2. **Preprocessing pipeline is shared and fixed.** Any modification to GCN, LCN, crop, or Reborn geometry handling applies to BOTH tracks. Changes require explicit design review — do not patch one track silently.
 
-3. **GCN on the full assembled frame before crop/tile.** Always: GCN(full frame) → crop/tile → augment → LCN. There is no resize step — 224×224 is achieved via crop only. Non-negotiable.
+3. **GCN on the full assembled frame before crop/tile.** Always: GCN(full frame) → crop/tile → rot90/flip → LCN → cutout (cutout after LCN, as of 2026-08-17). There is no resize step — 224×224 is achieved via crop only. Non-negotiable.
 
 4. **HDF5 files are opened lazily.** Never in `__init__`. Multiprocessing will deadlock otherwise.
 

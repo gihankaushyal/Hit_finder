@@ -16,6 +16,8 @@ from __future__ import annotations
 import os
 from typing import Any
 
+import warnings
+
 import numpy as np
 
 # ---------------------------------------------------------------------------
@@ -27,11 +29,17 @@ WAVELENGTH: float = float(os.environ.get("HITFINDER_WAVELENGTH", 1.3e-10))
 NPT: int = int(os.environ.get("HITFINDER_NPT", 1000))
 POL_FACTOR: float = float(os.environ.get("HITFINDER_POL_FACTOR", 0.99))
 CYCLE: int = int(os.environ.get("HITFINDER_CYCLE", 5))
-CUTOFF_PICK: float = float(os.environ.get("HITFINDER_CUTOFF_PICK", 3.0))
-CUTOFF_PEAK: float = float(os.environ.get("HITFINDER_CUTOFF_PEAK", 3.0))
+CUTOFF_CLIP: float = float(os.environ.get("HITFINDER_CUTOFF_CLIP", 3.0))
+CUTOFF_PEAK: float = float(os.environ.get("HITFINDER_CUTOFF_PEAK", 7.0))
 NOISE: float = float(os.environ.get("HITFINDER_NOISE", 1.0))
-CONNECTED: int = int(os.environ.get("HITFINDER_CONNECTED", 3))
+CONNECTED: int = int(os.environ.get("HITFINDER_CONNECTED", 2))
 PATCH_SIZE: int = int(os.environ.get("HITFINDER_PATCH_SIZE", 3))
+# Absolute intensity floor (ADU) — mirrors NumpyPF8 / PF8 `threshold` param.
+# Peaks whose frame pixel value falls below this are discarded after OCL detection.
+MIN_INTENSITY: float = float(os.environ.get("HITFINDER_MIN_INTENSITY", 800.0))
+# Resolution ring filter (pixels from frame centre). 0 = disabled.
+MIN_RES: int = int(os.environ.get("HITFINDER_MIN_RES", 0))
+MAX_RES: int = int(os.environ.get("HITFINDER_MAX_RES", 0))
 
 # ---------------------------------------------------------------------------
 # Module-level state — rebuilt lazily when geometry or frame shape changes
@@ -111,24 +119,48 @@ def find_peaks(frame: np.ndarray) -> np.ndarray:
         ErrorModel,
     )  # lazy — only reached after _rebuild has run
 
-    res = _pf.peakfinder8(
-        data=frame_clean,
-        error_model=ErrorModel.parse("azimuthal"),
-        polarization=_polarization.array,
-        polarization_checksum=_polarization.checksum,
-        cycle=CYCLE,
-        cutoff_pick=CUTOFF_PICK,
-        cutoff_peak=CUTOFF_PEAK,
-        noise=NOISE,
-        connected=CONNECTED,
-        patch_size=PATCH_SIZE,
-    )
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore", message="Kernel '.*' has been retrieved more than once"
+        )
+        res = _pf.peakfinder8(
+            data=frame_clean,
+            error_model=ErrorModel.parse("azimuthal"),
+            polarization=_polarization.array,
+            polarization_checksum=_polarization.checksum,
+            cycle=CYCLE,
+            cutoff_clip=CUTOFF_CLIP,
+            cutoff_peak=CUTOFF_PEAK,
+            noise=NOISE,
+            connected=CONNECTED,
+            patch_size=PATCH_SIZE,
+        )
 
     if len(res["pos0"]) == 0:
         return np.zeros((0, 2), dtype=np.float32)
 
     # pos0 = row (y), pos1 = col (x) — return as [x, y] to match interface contract.
-    return np.column_stack([res["pos1"], res["pos0"]]).astype(np.float32)
+    peaks = np.column_stack([res["pos1"], res["pos0"]]).astype(np.float32)
+
+    # Absolute intensity gate: mirrors NumpyPF8/PF8 `threshold` parameter.
+    # Sample the frame at each centroid and drop any peak below MIN_INTENSITY ADU.
+    if MIN_INTENSITY > 0.0:
+        rows = np.clip(np.round(peaks[:, 1]).astype(int), 0, frame_clean.shape[0] - 1)
+        cols = np.clip(np.round(peaks[:, 0]).astype(int), 0, frame_clean.shape[1] - 1)
+        peaks = peaks[frame_clean[rows, cols] >= MIN_INTENSITY]
+
+    # Resolution ring filter — mirrors min_res / max_res of PF8 backends.
+    if (MIN_RES > 0 or MAX_RES > 0) and len(peaks) > 0:
+        cy, cx = frame_clean.shape[0] / 2.0, frame_clean.shape[1] / 2.0
+        dist = np.sqrt((peaks[:, 0] - cx) ** 2 + (peaks[:, 1] - cy) ** 2)
+        keep = np.ones(len(peaks), dtype=bool)
+        if MIN_RES > 0:
+            keep &= dist >= MIN_RES
+        if MAX_RES > 0:
+            keep &= dist <= MAX_RES
+        peaks = peaks[keep]
+
+    return peaks
 
 
 # ---------------------------------------------------------------------------
@@ -141,7 +173,7 @@ def _rebuild(frame_shape: tuple[int, int]) -> None:
     global _ctx, _pf, _polarization, _geometry_changed, _last_shape
 
     import pyFAI
-    import pyFAI.detector
+    import pyFAI.detectors
     from pyFAI import units
     from pyFAI.opencl.peak_finder import OCL_PeakFinder
     import pyopencl
@@ -153,10 +185,13 @@ def _rebuild(frame_shape: tuple[int, int]) -> None:
     # Static mask: zeros (no bad-pixel file; overflow handled by zeroing frame_clean).
     static_mask = np.zeros(frame_shape, dtype=bool)
 
-    det = pyFAI.detector.Detector(pixel1=_pixel_size, pixel2=_pixel_size)
+    det = pyFAI.detectors.Detector(pixel1=_pixel_size, pixel2=_pixel_size)
+    det.max_shape = frame_shape  # prevents guess_binning "expected None" warning
     det.mask = static_mask
 
-    ai = pyFAI.AzimuthalIntegrator(
+    from pyFAI.integrator.azimuthal import AzimuthalIntegrator
+
+    ai = AzimuthalIntegrator(
         dist=_dist,
         poni1=poni1,
         poni2=poni2,

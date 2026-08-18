@@ -29,7 +29,12 @@ from src.preprocessing.augment import (
     random_rot90,
 )
 from src.preprocessing.normalize import gcn, lcn
-from src.preprocessing.pipeline import _to_2d, assemble_only
+from src.preprocessing.pipeline import (
+    _to_2d,
+    assemble_only,
+    fill_gaps_after_gcn,
+    get_valid_mask_for_frame,
+)
 
 
 class UnlabeledDataset(Dataset):
@@ -182,9 +187,11 @@ class AsymmetricCXIDataset(Dataset):
       6. Guided crop (224×224) → derived label:
            Path A (peaks found): crop centred on a random Bragg peak → label=1
            Path B (no peaks):    random crop with 50 px clearance from all peaks → label=0
-      7. Augment: random_rot90 → random_flip → random_cutout
-      8. Normalise: LCN (GCN already applied to full frame in step 4)
-      9. Return (tensor(1, 224, 224) float32, derived_label)
+      7. Augment (geometric): random_rot90 → random_flip
+      8. Normalise: masked LCN (GCN already applied to full frame in step 4)
+      9. Augment: peak-aware random_cutout (after LCN — holes are exact 0
+         in LCN space and never enter the local statistics)
+      10. Return (tensor(1, 224, 224) float32, derived_label)
 
     Args:
         session_ids: Session IDs to include.
@@ -230,7 +237,15 @@ class AsymmetricCXIDataset(Dataset):
         self._index: list[tuple[Path, int]] = []
         self._labels: list[int] = []
         for p in cxi_paths:
-            arr = read_embedded_labels(p, label_key)
+            try:
+                arr = read_embedded_labels(p, label_key)
+            except (KeyError, OSError) as e:
+                warnings.warn(
+                    f"AsymmetricCXIDataset: cannot read labels from {p}: {e}; "
+                    "file skipped.",
+                    stacklevel=2,
+                )
+                continue
             for i, raw in enumerate(arr):
                 self._index.append((p, i))
                 self._labels.append(int(round(float(raw))))
@@ -243,13 +258,15 @@ class AsymmetricCXIDataset(Dataset):
         frame = read_frame(path, frame_idx)
 
         # --- Assemble to native resolution ---
-        if path in self._path_to_desc:
-            desc = self._path_to_desc[path]
+        desc = self._path_to_desc.get(path)
+        if desc is not None and "JUNGFRAU" not in desc.upper():
             try:
                 pads = get_geometry(desc)
                 assembler = get_assembler(desc)
                 assembled = assemble_only(frame, pads, desc, assembler=assembler)
             except (ValueError, KeyError, OSError):
+                # ValueError: unrecognised descriptor that slipped past the
+                # JUNGFRAU guard (e.g. novel variant); fall back to _to_2d.
                 assembled = _to_2d(frame)
         else:
             assembled = _to_2d(frame)
@@ -289,14 +306,38 @@ class AsymmetricCXIDataset(Dataset):
         # --- Run hitfinder on raw assembled frame (before GCN) ---
         centroids = self._hitfinder.find_peaks(assembled)  # (N, 2) float32 [x, y]
 
-        # GCN applied to the full assembled frame before padding/crop.
+        # GCN applied to the full assembled frame before padding/crop; then gap/
+        # padding/edge pixels are set to 0 (= global mean in GCN units) and
+        # tracked in a valid-pixel mask so LCN can exclude them from local stats.
+        valid_mask = get_valid_mask_for_frame(desc, assembled.shape)
+        if valid_mask is None:
+            warnings.warn(
+                f"No valid-pixel mask for desc={desc!r} shape={assembled.shape}; "
+                "gap fill and masked LCN disabled for this frame.",
+                stacklevel=2,
+            )
+            valid_mask = np.ones(assembled.shape, dtype=bool)
         assembled = gcn(assembled)
+        assembled = fill_gaps_after_gcn(assembled, desc, mask=valid_mask)
 
         # --- Pad and shift centroids into padded coordinate frame ---
-        padded = pad_border(assembled)
+        # Image, valid-pixel mask, and a peak-protection map are stacked
+        # (H, W, 3) so every geometric op (crop, rot90, flip) transforms all
+        # three with the same random draws. The protection map marks hitfinder
+        # centroids so cutout never occludes the Bragg evidence for label=1
+        # (no coordinate transforms needed — the channel travels with the image).
         centroids = centroids + PAD_BORDER_DEFAULT
+        padded_img = pad_border(assembled)
+        peak_protect = np.zeros(padded_img.shape, dtype=np.float64)
+        for x, y in centroids:
+            r, c = int(round(float(y))), int(round(float(x)))
+            if 0 <= r < peak_protect.shape[0] and 0 <= c < peak_protect.shape[1]:
+                peak_protect[r, c] = 1.0
+        padded = np.dstack(
+            [padded_img, pad_border(valid_mask.astype(np.float64)), peak_protect]
+        )
 
-        ph, pw = padded.shape
+        ph, pw = padded.shape[:2]
         rng = np.random.default_rng(self._seed + idx)
 
         _CROP = 224
@@ -324,13 +365,22 @@ class AsymmetricCXIDataset(Dataset):
                 return None
             derived_label = 0
 
-        # --- Augmentation: rot90 → flip → cutout ---
+        # --- Augmentation + normalisation: rot90 → flip → LCN → cutout ---
         crop = random_rot90(crop, rng)
         crop = random_flip(crop, rng)
-        crop = random_cutout(crop, rng)
 
-        # --- Normalisation: LCN (GCN already applied to full frame above) ---
-        crop = lcn(crop)
+        crop_img = crop[:, :, 0]
+        crop_mask = crop[:, :, 1] > 0.5
+        crop_protect = crop[:, :, 2] > 0.5
 
-        tensor = torch.from_numpy(np.ascontiguousarray(crop)).unsqueeze(0).float()
+        # Masked LCN before cutout (GCN already applied to full frame above),
+        # so holes never enter the local statistics.
+        crop_img = lcn(crop_img, mask=crop_mask)
+
+        # Peak-aware cutout after LCN: holes are exact 0 in LCN space; positions
+        # avoid the (co-transformed) peak-protection channel so Bragg evidence
+        # is never erased.
+        crop_img = random_cutout(crop_img, rng, avoid=crop_protect)
+
+        tensor = torch.from_numpy(np.ascontiguousarray(crop_img)).unsqueeze(0).float()
         return tensor, derived_label

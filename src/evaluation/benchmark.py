@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import warnings
 from pathlib import Path
 from typing import Callable
 
@@ -217,9 +218,9 @@ def run_patch_agg(
             Currently not used in any computation inside this function.
         device: Torch device string ('cpu' or 'cuda').
         inference_batch_size: Patches per forward pass.
-        aggregation: Frame-score reduction over patches. "max" (default,
-            backward-compatible): max softmax across patches. "vote":
+        aggregation: Frame-score reduction over patches. "vote" (default):
             hit_count/n_patches where hit_count = patches with softmax[:,1] > 0.5.
+            "max": max softmax across patches (kept for backward compat).
 
     Returns:
         dict with keys: ap, auc_roc, f1, threshold.
@@ -248,10 +249,22 @@ def run_patch_agg(
         # dataset into RAM). Frame reads use the same candidate-key reader as the
         # training path, so eval works for every detector's CXI key layout — not
         # just files whose data lives under entry_1/data_1/data.
-        labels_arr = read_embedded_labels(path, label_key)
+        try:
+            labels_arr = read_embedded_labels(path, label_key)
+        except (KeyError, OSError) as e:
+            warnings.warn(
+                f"run_patch_agg: cannot read labels from {path}: {e}; session skipped.",
+                stacklevel=2,
+            )
+            continue
         try:
             desc = read_detector_description(path)
-        except (ValueError, KeyError, OSError):
+        except (ValueError, KeyError, OSError) as e:
+            warnings.warn(
+                f"detector desc unavailable for {path}: {e}; "
+                "eval LCN will be unmasked (train/eval distribution mismatch).",
+                stacklevel=2,
+            )
             desc = None
 
         for frame_idx in range(len(labels_arr)):
@@ -260,7 +273,7 @@ def run_patch_agg(
             # so train and eval see identically-assembled images. Detectors with no
             # description (or pre-assembled canvases like Jungfrau 4M) fall back to
             # _to_2d, matching the dataset's own fallback.
-            if desc is not None:
+            if desc is not None and "JUNGFRAU" not in desc.upper():
                 try:
                     pads = get_geometry(desc)
                     assembler = get_assembler(desc)
@@ -271,9 +284,18 @@ def run_patch_agg(
                 assembled = _to_2d(frame)
             try:
                 patches_np = preprocess_eval_patches(
-                    assembled, patch_size=patch_size, stride=patch_stride
+                    assembled,
+                    patch_size=patch_size,
+                    stride=patch_stride,
+                    detector_desc=desc,
                 )
             except ValueError:
+                warnings.warn(
+                    f"preprocess_eval_patches: no complete patch fits in frame "
+                    f"{frame_idx} of {path} (shape {assembled.shape}); "
+                    "frame excluded from eval metrics.",
+                    stacklevel=2,
+                )
                 continue
 
             patch_tensors = torch.from_numpy(patches_np).unsqueeze(1).to(device)

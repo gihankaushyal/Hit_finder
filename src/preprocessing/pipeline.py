@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 
 from reborn.detector import PADAssembler, PADGeometryList
@@ -84,11 +86,166 @@ def assemble_only(
     return assembler.assemble_data(flat).astype(np.float32)
 
 
+# Valid-pixel masks cached per detector description (built once per process).
+_MASK_CACHE: dict[str, np.ndarray] = {}
+_MASK_WARNED: set[str] = set()
+# Per-(desc, frame_shape) cache so two files with the same detector description
+# but different assembled canvas sizes each get their own validated entry.
+_FRAME_MASK_CACHE: dict[tuple[str | None, tuple[int, ...]], np.ndarray | None] = {}
+
+# Panel-edge pixels are physically larger on JUNGFRAU/Eiger sensors and collect
+# more charge (measured: JF border pixels ~33% brighter than interior). They are
+# real signal but not representative — standard SFX practice is to exclude a
+# small panel border, so the valid mask is eroded by this many pixels.
+EDGE_EROSION_PX: int = 2
+
+
+def valid_pixel_mask(detector_desc: str) -> np.ndarray:
+    """Boolean mask of assembled-canvas pixels covered by real detector panels.
+
+    Built by assembling an all-ones flat array through the same PADAssembler
+    used for data, so coverage exactly matches the runtime assembly. Gap and
+    padding pixels (never written by any panel) come out False. Pixel-value
+    heuristics (e.g. ``pixel == 0``) are deliberately avoided — zero is a
+    legitimate value in photon-counting backgrounds.
+
+    Args:
+        detector_desc: CXI detector description, e.g. 'AGIPD 1M', 'EIGER 4M',
+            'Jungfrau 4M' (routed through its CrystFEL geometry since the
+            frame itself arrives pre-assembled).
+
+    The mask is then eroded by EDGE_EROSION_PX so physically double-size
+    panel-edge pixels (genuinely brighter, but unrepresentative) are also
+    treated as invalid.
+
+    Returns:
+        Boolean array with the assembled canvas shape, cached per description.
+
+    Raises:
+        ValueError: If detector_desc is unrecognised.
+    """
+    from scipy.ndimage import binary_erosion
+
+    from src.preprocessing.geometry import DETECTOR_LOADERS, get_assembler, get_geometry
+
+    if detector_desc in _MASK_CACHE:
+        return _MASK_CACHE[detector_desc]
+
+    if detector_desc == "Jungfrau 4M":
+        # Pre-assembled canvas: PADAssembler is not usable for this geometry
+        # (its flat_indices/n_pixels disagree), but each CrystFEL panel carries
+        # parent_data_slice — its slab in the canvas the frames arrive in.
+        pads = DETECTOR_LOADERS["JUNGFRAU_4M"]()
+        slices = [p.parent_data_slice for p in pads]
+        h = max(s[0].stop for s in slices)
+        w = max(s[1].stop for s in slices)
+        mask = np.zeros((h, w), dtype=bool)
+        for s in slices:
+            mask[s] = True
+    else:
+        pads = get_geometry(detector_desc)
+        assembler = get_assembler(detector_desc)
+        n_pixels = int(sum(int(p.n_fs) * int(p.n_ss) for p in pads))
+        coverage = assembler.assemble_data(np.ones(n_pixels, dtype=np.float32))
+        mask = np.asarray(coverage) > 0.5
+    if EDGE_EROSION_PX > 0:
+        mask = binary_erosion(mask, iterations=EDGE_EROSION_PX)
+    _MASK_CACHE[detector_desc] = mask
+    return mask
+
+
+def get_valid_mask_for_frame(
+    detector_desc: str | None,
+    frame_shape: tuple[int, ...],
+) -> np.ndarray | None:
+    """Return the valid-pixel mask for a frame, or None when unavailable.
+
+    Wraps valid_pixel_mask() with the safety checks every call site needs:
+    returns None (warning once per detector) if the description is missing,
+    the geometry is unavailable, or the mask shape does not match the frame.
+    Masks are never guessed from pixel values.
+
+    Results are cached per (detector_desc, frame_shape) so two CXI files with
+    the same detector description but different assembled canvas sizes each get
+    their own validated entry rather than colliding on the shape-mismatch path.
+    """
+    cache_key: tuple[str | None, tuple[int, ...]] = (detector_desc, frame_shape)
+    if cache_key in _FRAME_MASK_CACHE:
+        return _FRAME_MASK_CACHE[cache_key]
+
+    result: np.ndarray | None
+    if detector_desc is None:
+        result = None
+    else:
+        try:
+            mask = valid_pixel_mask(detector_desc)
+        except (ValueError, KeyError, OSError, AttributeError) as exc:
+            if detector_desc not in _MASK_WARNED:
+                _MASK_WARNED.add(detector_desc)
+                warnings.warn(
+                    f"get_valid_mask_for_frame: no valid-pixel mask for "
+                    f"'{detector_desc}' ({exc}); mask-aware steps skipped.",
+                    stacklevel=2,
+                )
+            result = None
+        else:
+            if mask.shape != frame_shape:
+                if detector_desc not in _MASK_WARNED:
+                    _MASK_WARNED.add(detector_desc)
+                    warnings.warn(
+                        f"get_valid_mask_for_frame: mask shape {mask.shape} != frame "
+                        f"shape {frame_shape} for '{detector_desc}'; mask-aware steps skipped.",
+                        stacklevel=2,
+                    )
+                result = None
+            else:
+                result = mask
+
+    _FRAME_MASK_CACHE[cache_key] = result
+    return result
+
+
+def fill_gaps_after_gcn(
+    gcn_frame: np.ndarray,
+    detector_desc: str | None = None,
+    mask: np.ndarray | None = None,
+) -> np.ndarray:
+    """Set detector-gap/padding pixels of a GCN'd frame to 0 (the global mean).
+
+    After GCN the global mean is 0 by construction, so filling invalid pixels
+    with 0 removes the step-function transition at panel/gap boundaries that
+    otherwise produces LCN halo/ringing artifacts — and matches the value used
+    by pad_border. Modifies gcn_frame in place and returns it.
+
+    If no mask is given it is derived from the detector geometry via
+    get_valid_mask_for_frame(). The fill is skipped (frame returned unchanged,
+    one warning per detector) when geometry is unavailable or the mask shape
+    does not match the frame — never guessed from pixel values.
+    """
+    if mask is None:
+        mask = get_valid_mask_for_frame(detector_desc, gcn_frame.shape)
+        if mask is None:
+            return gcn_frame
+    if mask.shape != gcn_frame.shape:
+        key = detector_desc or "<explicit mask>"
+        if key not in _MASK_WARNED:
+            _MASK_WARNED.add(key)
+            warnings.warn(
+                f"fill_gaps_after_gcn: mask shape {mask.shape} != frame shape "
+                f"{gcn_frame.shape} for '{key}'; gap fill skipped.",
+                stacklevel=2,
+            )
+        return gcn_frame
+    gcn_frame[~mask] = 0.0
+    return gcn_frame
+
+
 def preprocess_eval_patches(
     assembled: np.ndarray,
     patch_size: int = TARGET_SIZE[0],
     stride: int | None = None,
     lcn_window: int = LCN_WINDOW_DEFAULT,
+    detector_desc: str | None = None,
 ) -> np.ndarray:
     """GCN the full assembled frame, tile into patches, then LCN each patch.
 
@@ -102,6 +259,10 @@ def preprocess_eval_patches(
         patch_size: Patch side length in pixels (default 224).
         stride: Step between patch origins (default = patch_size, non-overlapping).
         lcn_window: LCN neighbourhood size (default 9, Phase 3 ablation).
+        detector_desc: CXI detector description for gap handling; when given,
+            gap/padding/edge pixels are set to 0 after GCN (fill_gaps_after_gcn)
+            and excluded from LCN local statistics (masked LCN), so windows
+            straddling a panel boundary see only real pixels.
 
     Returns:
         float32 array of shape (N, patch_size, patch_size) where N ≥ 1.
@@ -111,12 +272,20 @@ def preprocess_eval_patches(
     """
     from src.preprocessing.augment import patch_grid
 
+    mask = get_valid_mask_for_frame(detector_desc, assembled.shape)
     gcn_frame = gcn(assembled.astype(np.float32))
+    gcn_frame = fill_gaps_after_gcn(gcn_frame, detector_desc, mask=mask)
     patches = patch_grid(gcn_frame, patch_size, stride)
     if not patches:
         raise ValueError(
             f"preprocess_eval_patches: no complete {patch_size}×{patch_size} "
             f"patch fits in image of shape {assembled.shape}."
         )
-    normed = [lcn(p, window=lcn_window) for p in patches]
+    if mask is not None:
+        mask_patches = patch_grid(mask, patch_size, stride)
+        normed = [
+            lcn(p, window=lcn_window, mask=mp) for p, mp in zip(patches, mask_patches)
+        ]
+    else:
+        normed = [lcn(p, window=lcn_window) for p in patches]
     return np.stack(normed, axis=0).astype(np.float32)

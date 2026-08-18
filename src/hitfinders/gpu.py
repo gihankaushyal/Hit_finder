@@ -71,6 +71,30 @@ class GPUHitfinder:
         if hasattr(self._mod, "set_geometry"):
             self._mod.set_geometry(**kwargs)  # type: ignore[union-attr]
 
+    def set_params(self, **kwargs) -> None:
+        """Set module-level parameter globals in the hitfinder script.
+
+        Use this to apply shared notebook config to the GPU backend, e.g.::
+
+            gpu_hf.set_params(
+                MIN_INTENSITY=MIN_ADU,
+                CONNECTED=MIN_PIX,
+                MIN_RES=MIN_RES,
+                MAX_RES=MAX_RES,
+                CUTOFF_PEAK=GPU_CUTOFF_PEAK,
+            )
+
+        Raises AttributeError if the script does not expose the named global.
+        """
+        if self._mod is None:
+            self._load()
+        for key, value in kwargs.items():
+            if not hasattr(self._mod, key):
+                raise AttributeError(
+                    f"gpu_pf8 script has no module-level parameter '{key}'"
+                )
+            setattr(self._mod, key, value)
+
     def find_peaks(self, assembled: np.ndarray) -> np.ndarray:
         """Locate peaks using the user-provided GPU hitfinder script.
 

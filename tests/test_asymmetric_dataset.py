@@ -44,7 +44,7 @@ def synthetic_cxi(tmp_path_factory: pytest.TempPathFactory) -> Path:
         f.create_dataset(DATA_KEY, data=frames)
         f.create_dataset(LABEL_KEY, data=labels)
         det_grp = f.require_group("entry_1/instrument_1/detector_1")
-        det_grp.create_dataset("description", data=np.bytes_(b"EIGER 4M"))
+        det_grp.create_dataset("description", data=np.bytes_(b"Jungfrau 4M"))
         det_grp.create_dataset("distance", data=np.float64(0.1))
         det_grp.create_dataset("x_pixel_size", data=np.float64(1e-4))
         src_grp = f.require_group("entry_1/instrument_1/source_1")

@@ -7,12 +7,11 @@ import pytest
 
 from src.preprocessing.normalize import GCN_EPSILON, LCN_EPSILON, gcn, lcn
 
-_RNG = np.random.default_rng(0)
 _H, _W = 64, 64
 
 
-def _random_image(h: int = _H, w: int = _W) -> np.ndarray:
-    return _RNG.standard_normal((h, w)).astype(np.float32)
+def _random_image(h: int = _H, w: int = _W, seed: int = 0) -> np.ndarray:
+    return np.random.default_rng(seed).standard_normal((h, w)).astype(np.float32)
 
 
 # ---------------------------------------------------------------------------
@@ -51,7 +50,8 @@ class TestGCN:
         a = gcn(np.ones((_H, _W)) * 1.0)
         b = gcn(np.ones((_H, _W)) * 2.0)
         # Both uniform → both zero after GCN, but let's test non-uniform
-        img1 = _RNG.standard_normal((_H, _W))
+        rng = np.random.default_rng(7)
+        img1 = rng.standard_normal((_H, _W))
         img2 = img1 * 2 + 3
         # Linear transform → GCN output should be identical (scale/shift invariant)
         assert np.allclose(gcn(img1), gcn(img2), atol=1e-6)
@@ -91,6 +91,40 @@ class TestLCN:
         out_small = lcn(img, window=3)
         out_large = lcn(img, window=31)
         assert not np.allclose(out_small, out_large)
+
+    def test_masked_output_zero_at_invalid_pixels(self) -> None:
+        img = _random_image()
+        mask = np.ones((_H, _W), dtype=bool)
+        mask[:, 20:30] = False
+        out = lcn(img, mask=mask)
+        assert (out[:, 20:30] == 0.0).all()
+        assert np.isfinite(out).all()
+
+    def test_masked_stats_ignore_gap_plateau(self) -> None:
+        # A deep constant plateau in the gap must not bleed into the local
+        # stats of neighbouring valid pixels (the halo bug): masked output
+        # near the gap should match a gap-free reference away from edges.
+        rng = np.random.default_rng(1)
+        img = rng.normal(0.0, 1.0, size=(_H, _W))
+        img_gapped = img.copy()
+        img_gapped[:, 30:34] = -50.0  # gap plateau
+        mask = np.ones((_H, _W), dtype=bool)
+        mask[:, 30:34] = False
+        out_masked = lcn(img_gapped, mask=mask)
+        out_ref = lcn(img)
+        # columns adjacent to the gap, excluding the gap itself
+        np.testing.assert_allclose(out_masked[:, 36:40], out_ref[:, 36:40], atol=0.35)
+        # unmasked LCN on the gapped image deviates far more there
+        out_plain = lcn(img_gapped)
+        assert np.abs(out_plain[:, 34:36] - out_ref[:, 34:36]).max() > 1.0
+
+    def test_low_variance_noise_not_amplified(self) -> None:
+        # Near-constant background + tiny readout noise must NOT be inflated
+        # to unit variance (the old std-form eps=1e-6 salt-and-pepper bug).
+        rng = np.random.default_rng(0)
+        noise = rng.normal(0.0, 0.01, size=(_H, _W))
+        out = lcn(noise)
+        assert out.std() < 0.5
 
 
 # ---------------------------------------------------------------------------
