@@ -84,15 +84,17 @@ def test_pf8_ctypes_finds_bright_spot():
     from src.hitfinders.pf8 import PF8Hitfinder
 
     frame = _make_sfx_frame(0)
-    frame[254:259, 254:259] = 2000.0
+    # Spot placed off-centre: PF8 silently drops peaks at lab coords (0,0)
+    # (exactly on the beam axis) — a known CrystFEL 0.12.0 edge case.
+    frame[150:155, 150:155] = 2000.0
     hf = PF8Hitfinder(threshold=500.0, min_snr=3.0)
     peaks = hf.find_peaks(frame)
     assert peaks.shape[1] == 2
     assert peaks.dtype == np.float32
     assert len(peaks) >= 1
     cx, cy = peaks[0, 0], peaks[0, 1]
-    assert abs(cx - 256.0) < 5.0
-    assert abs(cy - 256.0) < 5.0
+    assert abs(cx - 152.0) < 5.0
+    assert abs(cy - 152.0) < 5.0
 
 
 @pytest.mark.skipif(
@@ -337,7 +339,9 @@ def test_gpu_pf8_find_peaks_returns_correct_shape():
         gpu_pf8._geometry_changed = False
         gpu_pf8._last_shape = (512, 512)
 
-        frame = np.full((512, 512), 50.0, dtype=np.float32)
+        # Frame value must exceed MIN_INTENSITY (800 ADU) so the intensity gate
+        # passes when sampling the mocked peak centroids from the frame.
+        frame = np.full((512, 512), 1000.0, dtype=np.float32)
         peaks = gpu_pf8.find_peaks(frame)
 
         assert peaks.shape == (2, 2)
