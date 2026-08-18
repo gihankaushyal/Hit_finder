@@ -144,10 +144,10 @@ class PF8HitfinderPythonWrapper:
             data,
             mask,
             pix_r,
-            w,               # asic_nx — fast-scan width (columns)
-            h,               # asic_ny — slow-scan height (rows)
-            1,               # nasics_x — single assembled panel
-            1,               # nasics_y
+            w,  # asic_nx — fast-scan width (columns)
+            h,  # asic_ny — slow-scan height (rows)
+            1,  # nasics_x — single assembled panel
+            1,  # nasics_y
             self._threshold,
             self._min_snr,
             self._min_pix,
@@ -159,10 +159,12 @@ class PF8HitfinderPythonWrapper:
             return np.zeros((0, 2), dtype=np.float32)
 
         # peak_x = fast-scan (col = x), peak_y = slow-scan (row = y).
-        peaks = np.column_stack([
-            np.asarray(peak_x, dtype=np.float32),
-            np.asarray(peak_y, dtype=np.float32),
-        ])
+        peaks = np.column_stack(
+            [
+                np.asarray(peak_x, dtype=np.float32),
+                np.asarray(peak_y, dtype=np.float32),
+            ]
+        )
 
         # Optional resolution ring filter (not a peakfinder_8 param — applied here).
         if self._min_res > 0 or self._max_res > 0:

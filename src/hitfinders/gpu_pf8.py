@@ -16,6 +16,8 @@ from __future__ import annotations
 import os
 from typing import Any
 
+import warnings
+
 import numpy as np
 
 # ---------------------------------------------------------------------------
@@ -117,18 +119,22 @@ def find_peaks(frame: np.ndarray) -> np.ndarray:
         ErrorModel,
     )  # lazy — only reached after _rebuild has run
 
-    res = _pf.peakfinder8(
-        data=frame_clean,
-        error_model=ErrorModel.parse("azimuthal"),
-        polarization=_polarization.array,
-        polarization_checksum=_polarization.checksum,
-        cycle=CYCLE,
-        cutoff_clip=CUTOFF_CLIP,
-        cutoff_peak=CUTOFF_PEAK,
-        noise=NOISE,
-        connected=CONNECTED,
-        patch_size=PATCH_SIZE,
-    )
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore", message="Kernel '.*' has been retrieved more than once"
+        )
+        res = _pf.peakfinder8(
+            data=frame_clean,
+            error_model=ErrorModel.parse("azimuthal"),
+            polarization=_polarization.array,
+            polarization_checksum=_polarization.checksum,
+            cycle=CYCLE,
+            cutoff_clip=CUTOFF_CLIP,
+            cutoff_peak=CUTOFF_PEAK,
+            noise=NOISE,
+            connected=CONNECTED,
+            patch_size=PATCH_SIZE,
+        )
 
     if len(res["pos0"]) == 0:
         return np.zeros((0, 2), dtype=np.float32)
@@ -180,9 +186,12 @@ def _rebuild(frame_shape: tuple[int, int]) -> None:
     static_mask = np.zeros(frame_shape, dtype=bool)
 
     det = pyFAI.detectors.Detector(pixel1=_pixel_size, pixel2=_pixel_size)
+    det.max_shape = frame_shape  # prevents guess_binning "expected None" warning
     det.mask = static_mask
 
-    ai = pyFAI.AzimuthalIntegrator(
+    from pyFAI.integrator.azimuthal import AzimuthalIntegrator
+
+    ai = AzimuthalIntegrator(
         dist=_dist,
         poni1=poni1,
         poni2=poni2,
