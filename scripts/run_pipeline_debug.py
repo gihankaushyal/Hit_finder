@@ -240,42 +240,33 @@ def _process_frame(
     top = left = 0
 
     if has_peaks:
-        coin = int(rng.integers(0, 2))  # 0 = non-hit path, 1 = hit path
-        if coin == 1:
-            # Path A — hit crop centred on a random Bragg peak.
-            # peaks[:, 0] = x (col), peaks[:, 1] = y (row) — GPUHitfinder/gpu_pf8 convention.
-            peak_i = int(rng.integers(0, len(shifted)))
-            cx = int(round(float(shifted[peak_i, 0])))  # x = column
-            cy = int(round(float(shifted[peak_i, 1])))  # y = row
-            left = int(np.clip(cx - 112, 0, pw - 224))
-            top = int(np.clip(cy - 112, 0, ph - 224))
-            crop: np.ndarray = padded[top : top + 224, left : left + 224].copy()
-            derived_label = 1
-            decision = f"coin=HIT  peak=({cx},{cy})→crop_tl=({top},{left})"
-        else:
-            # Path B — non-hit hard-negative with 50 px clearance from all peaks
-            crop_found = False
-            for _ in range(50):
-                top = int(rng.integers(0, max(1, ph - 224 + 1)))
-                left = int(rng.integers(0, max(1, pw - 224 + 1)))
-                if not _crop_within_margin(top, left, 224, shifted, margin=50):
-                    crop = padded[top : top + 224, left : left + 224].copy()
-                    crop_found = True
-                    break
-            if not crop_found:
-                top = left = 0
-                crop = padded[:224, :224].copy()
-                decision = "coin=NON-HIT  fallback (50 attempts exhausted)"
-            else:
-                decision = f"coin=NON-HIT  crop_tl=({top},{left})"
-            derived_label = 0
+        # Path A — hit crop centred on a random Bragg peak (mirrors AsymmetricCXIDataset).
+        # peaks[:, 0] = x (col), peaks[:, 1] = y (row) — GPUHitfinder/gpu_pf8 convention.
+        peak_i = int(rng.integers(0, len(shifted)))
+        cx = int(round(float(shifted[peak_i, 0])))  # x = column
+        cy = int(round(float(shifted[peak_i, 1])))  # y = row
+        left = int(np.clip(cx - 112, 0, pw - 224))
+        top = int(np.clip(cy - 112, 0, ph - 224))
+        crop: np.ndarray = padded[top : top + 224, left : left + 224].copy()
+        derived_label = 1
+        decision = f"hit  peak=({cx},{cy})→crop_tl=({top},{left})"
     else:
-        # No peaks — forced random non-hit crop (no clearance needed)
-        top = int(rng.integers(0, max(1, ph - 224 + 1)))
-        left = int(rng.integers(0, max(1, pw - 224 + 1)))
-        crop = padded[top : top + 224, left : left + 224].copy()
+        # Path B — no peaks: random crop with 50 px clearance (mirrors AsymmetricCXIDataset).
+        crop_found = False
+        for _ in range(50):
+            top = int(rng.integers(0, max(1, ph - 224 + 1)))
+            left = int(rng.integers(0, max(1, pw - 224 + 1)))
+            if not _crop_within_margin(top, left, 224, shifted, margin=50):
+                crop = padded[top : top + 224, left : left + 224].copy()
+                crop_found = True
+                break
+        if not crop_found:
+            top = left = 0
+            crop = padded[:224, :224].copy()
+            decision = "non-hit  fallback (50 attempts exhausted)"
+        else:
+            decision = f"non-hit  crop_tl=({top},{left})"
         derived_label = 0
-        decision = f"forced-non-hit  crop_tl=({top},{left})"
 
     _log(7, "Crop", f"{decision}  label={derived_label}")
     result.update(
