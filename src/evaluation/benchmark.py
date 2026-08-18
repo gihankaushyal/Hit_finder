@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import warnings
 from pathlib import Path
 from typing import Callable
 
@@ -251,7 +252,12 @@ def run_patch_agg(
         labels_arr = read_embedded_labels(path, label_key)
         try:
             desc = read_detector_description(path)
-        except (ValueError, KeyError, OSError):
+        except (ValueError, KeyError, OSError) as e:
+            warnings.warn(
+                f"detector desc unavailable for {path}: {e}; "
+                "eval LCN will be unmasked (train/eval distribution mismatch).",
+                stacklevel=2,
+            )
             desc = None
 
         for frame_idx in range(len(labels_arr)):
