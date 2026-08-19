@@ -1,18 +1,47 @@
+# Smoke-test config: Eiger4M fold only (--folds 4), 10 epochs.
+# Run with: python scripts/train_asymmetric.py --config configs/supervised/resnet18_resonet.yaml --folds 4
 model:
   backbone: resnet18
   pretrained: true
   num_classes: 2
 
 training:
-  epochs: 100
+  epochs: 10
   learning_rate: 1.0e-4
   early_stopping_patience: 10
 
-wandb:
-  tags: [supervised, resnet18, resonet-cxi]
-
-data:
-  cxi_file: /data/bioxfel/user/gihan/Resonet/cxi_merged_25k.cxi
-  val_fraction: 0.2
-  test_fraction: 0.1
+lodo:
+  detector_dirs:
+    AGIPD:       /data/bioxfel/user/gihan/Resonet/production/agipd_20k
+    JUNGFRAU_4M: /data/bioxfel/user/gihan/Resonet/production/jungfrau_20k
+    ePix10k:     /data/bioxfel/user/gihan/Resonet/production/epix10k_20k
+    Eiger4M:     /data/bioxfel/user/gihan/Resonet/production/eiger4m_20k
+  cxi_pattern: "compressed*.cxi"
   label_key: entry_1/labels/hit
+
+hitfinder:
+  backend: pf8
+  pf8_threshold: 800.0
+  pf8_min_snr: 5.0
+  pf8_min_pix_count: 2
+  pf8_max_pix_count: 200
+  pf8_local_bg_radius: 3
+  pf8_min_res: 0
+  pf8_max_res: 0
+  pf8_use_saturated: false
+  gpu_script_path: ""
+  gpu_device: cuda
+
+asymmetric:
+  hit_frac: 0.5
+  hard_neg_max_attempts: 50
+  n_cutout_holes: 3
+  cutout_hole_size: 32
+
+benchmark:
+  aggregation: vote
+  min_hit_patches: 3
+  patch_stride: 224
+
+wandb:
+  tags: [supervised, resnet18, resonet-smoketest]
