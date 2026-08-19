@@ -8,11 +8,11 @@
 #SBATCH -c 8
 #SBATCH --mem=128G
 #SBATCH --time=12:00:00
-#SBATCH --output=logs/%j.out
-#SBATCH --error=logs/%j.err
+#SBATCH --output=logs/lodo-full-%j.out
+#SBATCH --error=logs/lodo-full-%j.err
 
 module load mamba/latest
-conda activate sfx-hitfinder
+source activate sfx-hitfinder
 
 source .secrets/wandb.env
 

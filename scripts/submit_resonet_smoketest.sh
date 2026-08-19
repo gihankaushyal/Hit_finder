@@ -8,11 +8,11 @@
 #SBATCH --mem=128G
 #SBATCH --time=02:00:00
 #SBATCH --nodelist=scg020
-#SBATCH --output=logs/%j.out
-#SBATCH --error=logs/%j.err
+#SBATCH --output=logs/resonet-smoketest-%j.out
+#SBATCH --error=logs/resonet-smoketest-%j.err
 
 module load mamba/latest
-conda activate sfx-hitfinder
+source activate sfx-hitfinder
 
 source .secrets/wandb.env
 
