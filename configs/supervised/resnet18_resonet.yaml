@@ -1,4 +1,4 @@
-# Smoke-test config: Eiger4M fold only (--folds 4), 10 epochs.
+# Smoke-test config: Eiger4M fold only (--folds 4), 5 epochs.
 # Run with: python scripts/train_asymmetric.py --config configs/supervised/resnet18_resonet.yaml --folds 4
 model:
   backbone: resnet18
@@ -6,7 +6,7 @@ model:
   num_classes: 2
 
 training:
-  epochs: 10
+  epochs: 5
   learning_rate: 1.0e-4
   early_stopping_patience: 10
 
@@ -19,18 +19,6 @@ lodo:
   cxi_pattern: "compressed*.cxi"
   label_key: entry_1/labels/hit
 
-hitfinder:
-  backend: pf8
-  pf8_threshold: 800.0
-  pf8_min_snr: 5.0
-  pf8_min_pix_count: 2
-  pf8_max_pix_count: 200
-  pf8_local_bg_radius: 3
-  pf8_min_res: 0
-  pf8_max_res: 0
-  pf8_use_saturated: false
-  gpu_script_path: ""
-  gpu_device: cuda
 
 asymmetric:
   hit_frac: 0.5

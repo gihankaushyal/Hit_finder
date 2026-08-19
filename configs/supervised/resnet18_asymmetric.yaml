@@ -18,8 +18,8 @@ lodo:
   label_key: entry_1/labels/hit
 
 hitfinder:
-  backend: pf8          # "pf8" (ctypes) | "pf8_numpy" | "gpu" | "mock"
-  # PF8 parameters (used by both "pf8" and "pf8_numpy" backends):
+  backend: pf8          # "pf8" (ctypes) | "pf8_numpy" | "pf8_python" (ssc Cython) | "gpu" | "mock"
+  # PF8 parameters (shared by "pf8", "pf8_numpy", and "pf8_python" backends):
   pf8_threshold: 800.0
   pf8_min_snr: 5.0
   pf8_min_pix_count: 2

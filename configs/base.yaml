@@ -21,6 +21,20 @@ wandb:
   project: sfx-hitfinder
   entity: null  # set per user
 
+hitfinder:
+  # Backend options: "pf8" (default, C bridge), "pf8_numpy", "pf8_python" (ssc Cython), "gpu", "mock"
+  backend: pf8
+  pf8_threshold: 800.0
+  pf8_min_snr: 5.0
+  pf8_min_pix_count: 2
+  pf8_max_pix_count: 200
+  pf8_local_bg_radius: 3
+  pf8_min_res: 0
+  pf8_max_res: 0
+  pf8_use_saturated: false
+  gpu_script_path: ""
+  gpu_device: cuda
+
 benchmark:
   split_seed: 42
   split_ratios: [0.80, 0.10, 0.10]

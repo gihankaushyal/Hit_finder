@@ -6,7 +6,7 @@
 #SBATCH -N 1
 #SBATCH -c 8
 #SBATCH --mem=128G
-#SBATCH --time=02:00:00
+#SBATCH --time=05:00:00
 #SBATCH --nodelist=scg020
 #SBATCH --output=logs/resonet-smoketest-%j.out
 #SBATCH --error=logs/resonet-smoketest-%j.err
