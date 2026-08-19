@@ -1,11 +1,13 @@
 #!/bin/bash
 #SBATCH --job-name=sfx-resonet-smoketest
-#SBATCH --partition=general
-#SBATCH --qos=grp_cxfl
-#SBATCH --gres=gpu:1
-#SBATCH --cpus-per-task=8
+#SBATCH -p general
+#SBATCH -q grp_cxfl
+#SBATCH --gres=gpu:h100:1
+#SBATCH -N 1
+#SBATCH -c 8
 #SBATCH --mem=128G
 #SBATCH --time=02:00:00
+#SBATCH --nodelist=scg020
 #SBATCH --output=logs/%j.out
 #SBATCH --error=logs/%j.err
 
