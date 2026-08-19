@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=sfx-resonet-smoketest
 #SBATCH -p general
-#SBATCH -q grp_cxfl
+#SBATCH -q grp_cxfel
 #SBATCH --gres=gpu:h100:1
 #SBATCH -N 1
 #SBATCH -c 8

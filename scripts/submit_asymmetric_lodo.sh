@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=sfx-lodo-full
 #SBATCH -p general
-#SBATCH -q grp_cxfl
+#SBATCH -q grp_cxfel
 #SBATCH --gres=gpu:h100:1
 #SBATCH --nodelist=scg020
 #SBATCH -N 1
