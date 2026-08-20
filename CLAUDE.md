@@ -207,7 +207,7 @@ mamba env create -f environment.yml -n sfx-hitfinder
 
 # Activate (always in this order)
 module load mamba/latest
-conda activate sfx-hitfinder
+source activate sfx-hitfinder
 ```
 
 **Verify CUDA on a compute node before anything else:**
@@ -219,24 +219,14 @@ python -c "import torch; print(torch.cuda.is_available()); print(torch.version.c
 
 Expected output: `True` followed by the CUDA version. If `False`, fix the environment before writing any training code.
 
-### Minimal SLURM Job Script Template
+### SLURM Job Script Template
 
-```bash
-#!/bin/bash
-#SBATCH --job-name=sfx-hitfinder
-#SBATCH --partition=htc
-#SBATCH --gres=gpu:1
-#SBATCH --cpus-per-task=8
-#SBATCH --mem=64G
-#SBATCH --time=12:00:00
-#SBATCH --output=logs/%j.out
-#SBATCH --error=logs/%j.err
+Use `scripts/templates/slurm_gpu_job.sh` as the canonical template for all new job scripts. It reflects verified working parameters for the grp_cxfel allocation on scg020 (H100). Copy it, replace `<jobname>` and the python command, adjust `--time` for the run length, and submit with `sbatch`.
 
-module load mamba/latest
-conda activate sfx-hitfinder
-
-python src/training/train_supervised.py --config configs/supervised/resnet18.yaml
-```
+Key parameters (do not change without testing):
+- Partition: `general`, QOS: `grp_cxfel`, GRES: `gpu:h100:1`, node: `scg020`
+- Activation: `source activate sfx-hitfinder` (after `module load mamba/latest`)
+- Always `source .secrets/wandb.env` before the training command
 
 ---
 
