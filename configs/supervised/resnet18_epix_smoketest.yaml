@@ -1,0 +1,30 @@
+# Fast intra-detector smoketest: ePix10k only, 3 epochs.
+# Run with: python -u scripts/train_asymmetric.py --config configs/supervised/resnet18_epix_smoketest.yaml --intra
+model:
+  backbone: resnet18
+  pretrained: true
+  num_classes: 2
+
+training:
+  epochs: 3
+  learning_rate: 1.0e-4
+  early_stopping_patience: 5
+
+lodo:
+  detector_dirs:
+    ePix10k: /data/bioxfel/user/gihan/Resonet/production/epix10k_20k
+  cxi_pattern: "compressed*.cxi"
+  label_key: entry_1/labels/hit
+
+asymmetric:
+  hit_frac: 0.5
+  hard_neg_max_attempts: 50
+  n_cutout_holes: 3
+  cutout_hole_size: 32
+
+benchmark:
+  aggregation: vote
+  min_hit_patches: 3
+  patch_stride: 224
+
+wandb: {}

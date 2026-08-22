@@ -17,4 +17,5 @@ source activate sfx-hitfinder
 source .secrets/wandb.env
 
 python scripts/train_asymmetric.py \
-    --config configs/supervised/resnet18_asymmetric.yaml
+    --config configs/supervised/resnet18_asymmetric.yaml \
+    --tags supervised,resnet18,asymmetric-pipeline

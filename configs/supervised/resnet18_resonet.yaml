@@ -31,5 +31,4 @@ benchmark:
   min_hit_patches: 3
   patch_stride: 224
 
-wandb:
-  tags: [supervised, resnet18, resonet-smoketest]
+wandb: {}
