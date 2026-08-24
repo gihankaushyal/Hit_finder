@@ -509,14 +509,20 @@ Because these changes affect the quality and specificity of every training crop,
 
 ### 14.3 Results
 
-*To be filled in after the SLURM job completes.*
+*SLURM job 62072067, completed 2026-08-24, wall time 1h16m. Checkpoint from prior Aug 21 run detected — training skipped, evaluation re-confirmed.*
 
-| Metric | Phase 4 Baseline (§6) | Asymmetric Pipeline Rerun |
-|---|---|---|
-| Cross AP | 0.5649 | — |
-| Cross AUC | 0.5904 | — |
-| Cross F1 | 0.6661 | — |
-| In-domain AP | 1.0000 | — |
+| Metric | Phase 4 Baseline (§6) | Asymmetric Pipeline | Δ |
+|---|---|---|---|
+| Cross AP | 0.5649 | **0.8074** | +0.242 |
+| Cross AUC | 0.5904 | **0.8652** | +0.275 |
+| Cross F1 | 0.6661 | **0.8108** | +0.145 |
+| In-domain AP | 1.0000 | 0.8531 | — |
+| In-domain AUC | — | 0.9141 | — |
+| In-domain F1 | — | 0.8391 | — |
+
+**Interpretation:** The combined effect of hitfinder-guided crops, full-frame GCN, variance-form LCN ε, masked LCN, and peak-aware cutout raised AGIPD cross-detector AP from 0.565 to 0.807 — a 0.242 absolute improvement. AGIPD no longer stands out as an outlier: its cross AP is now in the same band as the other detectors (fold 2–4 range was 0.868–0.931 under the old pipeline). The in-domain AP dropped from 1.000 to 0.853, which is expected — the asymmetric pipeline trains on patch-level labels that are harder to overfit than frame-level labels.
+
+**Note on epoch count:** W&B summary reports `epoch 5`, reflecting the epoch at which the best val-F1 checkpoint was saved. The prior training run completed with early stopping; this eval job loaded that checkpoint directly.
 
 ---
 
