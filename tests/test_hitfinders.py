@@ -43,10 +43,12 @@ def test_get_hitfinder_unknown_backend_raises():
         get_hitfinder(cfg)
 
 
-def test_get_hitfinder_missing_backend_raises():
-    cfg = {"hitfinder": {}}
-    with pytest.raises(ValueError, match="backend.*required"):
-        get_hitfinder(cfg)
+@pytest.mark.skipif(not _PF8_SO.exists(), reason="_pf8_wrap.so not compiled")
+def test_get_hitfinder_default_backend_is_pf8():
+    from src.hitfinders.pf8 import PF8Hitfinder
+
+    hf = get_hitfinder({"hitfinder": {}})
+    assert isinstance(hf, PF8Hitfinder)
 
 
 # ── Protocol ──────────────────────────────────────────────────────────────────

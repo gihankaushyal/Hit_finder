@@ -1,18 +1,34 @@
+# Smoke-test config: Eiger4M fold only (--folds 4), 5 epochs.
+# Run with: python scripts/train_asymmetric.py --config configs/supervised/resnet18_resonet.yaml --folds 4
 model:
   backbone: resnet18
   pretrained: true
   num_classes: 2
 
 training:
-  epochs: 100
+  epochs: 5
   learning_rate: 1.0e-4
   early_stopping_patience: 10
 
-wandb:
-  tags: [supervised, resnet18, resonet-cxi]
-
-data:
-  cxi_file: /data/bioxfel/user/gihan/Resonet/cxi_merged_25k.cxi
-  val_fraction: 0.2
-  test_fraction: 0.1
+lodo:
+  detector_dirs:
+    AGIPD:       /data/bioxfel/user/gihan/Resonet/production/agipd_20k
+    JUNGFRAU_4M: /data/bioxfel/user/gihan/Resonet/production/jungfrau_20k
+    ePix10k:     /data/bioxfel/user/gihan/Resonet/production/epix10k_20k
+    Eiger4M:     /data/bioxfel/user/gihan/Resonet/production/eiger4m_20k
+  cxi_pattern: "compressed*.cxi"
   label_key: entry_1/labels/hit
+
+
+asymmetric:
+  hit_frac: 0.5
+  hard_neg_max_attempts: 50
+  n_cutout_holes: 3
+  cutout_hole_size: 32
+
+benchmark:
+  aggregation: vote
+  min_hit_patches: 3
+  patch_stride: 224
+
+wandb: {}

@@ -44,6 +44,27 @@ from src.training.train_supervised import _set_seeds, train_one_epoch
 from src.utils.config import load_config
 
 
+def _build_intra_split(sessions: list[dict]) -> dict:
+    """80/10/10 greedy split within a single detector — no cross-detector held-out set.
+
+    Mirrors the greedy algorithm in build_session_stratified_split() but assigns
+    every session to train/val/in_domain_test instead of segregating a test detector.
+    """
+    sorted_sessions = sorted(sessions, key=lambda s: s["frame_count"], reverse=True)
+    bucket_names = [SPLIT_TRAIN, SPLIT_VAL, SPLIT_IN_DOMAIN_TEST]
+    ratios = [0.80, 0.10, 0.10]
+    bucket_targets = [r * len(sorted_sessions) for r in ratios]
+    bucket_counts = [0, 0, 0]
+    splits: dict[str, str] = {}
+    for s in sorted_sessions:
+        deficits = [bucket_targets[i] - bucket_counts[i] for i in range(3)]
+        chosen = int(np.argmax(deficits))
+        splits[s["session_id"]] = bucket_names[chosen]
+        bucket_counts[chosen] += 1
+    detector = sorted_sessions[0]["detector"] if sorted_sessions else "unknown"
+    return {"fold": 0, "variant": "intra", "test_detector": detector, "splits": splits}
+
+
 def build_sessions(
     lodo_cfg: dict,
 ) -> tuple[list[dict], dict[str, Path]]:
@@ -275,10 +296,10 @@ def _train_fold(
     # Option 2 fallback: if the checkpoint pre-dates this change or val metrics
     # were degenerate (NaN), fall back to a fixed 0.5 frame-score threshold.
     _saved_thresh = ckpt.get("inference_threshold", float("nan"))
-    inference_threshold: float = (
-        _saved_thresh if not np.isnan(_saved_thresh) else 0.5
+    inference_threshold: float = _saved_thresh if not np.isnan(_saved_thresh) else 0.5
+    print(
+        f"  Inference threshold: {inference_threshold:.4f} (option {'1 — val-set' if not np.isnan(_saved_thresh) else '2 — fixed 0.5'})"
     )
-    print(f"  Inference threshold: {inference_threshold:.4f} (option {'1 — val-set' if not np.isnan(_saved_thresh) else '2 — fixed 0.5'})")
 
     in_domain_m = run_patch_agg(
         model,
@@ -356,8 +377,12 @@ def main(
     config_path: str | Path,
     folds: list[int] | None = None,
     device: str | None = None,
+    intra: bool = False,
+    tags: list[str] | None = None,
 ) -> None:
     cfg = load_config(config_path)
+    if tags is not None:
+        cfg.setdefault("wandb", {})["tags"] = tags
 
     if device is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -384,40 +409,19 @@ def main(
         det_sessions = [s for s in sessions if s["detector"] == det]
         print(f"  {det}: {len(det_sessions)} sessions")
 
-    all_folds = build_lodo_folds()
-    if folds is not None:
-        all_folds = [f for f in all_folds if f["fold_id"] in folds]
-
-    # Guard: detector names in build_lodo_folds() must match the keys in
-    # lodo.detector_dirs, otherwise build_session_stratified_split silently
-    # produces an empty cross-detector split and metrics are meaningless.
-    known_detectors = {s["detector"] for s in sessions}
-    for fold in all_folds:
-        if fold["test_detector"] not in known_detectors:
-            raise ValueError(
-                f"Fold {fold['fold_id']} test_detector={fold['test_detector']!r} "
-                f"not found in sessions (have: {sorted(known_detectors)}). "
-                "Ensure lodo.detector_dirs keys in the YAML match DETECTORS in benchmark.py."
-            )
-
-    # Save split artifacts alongside checkpoints for reproducibility
-    artifacts_dir = Path("checkpoints") / "asymmetric_splits"
-    artifacts_dir.mkdir(parents=True, exist_ok=True)
-
     fold_results: dict[str, dict] = {}
 
-    for fold in all_folds:
-        split_artifact = build_session_stratified_split(
-            sessions,
-            test_detector=fold["test_detector"],
-            fold=fold["fold_id"],
-            seed=cfg["seed"],
-        )
-        save_split_artifact(
-            split_artifact,
-            artifacts_dir / f"fold_{fold['fold_id']}.json",
-        )
-
+    if intra:
+        if len({s["detector"] for s in sessions}) > 1:
+            raise ValueError(
+                "--intra requires exactly one detector in lodo.detector_dirs. "
+                f"Found: {sorted({s['detector'] for s in sessions})}"
+            )
+        split_artifact = _build_intra_split(sessions)
+        fold = {"fold_id": 0, "test_detector": split_artifact["test_detector"]}
+        artifacts_dir = Path("checkpoints") / "intra_splits"
+        artifacts_dir.mkdir(parents=True, exist_ok=True)
+        save_split_artifact(split_artifact, artifacts_dir / "fold_0.json")
         result = _train_fold(
             fold,
             split_artifact,
@@ -427,7 +431,48 @@ def main(
             device,
             num_workers_override=num_workers,
         )
-        fold_results[f"fold_{fold['fold_id']}"] = result
+        fold_results["fold_0"] = result
+    else:
+        all_folds = build_lodo_folds()
+        if folds is not None:
+            all_folds = [f for f in all_folds if f["fold_id"] in folds]
+
+        # Guard: detector names in build_lodo_folds() must match the keys in
+        # lodo.detector_dirs, otherwise build_session_stratified_split silently
+        # produces an empty cross-detector split and metrics are meaningless.
+        known_detectors = {s["detector"] for s in sessions}
+        for fold in all_folds:
+            if fold["test_detector"] not in known_detectors:
+                raise ValueError(
+                    f"Fold {fold['fold_id']} test_detector={fold['test_detector']!r} "
+                    f"not found in sessions (have: {sorted(known_detectors)}). "
+                    "Ensure lodo.detector_dirs keys in the YAML match DETECTORS in benchmark.py."
+                )
+
+        artifacts_dir = Path("checkpoints") / "asymmetric_splits"
+        artifacts_dir.mkdir(parents=True, exist_ok=True)
+
+        for fold in all_folds:
+            split_artifact = build_session_stratified_split(
+                sessions,
+                test_detector=fold["test_detector"],
+                fold=fold["fold_id"],
+                seed=cfg["seed"],
+            )
+            save_split_artifact(
+                split_artifact,
+                artifacts_dir / f"fold_{fold['fold_id']}.json",
+            )
+            result = _train_fold(
+                fold,
+                split_artifact,
+                session_map,
+                cfg,
+                hitfinder,
+                device,
+                num_workers_override=num_workers,
+            )
+            fold_results[f"fold_{fold['fold_id']}"] = result
 
     # Summary table over completed folds
     results_for_table: dict = {}
@@ -463,5 +508,20 @@ if __name__ == "__main__":
         default=None,
         help="Device to use: 'cpu' or 'cuda'. Default: auto-detect.",
     )
+    parser.add_argument(
+        "--intra",
+        action="store_true",
+        help=(
+            "Single-detector mode: 80/10/10 intra-split instead of LODO. "
+            "Requires exactly one detector in lodo.detector_dirs. "
+            "Use for fast smoke tests — no cross-detector generalization is measured."
+        ),
+    )
+    parser.add_argument(
+        "--tags",
+        default=None,
+        help="Comma-separated wandb tags (overrides wandb.tags in the config YAML).",
+    )
     args = parser.parse_args()
-    main(args.config, folds=args.folds, device=args.device)
+    tags = [t.strip() for t in args.tags.split(",")] if args.tags else None
+    main(args.config, folds=args.folds, device=args.device, intra=args.intra, tags=tags)
