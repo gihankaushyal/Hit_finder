@@ -10,6 +10,7 @@ fabio
 black
 pytest
 PyQt5
+pyqtgraph
 scipy
 matplotlib
 scikit-image
