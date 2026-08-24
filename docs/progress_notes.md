@@ -220,10 +220,13 @@ label = 0  if crop is from a hit frame but no centroid within 50 px of any crop 
 Raw CXI frame
   → Reborn geometry assembly → assembled (H, W) float32
   → Hitfinder → peak centroid map [(x₁,y₁), (x₂,y₂), ...]
-  → Sample 224×224 crop (class-balanced, see §10.3)
-  → random_rot90 → random_flip → GCN(patch) → LCN(patch) → random_cutout
+  → GCN(full assembled frame)  [μ/σ from full frame, not from crop]
+  → pad_border → sample 224×224 crop (class-balanced, see §10.3)
+  → random_rot90 → random_flip → LCN(crop, window=9) → peak-aware cutout
   → ResNet18
 ```
+
+*Note: this diagram reflects the corrected pipeline after §11.7 (GCN order fix) and §13 (PR #22 augment-order and cutout placement fixes). Earlier versions of this section incorrectly showed GCN applied per-patch after cropping, and cutout applied before LCN.*
 
 Validation and test use the existing blind grid approach:
 ```
@@ -428,6 +431,92 @@ Both paths now follow: `assemble → GCN(full frame) → pad/tile → crop/patch
 - `src/preprocessing/pipeline.py` — `gcn_frame = gcn(assembled)` before `patch_grid`; per-patch loop now just `lcn(p)`
 
 **Tests:** 44 passed (`test_normalize`, `test_patch_eval`, `test_asymmetric_dataset`).
+
+---
+
+## 13. Phase 4 Preprocessing Fixes (PR #22, 2026-08-17)
+
+Four interconnected bugs in the preprocessing pipeline were identified and fixed in PR #22 (commit `969e3ca`). These changes affect training quality but do not change the pipeline architecture — the `assemble → GCN(full) → crop → augment → LCN → cutout` sequence remains the same.
+
+### 13.1 LCN ε: Variance-Form Denominator
+
+**Before:** `sqrt(σ_W(x,y) + ε)` with `ε = 1e-6`  
+**After:** `sqrt(σ²_W(x,y) + ε)` with `ε = 1e-2`
+
+The original std-form ε floored the denominator at `sqrt(1e-6) ≈ 0.001` GCN units — effectively no floor. On background-only patches (where σ_W ≈ 0), this amplified readout noise to unit variance, producing salt-and-pepper static that was visually confirmed on JUNGFRAU non-hit frames. The variance-form ε=1e-2 floors the denominator at `sqrt(1e-2) = 0.1` GCN units. This suppresses noise amplification on low-variance patches while preserving the normalising effect on patches containing Bragg peaks (where σ_W ≫ 0.1).
+
+**Ablation (2026-08-17):** Std-form ε=1e-6 produced per-patch output variance ≈ 1.0 on background patches; variance-form ε=1e-2 reduced this to ≈ 0.01 on the same patches, matching the expected suppressed-noise regime.
+
+### 13.2 Masked LCN — Gap Halo Fix
+
+**Problem:** Standard LCN with a box filter treats gap pixels (the physical voids between detector panels filled with zeros or constant values) as valid signal. These pixels have systematically different intensities from detector-active pixels. After GCN centres the full frame at zero, gap regions sit at a fixed non-zero offset. The local statistics μ_W and σ_W at panel boundaries incorporate this offset, producing bright or dark halos at panel edges in the LCN output. Measured JUNGFRAU panel-edge pixels were ~33% brighter than panel interior after unmasked LCN.
+
+**Fix:** A binary valid-pixel mask is derived from the detector geometry (pixels that belong to an active sensor region). The mask is eroded inward by 2 px (`EDGE_EROSION_PX = 2`) to drop the double-size physical pixels at panel edges. LCN then uses normalized convolution: only valid pixels contribute to the local mean μ_W and local variance σ²_W. Invalid pixels are set to zero in the LCN output (they were already zero after GCN's invalid-pixel fill). The 2 px erosion is the minimum that eliminates the halo; 1 px was insufficient on the JUNGFRAU panels tested.
+
+### 13.3 Peak-Aware Cutout
+
+**Before:** `random_cutout` placed 3 holes of 24×24 px at uniformly random positions — holes could occlude Bragg peaks in label=1 crops.
+
+**After:** Hole positions are rejection-sampled with an 8 px clearance margin around every Bragg centroid returned by the hitfinder. If a position violates the margin, it is resampled up to 20 times; if no valid position is found after 20 draws, that hole is skipped (not force-placed). This ensures Bragg evidence in label=1 training crops is never occluded, which would have created ambiguous samples (label=1 crop with all diffraction features masked).
+
+Cutout is applied **after LCN** so that the zeroed hole pixels (value exactly 0 in LCN space) never enter the local-statistics computation. The prior code applied cutout before LCN, meaning the zeros bled into μ_W and σ²_W at the hole boundaries.
+
+### 13.4 Augmentation Order Correction
+
+**Before:** `random_rot90 → random_flip → random_cutout → LCN`  
+**After:** `random_rot90 → random_flip → LCN → peak-aware cutout`
+
+Moving cutout after LCN ensures the normalization statistics are computed on the full (un-holes'd) crop. Additionally, with the peak-aware cutout, the centroid coordinates must be transformed by the same rot90/flip applied to the crop image — this is handled by rotating/flipping the centroid list in tandem with the image before passing to `random_cutout`.
+
+### 13.5 Files Changed (PR #22)
+
+| File | Change |
+|---|---|
+| `src/preprocessing/normalize.py` | LCN: variance-form ε; masked normalized convolution via `scipy.ndimage.convolve` with valid-pixel mask |
+| `src/preprocessing/augment.py` | `random_cutout` → `peak_aware_cutout(centroids, margin=8, n_holes=3, hole_size=24, max_attempts=20)` |
+| `src/data/dataset.py` | `AsymmetricCXIDataset.__getitem__`: apply cutout after LCN; pass transformed centroids through rot90/flip |
+| `src/preprocessing/pipeline.py` | `preprocess_eval_patches`: LCN per patch unchanged (eval has no cutout) |
+| `tests/test_normalize.py` | 12 tests for masked LCN, variance-form ε |
+| `tests/test_augmentation.py` | 8 tests for peak-aware cutout margin enforcement |
+| `tests/test_asymmetric_dataset.py` | Updated to verify cutout applied after LCN in training path |
+
+---
+
+## 14. AGIPD LODO Rerun (2026-08-24)
+
+### 14.1 Motivation
+
+The Phase 4 LODO baseline (§6) was obtained with a substantially different pipeline than the one currently in the codebase:
+
+| Aspect | Phase 4 Baseline (§6) | Current Pipeline |
+|---|---|---|
+| Crop strategy | Random crop to 224×224; label inherited from frame | Hitfinder-guided: Path A (centroid-centred, label=1) / Path B (hard-negative, label=0) |
+| GCN application | Per-patch (wrong) | Full assembled frame before cropping |
+| Augmentation order | rot90 → flip → cutout → GCN → LCN (wrong) | rot90 → flip → LCN → peak-aware cutout |
+| LCN ε | std-form, 1e-6 (noise amplification) | variance-form, 1e-2 (noise suppressed) |
+| Masked LCN | No | Yes, 2 px erosion |
+| Peak-aware cutout | No | Yes, 8 px margin, after LCN |
+
+Because these changes affect the quality and specificity of every training crop, the LODO numbers in §6 cannot be attributed to the current pipeline. AGIPD showed the largest generalization gap (cross AP = 0.565), making it the most informative first validation target.
+
+### 14.2 Experimental Setup
+
+- **Config:** `configs/supervised/resnet18_asymmetric.yaml` (unchanged from prior runs; 100 epochs, early-stopping patience 10)
+- **Fold:** 1 only — AGIPD held out for cross-detector evaluation; JUNGFRAU_4M + ePix10k + Eiger4M in training pool
+- **Script:** `scripts/submit_agipd_lodo.sh`
+- **Data:** Resonet production dataset (same source as §6); 20k frames per detector from `/data/bioxfel/user/gihan/Resonet/production/`
+- **Run tag:** `agipd-lodo-rerun`
+
+### 14.3 Results
+
+*To be filled in after the SLURM job completes.*
+
+| Metric | Phase 4 Baseline (§6) | Asymmetric Pipeline Rerun |
+|---|---|---|
+| Cross AP | 0.5649 | — |
+| Cross AUC | 0.5904 | — |
+| Cross F1 | 0.6661 | — |
+| In-domain AP | 1.0000 | — |
 
 ---
 
