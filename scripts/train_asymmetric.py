@@ -101,6 +101,7 @@ def _train_fold(
     hitfinder: Hitfinder,
     device: str,
     num_workers_override: int | None = None,
+    resume_training: bool = False,
 ) -> dict:
     """Train one LODO fold from scratch using asymmetric loader; return metrics."""
     import wandb
@@ -170,7 +171,8 @@ def _train_fold(
     ckpt_dir.mkdir(parents=True, exist_ok=True)
 
     ckpt_path = ckpt_dir / "best.pt"
-    resume_eval_only = ckpt_path.exists()
+    resume_eval_only = ckpt_path.exists() and not resume_training
+    resume_training_from_ckpt = ckpt_path.exists() and resume_training
 
     wandb.init(
         project=cfg["wandb"]["project"],
@@ -199,8 +201,32 @@ def _train_fold(
 
         best_f1 = -1.0
         epochs_no_improve = 0
+        start_epoch = 1
 
-        for epoch in range(1, epochs + 1):
+        if resume_training_from_ckpt:
+            # weights_only=False needed to restore optimizer_state_dict (our own file).
+            _ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
+            model.load_state_dict(_ckpt["model_state_dict"])
+            if "optimizer_state_dict" in _ckpt:
+                optimizer.load_state_dict(_ckpt["optimizer_state_dict"])
+            else:
+                print(
+                    "  Warning: checkpoint has no optimizer state — starting with fresh optimizer."
+                )
+            _saved_f1 = _ckpt.get("val_f1", -1.0)
+            best_f1 = -1.0 if np.isnan(_saved_f1) else _saved_f1
+            start_epoch = _ckpt.get("epoch", 0) + 1
+            print(
+                f"  Resuming training from epoch {start_epoch} "
+                f"(best val F1 so far: {best_f1:.4f})"
+            )
+            if start_epoch > epochs:
+                print(
+                    f"  Warning: checkpoint epoch {start_epoch - 1} >= config epochs {epochs}. "
+                    "Nothing left to train — proceeding to evaluation."
+                )
+
+        for epoch in range(start_epoch, epochs + 1):
             train_m = train_one_epoch(model, train_dl, optimizer, criterion, device)
             val_m = run_patch_agg(
                 model,
@@ -238,6 +264,7 @@ def _train_fold(
                     {
                         "epoch": epoch,
                         "model_state_dict": model.state_dict(),
+                        "optimizer_state_dict": optimizer.state_dict(),
                         "val_f1": best_f1,
                         # Option 1 (default): val-set optimal F1 threshold saved here so
                         # inference can apply `frame_score >= inference_threshold` without
@@ -268,6 +295,7 @@ def _train_fold(
                 {
                     "epoch": epochs,
                     "model_state_dict": model.state_dict(),
+                    "optimizer_state_dict": optimizer.state_dict(),
                     "val_f1": float("nan"),
                     "inference_threshold": float("nan"),
                     "backbone": backbone,
@@ -277,7 +305,9 @@ def _train_fold(
             )
 
     # Evaluate best checkpoint on in-domain and cross-detector test sets
-    ckpt = torch.load(ckpt_path, map_location=device, weights_only=True)
+    # weights_only=False: checkpoints are written by this script and now include
+    # optimizer_state_dict; all values are tensors/primitives but we own the files.
+    ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
     ckpt_backbone = ckpt.get("backbone")
     ckpt_num_classes = ckpt.get("num_classes")
     if ckpt_backbone is not None and ckpt_backbone != backbone:
@@ -379,6 +409,7 @@ def main(
     device: str | None = None,
     intra: bool = False,
     tags: list[str] | None = None,
+    resume_training: bool = False,
 ) -> None:
     cfg = load_config(config_path)
     if tags is not None:
@@ -430,6 +461,7 @@ def main(
             hitfinder,
             device,
             num_workers_override=num_workers,
+            resume_training=resume_training,
         )
         fold_results["fold_0"] = result
     else:
@@ -471,6 +503,7 @@ def main(
                 hitfinder,
                 device,
                 num_workers_override=num_workers,
+                resume_training=resume_training,
             )
             fold_results[f"fold_{fold['fold_id']}"] = result
 
@@ -522,6 +555,23 @@ if __name__ == "__main__":
         default=None,
         help="Comma-separated wandb tags (overrides wandb.tags in the config YAML).",
     )
+    parser.add_argument(
+        "--resume-training",
+        action="store_true",
+        default=False,
+        help=(
+            "When a checkpoint exists, resume training from it instead of skipping to "
+            "evaluation. Restores model weights, optimizer state, and best val F1. "
+            "Has no effect when no checkpoint is present."
+        ),
+    )
     args = parser.parse_args()
     tags = [t.strip() for t in args.tags.split(",")] if args.tags else None
-    main(args.config, folds=args.folds, device=args.device, intra=args.intra, tags=tags)
+    main(
+        args.config,
+        folds=args.folds,
+        device=args.device,
+        intra=args.intra,
+        tags=tags,
+        resume_training=args.resume_training,
+    )
