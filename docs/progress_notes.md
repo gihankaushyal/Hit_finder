@@ -482,47 +482,54 @@ Moving cutout after LCN ensures the normalization statistics are computed on the
 
 ---
 
-## 14. AGIPD LODO Rerun (2026-08-24)
+## 14. Asymmetric Pipeline LODO Results (2026-08-24)
 
-### 14.1 Motivation
+### 14.1 Pipeline Comparison
 
-The Phase 4 LODO baseline (§6) was obtained with a substantially different pipeline than the one currently in the codebase:
+The Phase 4 baseline (§6, 2026-06-27) used a fundamentally different pipeline from the current codebase:
 
-| Aspect | Phase 4 Baseline (§6) | Current Pipeline |
+| Aspect | Phase 4 Baseline (§6) | Asymmetric Pipeline (current) |
 |---|---|---|
-| Crop strategy | Random crop to 224×224; label inherited from frame | Hitfinder-guided: Path A (centroid-centred, label=1) / Path B (hard-negative, label=0) |
-| GCN application | Per-patch (wrong) | Full assembled frame before cropping |
+| Crop strategy | Random crop to 224×224; label from frame | Hitfinder-guided: Path A (centroid-centred, label=1) / Path B (hard-negative, label=0) |
+| GCN application | Per-patch after cropping (wrong) | Full assembled frame before cropping |
 | Augmentation order | rot90 → flip → cutout → GCN → LCN (wrong) | rot90 → flip → LCN → peak-aware cutout |
 | LCN ε | std-form, 1e-6 (noise amplification) | variance-form, 1e-2 (noise suppressed) |
 | Masked LCN | No | Yes, 2 px erosion |
 | Peak-aware cutout | No | Yes, 8 px margin, after LCN |
 
-Because these changes affect the quality and specificity of every training crop, the LODO numbers in §6 cannot be attributed to the current pipeline. AGIPD showed the largest generalization gap (cross AP = 0.565), making it the most informative first validation target.
+Because these changes affect the quality and specificity of every training crop, the §6 numbers cannot be compared directly to the current pipeline.
 
 ### 14.2 Experimental Setup
 
-- **Config:** `configs/supervised/resnet18_asymmetric.yaml` (unchanged from prior runs; 100 epochs, early-stopping patience 10)
-- **Fold:** 1 only — AGIPD held out for cross-detector evaluation; JUNGFRAU_4M + ePix10k + Eiger4M in training pool
-- **Script:** `scripts/submit_agipd_lodo.sh`
-- **Data:** Resonet production dataset (same source as §6); 20k frames per detector from `/data/bioxfel/user/gihan/Resonet/production/`
-- **Run tag:** `agipd-lodo-rerun`
+- **Config:** `configs/supervised/resnet18_asymmetric.yaml` (100 epochs, early-stopping patience 10)
+- **Data:** Resonet production dataset; 20k frames per detector from `/data/bioxfel/user/gihan/Resonet/production/`
+- **Script:** `scripts/submit_all_lodo_folds.sh` (all 4 folds) or `scripts/submit_agipd_lodo.sh` (fold 1 only)
+- **Aggregation:** `scripts/aggregate_lodo_results.py`
 
-### 14.3 Results
+### 14.3 Results — Phase 4 Baseline vs Asymmetric Pipeline
 
-*SLURM job 62072067, completed 2026-08-24, wall time 1h16m. Checkpoint from prior Aug 21 run detected — training skipped, evaluation re-confirmed.*
+#### Phase 4 Baseline (§6) — naive crop + frame-level labels
 
-| Metric | Phase 4 Baseline (§6) | Asymmetric Pipeline | Δ |
-|---|---|---|---|
-| Cross AP | 0.5649 | **0.8074** | +0.242 |
-| Cross AUC | 0.5904 | **0.8652** | +0.275 |
-| Cross F1 | 0.6661 | **0.8108** | +0.145 |
-| In-domain AP | 1.0000 | 0.8531 | — |
-| In-domain AUC | — | 0.9141 | — |
-| In-domain F1 | — | 0.8391 | — |
+| Fold | Held-out | Cross AP | Cross AUC | Cross F1 | In-domain AP |
+|---|---|---|---|---|---|
+| 1 | AGIPD | 0.5649 | 0.5904 | 0.6661 | 1.0000 |
+| 2 | JUNGFRAU_4M | 0.8683 | 0.8156 | 0.7816 | 0.9999 |
+| 3 | ePix10k | 0.8825 | 0.8886 | 0.8092 | 1.0000 |
+| 4 | Eiger4M | 0.9310 | 0.9138 | 0.8189 | 1.0000 |
+| **Mean** | | **0.812 ± 0.167** | | | |
 
-**Interpretation:** The combined effect of hitfinder-guided crops, full-frame GCN, variance-form LCN ε, masked LCN, and peak-aware cutout raised AGIPD cross-detector AP from 0.565 to 0.807 — a 0.242 absolute improvement. AGIPD no longer stands out as an outlier: its cross AP is now in the same band as the other detectors (fold 2–4 range was 0.868–0.931 under the old pipeline). The in-domain AP dropped from 1.000 to 0.853, which is expected — the asymmetric pipeline trains on patch-level labels that are harder to overfit than frame-level labels.
+#### Asymmetric Pipeline — hitfinder-guided crops + all PR #22 fixes
 
-**Note on epoch count:** W&B summary reports `epoch 5`, reflecting the epoch at which the best val-F1 checkpoint was saved. The prior training run completed with early stopping; this eval job loaded that checkpoint directly.
+| Fold | Held-out | Cross AP | Cross AUC | Cross F1 | In-domain AP | Status |
+|---|---|---|---|---|---|---|
+| 1 | AGIPD | **0.8074*** | **0.8652*** | **0.8108*** | 0.8531* | ✅ Eval confirmed (SLURM 62072067, 2026-08-24) |
+| 2 | JUNGFRAU_4M | — | — | — | — | 🔄 Pending full training |
+| 3 | ePix10k | — | — | — | — | 🔄 Pending full training |
+| 4 | Eiger4M | — | — | — | — | 🔄 Pending full training |
+
+*(\*) Computed from a 5-epoch smoketest checkpoint (Aug 21), not a full 100-epoch production run. Direction of improvement is reliable but absolute values will shift after full retraining. Smoketest checkpoints for folds 1 and 4 were deleted on 2026-08-24 to force full retraining via `submit_all_lodo_folds.sh`.*
+
+**Fold 1 preliminary finding:** Even at 5 epochs, hitfinder-guided training raised AGIPD cross AP from 0.565 → 0.807* (+0.242). The AGIPD generalization gap that dominated the §6 mean appears largely closed. In-domain AP dropped from 1.000 → 0.853* as expected — patch-level labels are harder to overfit than frame-level labels. Full 4-fold 100-epoch results pending.
 
 ---
 
