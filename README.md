@@ -70,9 +70,9 @@ The shared pipeline feeds two independent model tracks. The supervised vs. self-
 
 ```mermaid
 flowchart TD
-    PP["Shared Preprocessing Pipeline\nHDF5/CXI → Geometry → GCN → LCN → 224×224\nidentical for both tracks"]
+    PP["Shared Preprocessing Pipeline\nHDF5/CXI → Geometry → GCN → crop 224×224 → LCN\nidentical for both tracks"]
 
-    PP --> T1["Track 1 — Supervised Baseline\nResNet18 → ResNet50\nFine-tuned on labeled hit/non-hit frames\nPretrained weights via timm"]
+    PP --> T1["Track 1 — Supervised Baseline\nResNet18 (asymmetric pipeline)\nHitfinder-guided crop labeling\nPretrained weights via timm"]
     PP --> T2["Track 2 — Self-Supervised (MAE)\nViT Encoder — masked image pretraining\nUnlabeled XFEL frames for pretraining\nClassification head fine-tuned on labels"]
 
     T1 --> E["Cross-Detector Evaluation\nLeave-one-detector-out benchmark\nAGIPD · JUNGFRAU 4M · ePix10k · Eiger4M"]
@@ -83,6 +83,8 @@ flowchart TD
     style T2 fill:#161b22,stroke:#3fb950,color:#c9d1d9
     style E fill:#161b22,stroke:#a371f7,color:#c9d1d9
 ```
+
+> **Key constraint:** 224×224 is achieved via crop only — frames are never downsampled. Normalization order: GCN (full frame) → crop → LCN.
 
 ## Target Detectors
 
