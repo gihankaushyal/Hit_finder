@@ -28,22 +28,41 @@ Current hitfinders are calibrated per-detector. A model trained on AGIPD data at
 All four detector types pass through an **identical, bit-for-bit pipeline** before reaching either model. Detector type is always read from file metadata — never inferred from image content.
 
 ```mermaid
-flowchart LR
+flowchart TD
     A["HDF5 / CXI"] --> B["Detector ID\nfrom metadata"]
-    B --> C["Reborn\nGeometry Assembly"]
-    C --> D["GCN\nGlobal Contrast Norm"]
-    D --> E["LCN\nLocal Contrast Norm"]
-    E --> F["Resize\n224 × 224 px"]
+    B --> C["Reborn Geometry Assembly\n(PADAssembler — all 4 detectors)"]
+    C --> D["GCN — full assembled frame\nI_gcn = (I − μ) / (σ + ε)"]
+    D --> HF["Hitfinder (PF8)\nBragg peak centroids"]
+
+    HF --> TRAIN["TRAINING PATH"]
+    HF --> EVAL["EVAL PATH"]
+
+    TRAIN --> PA["Path A — hit crop\ncentred on random peak centroid\nlabel = 1"]
+    TRAIN --> PB["Path B — hard negative\nrandom crop, 50 px clearance\nlabel = 0"]
+
+    PA --> AUG["rot90 → flip → LCN (window=9)\n→ peak-aware cutout"]
+    PB --> AUG
+
+    EVAL --> GRID["Patch-grid tiling\n224×224, stride=224"]
+    GRID --> ELCN["LCN per patch"]
+    ELCN --> AGG["Vote aggregation\nhit_count / n_patches"]
 
     style A fill:#161b22,stroke:#30363d,color:#c9d1d9
     style B fill:#161b22,stroke:#30363d,color:#c9d1d9
     style C fill:#161b22,stroke:#30363d,color:#c9d1d9
     style D fill:#1f2937,stroke:#58a6ff,color:#c9d1d9
-    style E fill:#1f2937,stroke:#58a6ff,color:#c9d1d9
-    style F fill:#161b22,stroke:#30363d,color:#c9d1d9
+    style HF fill:#1f2937,stroke:#e3b341,color:#c9d1d9
+    style TRAIN fill:#161b22,stroke:#3fb950,color:#c9d1d9
+    style EVAL fill:#161b22,stroke:#a371f7,color:#c9d1d9
+    style PA fill:#161b22,stroke:#3fb950,color:#c9d1d9
+    style PB fill:#161b22,stroke:#3fb950,color:#c9d1d9
+    style AUG fill:#161b22,stroke:#3fb950,color:#c9d1d9
+    style GRID fill:#161b22,stroke:#a371f7,color:#c9d1d9
+    style ELCN fill:#161b22,stroke:#a371f7,color:#c9d1d9
+    style AGG fill:#161b22,stroke:#a371f7,color:#c9d1d9
 ```
 
-> **Key constraint:** Normalization (GCN → LCN) always precedes resize. Resize is for model compatibility only — not detector correction.
+> **Key constraint:** GCN is always computed on the full assembled frame before cropping or tiling — never per-patch.
 
 ### Two-Track Modeling
 
