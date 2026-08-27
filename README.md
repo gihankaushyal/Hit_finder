@@ -93,7 +93,7 @@ The model must generalize across all four detectors without per-detector retrain
 | Detector | Facility | Raw Dimensions | Module Layout |
 |----------|----------|----------------|---------------|
 | `AGIPD` | EuXFEL | 16 × 512 × 128 px | 16 modules |
-| `JUNGFRAU 4M` | LCLS CXI | 8 × 512 × 1024 px | 8 modules |
+| `JUNGFRAU 4M` | LCLS CXI | 8 × 514 × 1030 px | 8 modules |
 | `ePix10k` | LCLS | varies | multiple configurations |
 | `Eiger4M` | Synchrotron / SSX | 2068 × 2162 px | monolithic |
 
