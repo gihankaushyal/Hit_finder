@@ -110,21 +110,37 @@ The model must generalize across all four detectors without per-detector retrain
 | 7 | Deployment preparation | 🔮 Future |
 | 8 | Thesis writing | 🔮 Future |
 
-## Preliminary Results — Phase 4 Supervised Baseline
+## Results — Supervised Learning Baseline (LODO, 4-fold)
 
-ResNet18 trained on 10,000 synthetic SFX frames (`hitfinder_10k`), evaluated on 2,000 held-out frames (`hitfinder_val`). Both sets are pre-assembled 512×512 synthetic Eiger-like images; preprocessing: GCN → LCN (window=9) → crop 224×224.
+Leave-one-detector-out (LODO) cross-detector generalization benchmark. Each fold holds out one detector type entirely from training and evaluates on it at test time. Metrics are computed at the frame level via patch-grid vote aggregation.
 
-| Metric | Score |
-|--------|-------|
-| Average Precision | **0.9998** |
-| AUC-ROC | **0.9998** |
-| F1 (optimal threshold) | **0.9995** |
-| Precision | **1.0000** |
-| Recall | **0.9990** |
+### Phase 4 Naive Baseline — frame-level labels, random crops
 
-Confusion matrix (2000 frames, 50/50 hit rate): TP=989 · FP=0 · FN=1 · TN=1010. Model early-stopped at epoch 22/200 (patience=20). Checkpoint: `checkpoints/resnet18-10k-full-seed42/best.pt`.
+| Fold | Held-out | Cross AP | Cross AUC | Cross F1 |
+|------|----------|----------|-----------|----------|
+| 1 | AGIPD | 0.5649 | 0.5904 | 0.6661 |
+| 2 | JUNGFRAU 4M | 0.8683 | 0.8156 | 0.7816 |
+| 3 | ePix10k | 0.8825 | 0.8886 | 0.8092 |
+| 4 | Eiger4M | 0.9310 | 0.9138 | 0.8189 |
+| **Mean** | | **0.812 ± 0.167** | | |
 
-> These results are in-domain (train and test from the same synthetic distribution). Cross-detector generalization on real detector data is the Phase 6 scientific benchmark.
+The naive pipeline assigned frame-level hit/non-hit labels to all random 224×224 crops — including background crops from hit frames — producing ambiguous training signal. AGIPD cross AP of 0.565 reflects near-random generalization.
+
+### Asymmetric Pipeline Baseline — hitfinder-guided crops + masked LCN
+
+Hitfinder-guided cropping (Path A: centroid-centred, label=1 / Path B: hard-negative, label=0), variance-form masked LCN, and peak-aware cutout replace the naive strategy.
+
+| Fold | Held-out | Cross AP | Cross AUC | Cross F1 | Δ AP |
+|------|----------|----------|-----------|----------|------|
+| 1 | AGIPD | 0.8074 | 0.8652 | 0.8108 | **+0.242** |
+| 2 | JUNGFRAU 4M | 0.8584 | 0.9639 | 0.7570 | −0.010 |
+| 3 | ePix10k | 0.8585 | 0.9106 | 0.8943 | −0.024 |
+| 4 | Eiger4M | 0.8330 | 0.8596 | 0.8138 | −0.098 |
+| **Mean** | | **0.839 ± 0.021** | | | **+0.027** |
+
+- **AGIPD generalization gap largely closed:** 0.565 → 0.807 (+0.242). Hitfinder-guided crops eliminated the spurious panel-edge signal the model previously relied on.
+- **Variance collapsed 8×:** ±0.167 → ±0.021 — the pipeline is now consistently effective across all four detector types.
+- Full per-fold in-domain breakdown → [docs/progress_notes.md §14](docs/progress_notes.md)
 
 ## Setup
 
