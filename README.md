@@ -88,7 +88,7 @@ flowchart TD
 
 ## Target Detectors
 
-The model must generalize across all four detectors without per-detector retraining. Post-assembly, all images are normalized and resized to **224 × 224 × 1** (single channel).
+The model must generalize across all four detectors without per-detector retraining. Post-assembly, all images are normalized and cropped to **224 × 224 × 1** (single channel).
 
 | Detector | Facility | Raw Dimensions | Module Layout |
 |----------|----------|----------------|---------------|
@@ -112,7 +112,7 @@ The model must generalize across all four detectors without per-detector retrain
 
 ## Preliminary Results — Phase 4 Supervised Baseline
 
-ResNet18 trained on 10,000 synthetic SFX frames (`hitfinder_10k`), evaluated on 2,000 held-out frames (`hitfinder_val`). Both sets are pre-assembled 512×512 synthetic Eiger-like images; preprocessing: GCN → LCN (window=9) → resize 224×224.
+ResNet18 trained on 10,000 synthetic SFX frames (`hitfinder_10k`), evaluated on 2,000 held-out frames (`hitfinder_val`). Both sets are pre-assembled 512×512 synthetic Eiger-like images; preprocessing: GCN → LCN (window=9) → crop 224×224.
 
 | Metric | Score |
 |--------|-------|
