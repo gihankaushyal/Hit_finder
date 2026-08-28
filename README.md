@@ -140,7 +140,7 @@ Hitfinder-guided cropping (Path A: centroid-centred, label=1 / Path B: hard-nega
 
 - **AGIPD generalization gap largely closed:** 0.565 → 0.807 (+0.242). Hitfinder-guided crops eliminated the spurious panel-edge signal the model previously relied on.
 - **Variance collapsed 8×:** ±0.167 → ±0.021 — the pipeline is now consistently effective across all four detector types.
-- Full per-fold in-domain breakdown → [docs/progress_notes.md §14](docs/progress_notes.md)
+- Full per-fold in-domain breakdown → [docs/detailed_notes.md](docs/detailed_notes.md)
 
 ## Setup
 
@@ -176,7 +176,7 @@ black src/ tests/
 
 | Document | Contents |
 |----------|----------|
-| [Progress Notes](docs/progress_notes.md) | Full method notes, per-fold LODO results, pipeline decisions |
+| [Detailed Notes](docs/detailed_notes.md) | Full per-fold LODO results with in-domain breakdown, pipeline decisions |
 | [Architecture](docs/architecture.md) | Codebase structure and component design |
 | [Evaluation Protocol](docs/eval_protocol.md) | LODO benchmark design and metrics |
 | [Data Spec](docs/data_spec.md) | HDF5 key reference per detector type |
