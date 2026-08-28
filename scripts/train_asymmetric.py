@@ -215,6 +215,7 @@ def _train_fold(
                 )
             _saved_f1 = _ckpt.get("val_f1", -1.0)
             best_f1 = -1.0 if np.isnan(_saved_f1) else _saved_f1
+            epochs_no_improve = _ckpt.get("epochs_no_improve", 0)
             start_epoch = _ckpt.get("epoch", 0) + 1
             print(
                 f"  Resuming training from epoch {start_epoch} "
@@ -266,6 +267,7 @@ def _train_fold(
                         "model_state_dict": model.state_dict(),
                         "optimizer_state_dict": optimizer.state_dict(),
                         "val_f1": best_f1,
+                        "epochs_no_improve": 0,
                         # Option 1 (default): val-set optimal F1 threshold saved here so
                         # inference can apply `frame_score >= inference_threshold` without
                         # needing labels.  Option 2 fallback: use 0.5 if this is NaN.
@@ -297,6 +299,7 @@ def _train_fold(
                     "model_state_dict": model.state_dict(),
                     "optimizer_state_dict": optimizer.state_dict(),
                     "val_f1": float("nan"),
+                    "epochs_no_improve": patience,
                     "inference_threshold": float("nan"),
                     "backbone": backbone,
                     "num_classes": cfg["model"]["num_classes"],

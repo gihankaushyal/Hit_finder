@@ -11,8 +11,9 @@ Usage:
 
 import argparse
 import json
-import math
 from pathlib import Path
+
+import numpy as np
 
 DETECTOR_ORDER = {1: "AGIPD", 2: "JUNGFRAU_4M", 3: "ePix10k", 4: "Eiger4M"}
 
@@ -26,21 +27,21 @@ def load_results(checkpoints_dir: Path, run_prefix: str) -> list[dict]:
         if fold_id not in DETECTOR_ORDER:
             continue
         cross = data.get("cross", {})
-        if any(v != v for v in cross.values()):  # NaN check
+        _metric_keys = {"ap", "auc_roc", "f1"}
+        if any(
+            cross.get(k, float("nan")) != cross.get(k, float("nan"))
+            for k in _metric_keys
+        ):
+            print(f"  Warning: fold {fold_id} has NaN metrics — skipping.")
             continue
         results.append(data)
     return sorted(results, key=lambda r: r["fold_id"])
 
 
 def mean_std(values: list[float]) -> tuple[float, float]:
-    n = len(values)
-    if n == 0:
+    if len(values) == 0:
         return float("nan"), float("nan")
-    mu = sum(values) / n
-    if n == 1:
-        return mu, float("nan")
-    var = sum((x - mu) ** 2 for x in values) / (n - 1)
-    return mu, math.sqrt(var)
+    return float(np.nanmean(values)), float(np.nanstd(values, ddof=1))
 
 
 def main():
