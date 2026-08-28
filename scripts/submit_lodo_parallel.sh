@@ -9,7 +9,7 @@
 set -euo pipefail
 
 CONFIG="configs/supervised/resnet18_asymmetric.yaml"
-FOLDS="${*:-1 2 3 4}"
+FOLDS="${*:-2 }"
 
 for FOLD in $FOLDS; do
     JOBID=$(sbatch --parsable \
@@ -21,10 +21,10 @@ for FOLD in $FOLDS; do
         -N 1 \
         -c 8 \
         --mem=128G \
-        --time=14:00:00 \
+        --time=24:00:00 \
         --output="logs/lodo-fold${FOLD}-%j.out" \
         --error="logs/lodo-fold${FOLD}-%j.err" \
-        --wrap="module load mamba/latest && source activate sfx-hitfinder && source .secrets/wandb.env && python -u scripts/train_asymmetric.py --config ${CONFIG} --folds ${FOLD} --tags supervised,resnet18,asymmetric-pipeline,lodo-parallel"
+        --wrap="module load mamba/latest && source activate sfx-hitfinder && source .secrets/wandb.env && python -u scripts/train_asymmetric.py --config ${CONFIG} --folds ${FOLD} --tags supervised,resnet18,asymmetric-pipeline,lodo-parallel --resume-training"
     )
     echo "Fold ${FOLD} → job ${JOBID}  (logs/lodo-fold${FOLD}-${JOBID}.{out,err})"
 done
