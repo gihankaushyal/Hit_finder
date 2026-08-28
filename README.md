@@ -144,7 +144,7 @@ Hitfinder-guided cropping (Path A: centroid-centred, label=1 / Path B: hard-nega
 
 ## Setup
 
-**Compute:** ASU Sol HPC — 8× NVIDIA A100 (80 GB) · SLURM scheduler
+**Compute:** ASU Sol HPC — dedicated H100 (scg020) + A100 pool · SLURM scheduler
 
 ```bash
 # Create environment (first time)
@@ -152,7 +152,7 @@ mamba env create -f environment.yml -n sfx-hitfinder
 
 # Activate (always in this order on Sol)
 module load mamba/latest
-conda activate sfx-hitfinder
+source activate sfx-hitfinder
 
 # Verify imports
 python -c "import torch, h5py, reborn, timm, fabio; print('imports OK')"
@@ -171,6 +171,15 @@ pytest tests/ -v
 # Check formatting before committing
 black src/ tests/
 ```
+
+## Documentation
+
+| Document | Contents |
+|----------|----------|
+| [Progress Notes](docs/progress_notes.md) | Full method notes, per-fold LODO results, pipeline decisions |
+| [Architecture](docs/architecture.md) | Codebase structure and component design |
+| [Evaluation Protocol](docs/eval_protocol.md) | LODO benchmark design and metrics |
+| [Data Spec](docs/data_spec.md) | HDF5 key reference per detector type |
 
 ## Citation
 
