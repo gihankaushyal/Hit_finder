@@ -42,6 +42,15 @@ graphify-out/
 # Reflection / scratch notes
 reflection-notes-*.md
 
+# Project management and session docs (not for public repo)
+PLANNING.md
+CLAUDE.md
+MEMORY.md
+docs/figures/
+docs/archive/
+docs/superpowers/
+docs/progress_notes.md
+
 # Compiled C extensions
 *.so
 
