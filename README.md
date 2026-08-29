@@ -178,6 +178,7 @@ black src/ tests/
 |----------|----------|
 | [Detailed Notes](docs/detailed_notes.md) | Full per-fold LODO results with in-domain breakdown, pipeline decisions |
 | [Architecture](docs/architecture.md) | Codebase structure and component design |
+| [Codebase Reference](docs/codebase/index.md) | Module map, data flow, extension guide, testing |
 | [Evaluation Protocol](docs/eval_protocol.md) | LODO benchmark design and metrics |
 | [Data Spec](docs/data_spec.md) | HDF5 key reference per detector type |
 
