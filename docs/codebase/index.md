@@ -8,9 +8,9 @@ This reference covers the Hit_finder SFX hit-classification system — a deep le
 
 ## Pipeline Overview
 
-The hand-annotated diagram below shows every component from raw frames to SLURM job submission:
+The diagram below shows every component from raw frames to SLURM job submission:
 
-![Pipeline Overview](../assets/diagram.png)
+![Pipeline Overview](../assets/pipeline_architecture.png)
 
 ---
 

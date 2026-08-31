@@ -1,0 +1,110 @@
+// SFX Hit-finder pipeline — corrected architecture diagram (v2).
+// Render: dot -Tpng -Gdpi=150 diagram_v2.dot -o diagram_v2.png
+digraph hitfinder_v2 {
+    rankdir=TB;
+    graph [fontname="Helvetica", fontsize=11, compound=true, splines=spline, nodesep=0.35, ranksep=0.5];
+    node  [fontname="Helvetica", fontsize=10, shape=box, style="filled,rounded", margin="0.15,0.08"];
+    edge  [fontname="Helvetica", fontsize=9, color="#555555"];
+
+    // ---------- Input & preprocessing ----------
+    subgraph cluster_pre {
+        label="Input & preprocessing"; style=filled; color="#eeeeee"; fontsize=12;
+        raw       [label="Raw frames\nHDF5 / CXI / .img", shape=cylinder, fillcolor="#cfe2ff"];
+        io        [label="Detector I/O loader\n[io.py]", fillcolor="#cfe2ff"];
+        geom      [label="Geometry assembly\n[geometry.py]", fillcolor="#cfe2ff"];
+        norm      [label="Normalization (GCN / LCN)\n[normalize.py]", fillcolor="#cfe2ff"];
+        pipe      [label="Preprocessing pipeline\n[pipeline.py]", fillcolor="#cfe2ff"];
+        aug       [label="Augmentation\n[augment.py]", fillcolor="#cfe2ff"];
+
+        raw  -> io   [label="loads"];
+        io   -> geom [label="detector metadata"];
+        geom -> pipe [label="assembled frame"];
+        norm -> pipe [label="gcn / lcn"];
+    }
+
+    // ---------- Hitfinding ----------
+    subgraph cluster_hf {
+        label="Hitfinding (all backends implemented)"; style=filled; color="#eeeeee"; fontsize=12;
+        base    [label="Hitfinder Protocol + MockHitfinder\n[base.py]", fillcolor="#fff3cd"];
+        factory [label="get_hitfinder() factory\n[hitfinders/__init__.py]", fillcolor="#fff3cd"];
+
+        subgraph cluster_cpu {
+            label="CPU backends"; color="#dddddd"; style=filled; fontsize=10;
+            pf8c   [label="PF8 — CrystFEL C bridge\n[pf8.py + _pf8_wrap.so]", fillcolor="#ffe69c"];
+            pf8py  [label="PF8 — ssc Cython wrapper\n[pf8_python.py]", fillcolor="#ffe69c"];
+            pf8np  [label="PF8 — pure NumPy/SciPy\n[numpy_pf8.py]", fillcolor="#ffe69c"];
+        }
+        subgraph cluster_gpu {
+            label="GPU backend (num_workers=0 enforced)"; color="#dddddd"; style=filled; fontsize=10;
+            gpuw   [label="GPU wrapper (dynamic import)\n[gpu.py]", fillcolor="#ffe69c"];
+            gpupf8 [label="pyFAI OCL_PeakFinder script\n[gpu_pf8.py]", fillcolor="#ffe69c"];
+            gpuw -> gpupf8 [label="find_peaks()"];
+        }
+
+        base    -> factory;
+        factory -> pf8c;
+        factory -> pf8py;
+        factory -> pf8np;
+        factory -> gpuw;
+    }
+
+    // ---------- Training data ----------
+    subgraph cluster_data {
+        label="Training data"; style=filled; color="#eeeeee"; fontsize=12;
+        synth  [label="Synthetic data support\n[synthetic.py]", fillcolor="#d1e7dd"];
+        ds     [label="Asymmetric patch dataset\nhitfinder-guided labels, 50 px hard-negative margin\n[dataset.py]", fillcolor="#d1e7dd"];
+        dl     [label="PyTorch dataloader batching\n[dataloader.py]", fillcolor="#d1e7dd"];
+
+        synth -> ds [label="optional samples"];
+        ds    -> dl [label="labeled patches"];
+    }
+
+    // ---------- Model tracks ----------
+    subgraph cluster_models {
+        label="Model tracks"; style=filled; color="#eeeeee"; fontsize=12;
+        subgraph cluster_ssl {
+            label="SSL track (Phase 5, pending)"; color="#dddddd"; style=filled; fontsize=10;
+            sslpre  [label="SSL pretraining entry point\n[training/train_ssl_pretrain.py]", fillcolor="#f8d7da"];
+            sslmod  [label="MAE / ViT SSL model\n[models/ssl.py]", fillcolor="#f8d7da"];
+            sslft   [label="SSL fine-tuning entry point\n[training/train_ssl_finetune.py]", fillcolor="#f8d7da"];
+            sslpre -> sslmod [label="pretrains"];
+            sslmod -> sslft  [label="initializes"];
+        }
+        subgraph cluster_sup {
+            label="Supervised track"; color="#dddddd"; style=filled; fontsize=10;
+            asym    [label="Asymmetric training entry point (PRIMARY)\n[scripts/train_asymmetric.py]", fillcolor="#f5c2c7"];
+            supent  [label="Supervised training entry point (legacy)\n[training/train_supervised.py]", fillcolor="#f8d7da"];
+            supmod  [label="ResNet classifier (num_classes=2)\n[models/supervised.py]", fillcolor="#f8d7da"];
+            asym   -> supmod [label="trains"];
+            supent -> supmod [label="trains"];
+        }
+    }
+
+    // ---------- Evaluation & compute ----------
+    subgraph cluster_eval {
+        label="Evaluation & compute"; style=filled; color="#eeeeee"; fontsize=12;
+        agg    [label="Patch-vote aggregation (default)\nrun_patch_agg(aggregation=\"vote\")\n[benchmark.py]", fillcolor="#cfe2ff"];
+        lodo   [label="LODO benchmark evaluation\nbuild_lodo_folds(), per-fold results.json\n[benchmark.py]", fillcolor="#cfe2ff"];
+        met    [label="Classification metrics\n[metrics.py]", fillcolor="#cfe2ff"];
+        slurm  [label="SLURM GPU jobs\nHPC execution\n[scripts/submit_lodo_fold.sh]", fillcolor="#cfe2ff"];
+
+        agg  -> lodo [label="frame scores"];
+        lodo -> met  [label="frame predictions"];
+    }
+
+    // ---------- Cross-cluster flow ----------
+    pipe -> base  [label="full frame", lhead=cluster_hf];
+    pipe -> ds    [label="cropped patches"];
+    aug  -> ds    [label="post-crop augmentation"];
+    pf8np -> ds   [label="peak centroids", ltail=cluster_hf];
+    pipe -> sslpre [label="unlabeled frames"];
+
+    dl -> asym   [label="labeled batches"];
+    dl -> supent [label="labeled batches"];
+    dl -> sslpre [label="batches"];
+
+    sslft  -> agg [label="patch scores"];
+    supmod -> agg [label="patch scores"];
+    asym   -> slurm [label="submits jobs", style=dashed];
+    sslpre -> slurm [label="submits jobs", style=dashed];
+}
