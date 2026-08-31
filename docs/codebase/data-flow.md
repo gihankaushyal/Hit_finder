@@ -2,7 +2,7 @@
 
 A frame's journey from raw CXI bytes to a hit/no-hit score, stage by stage.
 
-![Pipeline Overview](../assets/diagram.png)
+![Pipeline Overview](../assets/pipeline_architecture.png)
 
 ---
 
