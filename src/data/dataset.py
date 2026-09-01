@@ -170,6 +170,95 @@ def _crop_within_margin(
     return bool(near.any())
 
 
+def _load_gcn_frame(
+    path: Path,
+    frame_idx: int,
+    desc: str | None,
+    geom_cache: dict[Path, dict[str, float]],
+    hitfinder: Hitfinder | None,
+    last_geom_path_holder: list,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """read → assemble (with _to_2d fallback) → hitfinder on raw → GCN → fill gaps.
+
+    Shared by AsymmetricCXIDataset and SSLPretrainCXIDataset so both pipelines
+    stay bit-identical up to the crop step. When ``hitfinder`` is None the
+    hitfinder stage is skipped and an empty (0, 2) centroid array is returned.
+
+    ``last_geom_path_holder`` is a 1-element mutable list so the caller's
+    set_geometry dedup state survives across calls.
+
+    Returns:
+        (gcn_frame, valid_mask, centroids) — centroids are [x, y] float32 in
+        the un-padded assembled coordinate frame.
+    """
+    frame = read_frame(path, frame_idx)
+
+    # --- Assemble to native resolution ---
+    if desc is not None and "JUNGFRAU" not in desc.upper():
+        try:
+            pads = get_geometry(desc)
+            assembler = get_assembler(desc)
+            assembled = assemble_only(frame, pads, desc, assembler=assembler)
+        except (ValueError, KeyError, OSError):
+            # ValueError: unrecognised descriptor that slipped past the
+            # JUNGFRAU guard (e.g. novel variant); fall back to _to_2d.
+            assembled = _to_2d(frame)
+    else:
+        assembled = _to_2d(frame)
+
+    centroids = np.zeros((0, 2), dtype=np.float32)
+    if hitfinder is not None:
+        # Lazily read geometry keys on first access (lazy per CLAUDE.md rule #4).
+        if path not in geom_cache:
+            try:
+                with h5py.File(path, "r") as _f:
+                    geom_cache[path] = {
+                        "dist": float(
+                            _f["entry_1/instrument_1/detector_1/distance"][()]
+                        ),
+                        "wavelength": float(
+                            _f["entry_1/instrument_1/source_1/wavelength"][()]
+                        ),
+                        # x_pixel_size == y_pixel_size confirmed for all four supported detectors
+                        "pixel_size": float(
+                            _f["entry_1/instrument_1/detector_1/x_pixel_size"][()]
+                        ),
+                    }
+            except (KeyError, OSError) as exc:
+                warnings.warn(
+                    f"Geometry keys missing for {path} ({exc}); "
+                    "set_geometry will be skipped for this file.",
+                    stacklevel=2,
+                )
+
+        # Update geometry when the CXI file changes (avoids redundant calls per frame).
+        if (
+            path != last_geom_path_holder[0]
+            and path in geom_cache
+            and hasattr(hitfinder, "set_geometry")
+        ):
+            hitfinder.set_geometry(**geom_cache[path])
+            last_geom_path_holder[0] = path
+
+        # --- Run hitfinder on raw assembled frame (before GCN) ---
+        centroids = hitfinder.find_peaks(assembled)  # (N, 2) float32 [x, y]
+
+    # GCN applied to the full assembled frame before padding/crop; then gap/
+    # padding/edge pixels are set to 0 (= global mean in GCN units) and
+    # tracked in a valid-pixel mask so LCN can exclude them from local stats.
+    valid_mask = get_valid_mask_for_frame(desc, assembled.shape)
+    if valid_mask is None:
+        warnings.warn(
+            f"No valid-pixel mask for desc={desc!r} shape={assembled.shape}; "
+            "gap fill and masked LCN disabled for this frame.",
+            stacklevel=2,
+        )
+        valid_mask = np.ones(assembled.shape, dtype=bool)
+    assembled = gcn(assembled)
+    assembled = fill_gaps_after_gcn(assembled, desc, mask=valid_mask)
+    return assembled, valid_mask, centroids
+
+
 # ---------------------------------------------------------------------------
 # AsymmetricCXIDataset
 # ---------------------------------------------------------------------------
@@ -212,7 +301,7 @@ class AsymmetricCXIDataset(Dataset):
         self._hitfinder = hitfinder
         self._label_key = label_key
         self._seed = seed
-        self._last_geom_path: Path | None = None
+        self._last_geom_path_holder: list = [None]
 
         # Resolve session_map to Path objects for requested session_ids only.
         cxi_paths: list[Path] = []
@@ -255,70 +344,15 @@ class AsymmetricCXIDataset(Dataset):
 
     def __getitem__(self, idx: int) -> tuple[torch.Tensor, int] | None:
         path, frame_idx = self._index[idx]
-        frame = read_frame(path, frame_idx)
-
-        # --- Assemble to native resolution ---
         desc = self._path_to_desc.get(path)
-        if desc is not None and "JUNGFRAU" not in desc.upper():
-            try:
-                pads = get_geometry(desc)
-                assembler = get_assembler(desc)
-                assembled = assemble_only(frame, pads, desc, assembler=assembler)
-            except (ValueError, KeyError, OSError):
-                # ValueError: unrecognised descriptor that slipped past the
-                # JUNGFRAU guard (e.g. novel variant); fall back to _to_2d.
-                assembled = _to_2d(frame)
-        else:
-            assembled = _to_2d(frame)
-
-        # Lazily read geometry keys on first access (lazy per CLAUDE.md rule #4).
-        if path not in self._path_to_geom:
-            try:
-                with h5py.File(path, "r") as _f:
-                    self._path_to_geom[path] = {
-                        "dist": float(
-                            _f["entry_1/instrument_1/detector_1/distance"][()]
-                        ),
-                        "wavelength": float(
-                            _f["entry_1/instrument_1/source_1/wavelength"][()]
-                        ),
-                        # x_pixel_size == y_pixel_size confirmed for all four supported detectors
-                        "pixel_size": float(
-                            _f["entry_1/instrument_1/detector_1/x_pixel_size"][()]
-                        ),
-                    }
-            except (KeyError, OSError) as exc:
-                warnings.warn(
-                    f"Geometry keys missing for {path} ({exc}); "
-                    "set_geometry will be skipped for this file.",
-                    stacklevel=2,
-                )
-
-        # Update geometry when the CXI file changes (avoids redundant calls per frame).
-        if (
-            path != self._last_geom_path
-            and path in self._path_to_geom
-            and hasattr(self._hitfinder, "set_geometry")
-        ):
-            self._hitfinder.set_geometry(**self._path_to_geom[path])
-            self._last_geom_path = path
-
-        # --- Run hitfinder on raw assembled frame (before GCN) ---
-        centroids = self._hitfinder.find_peaks(assembled)  # (N, 2) float32 [x, y]
-
-        # GCN applied to the full assembled frame before padding/crop; then gap/
-        # padding/edge pixels are set to 0 (= global mean in GCN units) and
-        # tracked in a valid-pixel mask so LCN can exclude them from local stats.
-        valid_mask = get_valid_mask_for_frame(desc, assembled.shape)
-        if valid_mask is None:
-            warnings.warn(
-                f"No valid-pixel mask for desc={desc!r} shape={assembled.shape}; "
-                "gap fill and masked LCN disabled for this frame.",
-                stacklevel=2,
-            )
-            valid_mask = np.ones(assembled.shape, dtype=bool)
-        assembled = gcn(assembled)
-        assembled = fill_gaps_after_gcn(assembled, desc, mask=valid_mask)
+        assembled, valid_mask, centroids = _load_gcn_frame(
+            path,
+            frame_idx,
+            desc,
+            self._path_to_geom,
+            self._hitfinder,
+            self._last_geom_path_holder,
+        )
 
         # --- Pad and shift centroids into padded coordinate frame ---
         # Image, valid-pixel mask, and a peak-protection map are stacked
@@ -384,3 +418,149 @@ class AsymmetricCXIDataset(Dataset):
 
         tensor = torch.from_numpy(np.ascontiguousarray(crop_img)).unsqueeze(0).float()
         return tensor, derived_label
+
+
+# ---------------------------------------------------------------------------
+# SSLPretrainCXIDataset
+# ---------------------------------------------------------------------------
+
+SSL_CROP_MAX_TRIES = 50
+SSL_MIN_VALID_FRAC_DEFAULT = 0.5
+_SSL_CROP = 224
+_SSL_PATCH = 16
+
+
+def _centroid_map(rel_centroids: np.ndarray, size: int = _SSL_CROP) -> np.ndarray:
+    """Rasterise crop-relative [x, y] centroids into a (size, size) 0/1 map."""
+    m = np.zeros((size, size), dtype=np.float64)
+    for x, y in rel_centroids:
+        xi, yi = int(round(float(x))), int(round(float(y)))
+        if 0 <= xi < size and 0 <= yi < size:
+            m[yi, xi] = 1.0
+    return m
+
+
+def _patch_ids_from_map(
+    centroid_map: np.ndarray, patch: int = _SSL_PATCH
+) -> np.ndarray:
+    """Collapse a (crop, crop) centroid map into a flat bool array of ViT patch ids."""
+    grid = centroid_map.shape[0] // patch
+    out = np.zeros(grid * grid, dtype=bool)
+    ys, xs = np.nonzero(centroid_map)
+    for y, x in zip(ys, xs):
+        out[(y // patch) * grid + (x // patch)] = True
+    return out
+
+
+class SSLPretrainCXIDataset(Dataset):
+    """Unlabeled random valid-region crops for MAE pretraining (Track 2).
+
+    Pipeline (fixed, bit-identical to Track 1 up to the crop step):
+    read → assemble → [hitfinder on raw frame, only when a hitfinder is
+    supplied for peak-aware masking] → GCN(full) → fill gaps → random 224×224
+    crop with >= min_valid_frac valid pixels → rot90/flip → masked LCN.
+    No cutout — MAE masking replaces it. No labels.
+
+    Each item is (crop tensor (1, 224, 224) float32, peak_patches (196,) bool)
+    where peak_patches marks ViT-S/16 patch ids containing hitfinder centroids
+    (all-False when no hitfinder is supplied or the crop has no peaks).
+
+    Args:
+        session_ids: Session IDs to include (strict-LODO exclusion is done by
+            the caller — pass only the training detectors' sessions).
+        session_map: Maps session_id → Path to CXI file.
+        seed: Base RNG seed; per-sample seed derives from seed and idx.
+        crops_per_frame: Number of random crops drawn from each frame per epoch.
+        hitfinder: Optional Hitfinder for peak-aware masking centroids.
+        min_valid_frac: Minimum fraction of valid pixels a crop must contain;
+            after SSL_CROP_MAX_TRIES rejected draws the best candidate is used.
+    """
+
+    def __init__(
+        self,
+        session_ids: list[str],
+        session_map: dict[str, str | Path],
+        seed: int = 42,
+        crops_per_frame: int = 1,
+        hitfinder: Hitfinder | None = None,
+        min_valid_frac: float = SSL_MIN_VALID_FRAC_DEFAULT,
+    ) -> None:
+        self._hitfinder = hitfinder
+        self._seed = seed
+        self._min_valid_frac = min_valid_frac
+        self._last_geom_path_holder: list = [None]
+
+        cxi_paths = [Path(session_map[sid]) for sid in session_ids]
+
+        unique_paths = set(cxi_paths)
+        self._path_to_desc: dict[Path, str] = {}
+        self._path_to_geom: dict[Path, dict[str, float]] = {}
+        for p in unique_paths:
+            try:
+                self._path_to_desc[p] = read_detector_description(p)
+            except (ValueError, KeyError, OSError):
+                pass
+
+        # Flat (path, frame_idx, crop_idx) index. count_frames opens the file
+        # once here (metadata only); frame data itself is read lazily.
+        self._index: list[tuple[Path, int, int]] = []
+        for p in cxi_paths:
+            try:
+                n = count_frames(p)
+            except (KeyError, OSError) as e:
+                warnings.warn(
+                    f"SSLPretrainCXIDataset: cannot count frames in {p}: {e}; "
+                    "file skipped.",
+                    stacklevel=2,
+                )
+                continue
+            for i in range(n):
+                for c in range(crops_per_frame):
+                    self._index.append((p, i, c))
+
+    def __len__(self) -> int:
+        return len(self._index)
+
+    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
+        path, frame_idx, _crop_idx = self._index[idx]
+        rng = np.random.default_rng(self._seed * 1_000_003 + idx)
+        gcn_frame, valid_mask, centroids = _load_gcn_frame(
+            path,
+            frame_idx,
+            self._path_to_desc.get(path),
+            self._path_to_geom,
+            self._hitfinder,
+            self._last_geom_path_holder,
+        )
+
+        fh, fw = gcn_frame.shape
+        best: tuple[float, int, int] | None = None
+        for _ in range(SSL_CROP_MAX_TRIES):
+            top = int(rng.integers(0, max(fh - _SSL_CROP, 0) + 1))
+            left = int(rng.integers(0, max(fw - _SSL_CROP, 0) + 1))
+            frac = float(
+                valid_mask[top : top + _SSL_CROP, left : left + _SSL_CROP].mean()
+            )
+            if best is None or frac > best[0]:
+                best = (frac, top, left)
+            if frac >= self._min_valid_frac:
+                break
+        _, top, left = best
+        crop_img = gcn_frame[top : top + _SSL_CROP, left : left + _SSL_CROP]
+        crop_mask = valid_mask[top : top + _SSL_CROP, left : left + _SSL_CROP]
+
+        # Centroid channel travels through rot90/flip so patch ids stay correct
+        # under augmentation (same co-transform idiom as AsymmetricCXIDataset).
+        rel = centroids - np.array([left, top], dtype=np.float64)
+        stacked = np.dstack(
+            [crop_img, crop_mask.astype(np.float64), _centroid_map(rel)]
+        )
+        stacked = random_rot90(stacked, rng)
+        stacked = random_flip(stacked, rng)
+
+        img = lcn(stacked[:, :, 0], mask=stacked[:, :, 1] > 0.5)
+        peak_patches = _patch_ids_from_map(stacked[:, :, 2] > 0.5)
+        return (
+            torch.from_numpy(np.ascontiguousarray(img)).unsqueeze(0).float(),
+            torch.from_numpy(peak_patches),
+        )

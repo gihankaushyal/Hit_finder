@@ -8,8 +8,10 @@ import torch
 from torch.utils.data import DataLoader
 
 from src.data.dataset import (
+    SSL_MIN_VALID_FRAC_DEFAULT,
     AsymmetricCXIDataset,
     MultiFrameCXIDataset,
+    SSLPretrainCXIDataset,
     UnlabeledDataset,
 )
 from src.hitfinders.base import Hitfinder
@@ -113,4 +115,38 @@ def asymmetric_loader(
         num_workers=num_workers,
         pin_memory=torch.cuda.is_available(),
         collate_fn=none_collate_fn,
+    )
+
+
+def ssl_crop_loader(
+    session_map: dict[str, Path],
+    session_ids: list[str],
+    batch_size: int,
+    num_workers: int = 4,
+    shuffle: bool = True,
+    seed: int = 42,
+    crops_per_frame: int = 1,
+    hitfinder: Hitfinder | None = None,
+    min_valid_frac: float = SSL_MIN_VALID_FRAC_DEFAULT,
+) -> DataLoader:
+    """DataLoader for MAE pretraining crops (SSLPretrainCXIDataset).
+
+    GPU hitfinder backends require num_workers=0 — CUDA contexts cannot be
+    forked into DataLoader worker processes (enforced by the caller, same
+    convention as asymmetric_loader).
+    """
+    ds = SSLPretrainCXIDataset(
+        session_ids=session_ids,
+        session_map=session_map,
+        seed=seed,
+        crops_per_frame=crops_per_frame,
+        hitfinder=hitfinder,
+        min_valid_frac=min_valid_frac,
+    )
+    return DataLoader(
+        ds,
+        batch_size=batch_size,
+        shuffle=shuffle,
+        num_workers=num_workers,
+        pin_memory=torch.cuda.is_available(),
     )
