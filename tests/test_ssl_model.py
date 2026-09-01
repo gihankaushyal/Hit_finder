@@ -244,3 +244,27 @@ class TestSSLClassifier:
 
         with pytest.raises(FileNotFoundError):
             build_ssl_classifier(self._cfg(), mae_checkpoint=Path("/nonexistent.pt"))
+
+
+class TestSSLConfigs:
+    def test_pretrain_config_loads_and_merges_base(self):
+        from src.utils.config import load_config
+
+        cfg = load_config("configs/ssl/mae_pretrain.yaml")
+        assert cfg["ssl"]["masking"] == "random"
+        assert cfg["ssl"]["mask_ratio"] == 0.6
+        assert cfg["seed"] == 42  # from base.yaml deep-merge
+
+    def test_finetune_config_loads(self):
+        from src.utils.config import load_config
+
+        cfg = load_config("configs/ssl/mae_finetune.yaml")
+        assert cfg["model"]["num_classes"] == 2
+        assert cfg["benchmark"]["aggregation"] == "vote"
+
+    def test_pretrain_config_builds_mae_model(self):
+        from src.utils.config import load_config
+
+        cfg = load_config("configs/ssl/mae_pretrain.yaml")
+        model = build_mae_model(cfg)
+        assert isinstance(model, MAEViT)

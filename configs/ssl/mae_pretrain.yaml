@@ -1,14 +1,53 @@
-defaults:
-  - base
-
+# MAE ViT-S/16 pretraining — Track 2, strict LODO (one run per fold).
+# Design: docs/superpowers/specs/2026-09-01-phase5-ssl-mae-design.md
 model:
-  backbone: vit_base_patch16_224
-  mask_ratio: 0.75
+  backbone: mae_vit_small_patch16   # bookkeeping only (checkpoint metadata)
+
+ssl:
+  masking: random          # random | peak_aware
+  mask_ratio: 0.6          # lower than MAE-standard 0.75 (risk B3)
+  peak_mask_frac: 1.0      # used only when masking == peak_aware
+  norm_pix_loss: false     # LCN already local-normalizes
+  embed_dim: 384
+  depth: 12
+  num_heads: 6
+  decoder_embed_dim: 256
+  decoder_depth: 4
+  decoder_num_heads: 8
+  crops_per_frame: 2
+  min_valid_frac: 0.5
 
 training:
-  epochs: 200
+  epochs: 400
+  warmup_epochs: 20
   learning_rate: 1.5e-4
-  batch_size: 64
+  weight_decay: 0.05
+  batch_size: 256
+  num_workers: 8
+  grad_clip: 1.0
+  checkpoint_every: 20     # also save reconstruction sample images
+
+lodo:
+  detector_dirs:
+    AGIPD:       /data/bioxfel/user/gihan/Resonet/production/agipd_20k
+    JUNGFRAU_4M: /data/bioxfel/user/gihan/Resonet/production/jungfrau_20k
+    ePix10k:     /data/bioxfel/user/gihan/Resonet/production/epix10k_20k
+    Eiger4M:     /data/bioxfel/user/gihan/Resonet/production/eiger4m_20k
+  cxi_pattern: "compressed*.cxi"
+  label_key: entry_1/labels/hit    # unused for pretraining; kept for build_sessions
+
+hitfinder:
+  backend: pf8            # used only when ssl.masking == peak_aware
+  pf8_threshold: 800.0
+  pf8_min_snr: 5.0
+  pf8_min_pix_count: 2
+  pf8_max_pix_count: 200
+  pf8_local_bg_radius: 3
+  pf8_min_res: 0
+  pf8_max_res: 0
+  pf8_use_saturated: false
+  gpu_script_path: ""
+  gpu_device: cuda
 
 wandb:
-  tags: [ssl, ssl-pretrain, mae]
+  tags: [ssl-pretrain]
