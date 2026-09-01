@@ -94,3 +94,105 @@ class TestPeakAwareMasking:
         )
         len_keep = int(L * (1 - 0.25))
         assert torch.all(mask.sum(dim=1) == L - len_keep)  # never exceeds budget
+
+
+from src.models.ssl import MAEViT, build_mae_model  # noqa: E402
+
+
+def _tiny_mae() -> MAEViT:
+    # Tiny dims for CPU tests; production dims come from configs/ssl/mae_pretrain.yaml.
+    return MAEViT(
+        img_size=224,
+        patch_size=16,
+        in_chans=1,
+        embed_dim=64,
+        depth=2,
+        num_heads=2,
+        decoder_embed_dim=32,
+        decoder_depth=1,
+        decoder_num_heads=2,
+    )
+
+
+class TestMAEViT:
+    def test_forward_shapes(self):
+        model = _tiny_mae()
+        x = torch.randn(2, 1, 224, 224)
+        loss, pred, mask = model(x, mask_ratio=0.6)
+        L = (224 // 16) ** 2
+        assert pred.shape == (2, L, 16 * 16 * 1)
+        assert mask.shape == (2, L)
+        assert loss.ndim == 0 and torch.isfinite(loss)
+
+    def test_patchify_unpatchify_roundtrip(self):
+        model = _tiny_mae()
+        x = torch.randn(2, 1, 224, 224)
+        assert torch.allclose(model.unpatchify(model.patchify(x)), x, atol=1e-6)
+
+    def test_loss_only_on_masked_patches(self):
+        model = _tiny_mae()
+        x = torch.randn(1, 1, 224, 224)
+        g = torch.Generator().manual_seed(0)
+        loss1, pred, mask = model(x, mask_ratio=0.6, generator=g)
+        # Reconstruction loss computed manually over masked patches must match.
+        target = model.patchify(x)
+        per_patch = ((pred - target) ** 2).mean(dim=-1)
+        expected = (per_patch * mask).sum() / mask.sum()
+        assert torch.allclose(loss1, expected, atol=1e-5)
+
+    def test_invalid_pixels_excluded_from_loss(self):
+        model = _tiny_mae()
+        model.eval()  # deterministic forward
+        x = torch.randn(1, 1, 224, 224)
+        valid = torch.ones(1, 1, 224, 224)
+        valid[:, :, :112, :] = 0  # top half invalid (gap pixels)
+        g1 = torch.Generator().manual_seed(3)
+        g2 = torch.Generator().manual_seed(3)
+        with torch.no_grad():
+            loss_masked, _, _ = model(x, mask_ratio=0.6, generator=g1, valid_mask=valid)
+            # corrupting invalid pixels changes the input to the encoder, so
+            # compare against a loss recomputed with the SAME pred: use the
+            # reconstruction_loss method directly.
+            _, pred, mask = model(x, mask_ratio=0.6, generator=g2, valid_mask=valid)
+        x2 = x.clone()
+        x2[:, :, :112, :] += 100.0  # corrupt only invalid pixels in the TARGET
+        loss_corrupted_target = model.reconstruction_loss(
+            x2, pred, mask, valid_mask=valid
+        )
+        loss_clean_target = model.reconstruction_loss(x, pred, mask, valid_mask=valid)
+        assert torch.allclose(loss_clean_target, loss_corrupted_target, atol=1e-5)
+
+    def test_peak_aware_path(self):
+        model = _tiny_mae()
+        x = torch.randn(2, 1, 224, 224)
+        L = (224 // 16) ** 2
+        peaks = torch.zeros(2, L, dtype=torch.bool)
+        peaks[0, 5] = True
+        loss, _, mask = model(
+            x,
+            mask_ratio=0.6,
+            masking="peak_aware",
+            peak_patches=peaks,
+            generator=torch.Generator().manual_seed(0),
+        )
+        assert mask[0, 5] == 1
+
+    def test_build_mae_model_from_config(self):
+        cfg = {
+            "ssl": {
+                "embed_dim": 64,
+                "depth": 2,
+                "num_heads": 2,
+                "decoder_embed_dim": 32,
+                "decoder_depth": 1,
+                "decoder_num_heads": 2,
+                "norm_pix_loss": False,
+            }
+        }
+        model = build_mae_model(cfg)
+        assert isinstance(model, MAEViT)
+
+    def test_unknown_masking_raises(self):
+        model = _tiny_mae()
+        with pytest.raises(ValueError):
+            model(torch.randn(1, 1, 224, 224), masking="bogus")
