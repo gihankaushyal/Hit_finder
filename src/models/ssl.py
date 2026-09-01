@@ -299,3 +299,86 @@ def build_mae_model(cfg: dict) -> MAEViT:
         ),
         norm_pix_loss=ssl_cfg.get("norm_pix_loss", False),
     )
+
+
+class ViTClassifier(nn.Module):
+    """MAE encoder + mean-pool classification head (MAE fine-tune convention)."""
+
+    def __init__(
+        self,
+        img_size: int = IMG_SIZE_DEFAULT,
+        patch_size: int = PATCH_SIZE_DEFAULT,
+        in_chans: int = 1,
+        embed_dim: int = VIT_SMALL["embed_dim"],
+        depth: int = VIT_SMALL["depth"],
+        num_heads: int = VIT_SMALL["num_heads"],
+        mlp_ratio: float = 4.0,
+        num_classes: int = 2,
+    ) -> None:
+        super().__init__()
+        self.patch_embed = PatchEmbed(img_size, patch_size, in_chans, embed_dim)
+        num_patches = self.patch_embed.num_patches
+        self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
+        self.pos_embed = nn.Parameter(
+            torch.zeros(1, num_patches + 1, embed_dim), requires_grad=False
+        )
+        self.blocks = nn.ModuleList(
+            [
+                Block(embed_dim, num_heads, mlp_ratio, qkv_bias=True)
+                for _ in range(depth)
+            ]
+        )
+        self.norm = nn.LayerNorm(embed_dim)
+        self.head = nn.Linear(embed_dim, num_classes)
+        grid = int(num_patches**0.5)
+        pe = get_2d_sincos_pos_embed(embed_dim, grid, cls_token=True)
+        self.pos_embed.data.copy_(torch.from_numpy(pe).float().unsqueeze(0))
+        nn.init.normal_(self.cls_token, std=0.02)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.patch_embed(x)
+        x = x + self.pos_embed[:, 1:, :]
+        cls = (self.cls_token + self.pos_embed[:, :1, :]).expand(x.shape[0], -1, -1)
+        x = torch.cat([cls, x], dim=1)
+        for blk in self.blocks:
+            x = blk(x)
+        x = self.norm(x)
+        return self.head(x[:, 1:, :].mean(dim=1))  # global pool over patch tokens
+
+
+# Encoder submodules shared by MAEViT and ViTClassifier (state-dict key prefixes).
+_ENCODER_PREFIXES = ("patch_embed.", "cls_token", "pos_embed", "blocks.", "norm.")
+
+
+def build_ssl_classifier(
+    cfg: dict,
+    mae_checkpoint=None,
+    freeze_encoder: bool = False,
+) -> ViTClassifier:
+    """ViT-S classifier, optionally initialised from an MAE pretrain checkpoint."""
+    from pathlib import Path as _Path
+
+    ssl_cfg = cfg.get("ssl", {})
+    clf = ViTClassifier(
+        embed_dim=ssl_cfg.get("embed_dim", VIT_SMALL["embed_dim"]),
+        depth=ssl_cfg.get("depth", VIT_SMALL["depth"]),
+        num_heads=ssl_cfg.get("num_heads", VIT_SMALL["num_heads"]),
+        num_classes=cfg.get("model", {}).get("num_classes", 2),
+    )
+    if mae_checkpoint is not None:
+        ckpt_path = _Path(mae_checkpoint)
+        if not ckpt_path.exists():
+            raise FileNotFoundError(f"MAE checkpoint not found: {ckpt_path}")
+        state = torch.load(ckpt_path, map_location="cpu", weights_only=True)
+        mae_sd = state["model_state_dict"]
+        enc_sd = {k: v for k, v in mae_sd.items() if k.startswith(_ENCODER_PREFIXES)}
+        missing, unexpected = clf.load_state_dict(enc_sd, strict=False)
+        if not all(m.startswith("head.") for m in missing):
+            raise RuntimeError(f"MAE checkpoint missing encoder weights: {missing}")
+        if unexpected:
+            raise RuntimeError(f"Unexpected keys loading MAE encoder: {unexpected}")
+    if freeze_encoder:
+        for name, p in clf.named_parameters():
+            if not name.startswith("head."):
+                p.requires_grad = False
+    return clf

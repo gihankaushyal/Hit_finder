@@ -196,3 +196,51 @@ class TestMAEViT:
         model = _tiny_mae()
         with pytest.raises(ValueError):
             model(torch.randn(1, 1, 224, 224), masking="bogus")
+
+
+from src.models.ssl import ViTClassifier, build_ssl_classifier  # noqa: E402
+
+
+class TestSSLClassifier:
+    def _cfg(self):
+        return {
+            "model": {"num_classes": 2},
+            "ssl": {
+                "embed_dim": 64,
+                "depth": 2,
+                "num_heads": 2,
+                "decoder_embed_dim": 32,
+                "decoder_depth": 1,
+                "decoder_num_heads": 2,
+            },
+        }
+
+    def test_forward_shape(self):
+        clf = build_ssl_classifier(self._cfg())
+        out = clf(torch.randn(2, 1, 224, 224))
+        assert out.shape == (2, 2)
+
+    def test_encoder_weights_transfer_from_mae_checkpoint(self, tmp_path):
+        cfg = self._cfg()
+        mae = build_mae_model(cfg)
+        ckpt = tmp_path / "mae.pt"
+        torch.save({"model_state_dict": mae.state_dict()}, ckpt)
+        clf = build_ssl_classifier(cfg, mae_checkpoint=ckpt)
+        # patch_embed weights must match the pretrained MAE exactly
+        assert torch.equal(clf.patch_embed.proj.weight, mae.patch_embed.proj.weight)
+        assert torch.equal(clf.blocks[0].mlp.fc1.weight, mae.blocks[0].mlp.fc1.weight)
+
+    def test_linear_probe_freezes_encoder(self, tmp_path):
+        cfg = self._cfg()
+        mae = build_mae_model(cfg)
+        ckpt = tmp_path / "mae.pt"
+        torch.save({"model_state_dict": mae.state_dict()}, ckpt)
+        clf = build_ssl_classifier(cfg, mae_checkpoint=ckpt, freeze_encoder=True)
+        assert not clf.patch_embed.proj.weight.requires_grad
+        assert clf.head.weight.requires_grad
+
+    def test_missing_checkpoint_raises(self):
+        from pathlib import Path
+
+        with pytest.raises(FileNotFoundError):
+            build_ssl_classifier(self._cfg(), mae_checkpoint=Path("/nonexistent.pt"))
