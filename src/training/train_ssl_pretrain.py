@@ -92,14 +92,19 @@ def run_pretrain(
             g["lr"] = lr
         model.train()
         losses = []
-        for crops, peak_patches in dl:
+        for crops, peak_patches, valid_masks in dl:
             crops = crops.to(device)
+            # Only transfer peak_patches when the masking mode actually uses them
+            peak_patches_dev = (
+                peak_patches.to(device) if masking == MASKING_PEAK_AWARE else None
+            )
             loss, _, _ = model(
                 crops,
                 mask_ratio=ssl_cfg.get("mask_ratio", 0.6),
                 masking=masking,
-                peak_patches=peak_patches.to(device),
+                peak_patches=peak_patches_dev,
                 peak_mask_frac=ssl_cfg.get("peak_mask_frac", 1.0),
+                valid_mask=valid_masks.to(device),
             )
             opt.zero_grad()
             loss.backward()
@@ -125,7 +130,17 @@ def run_pretrain(
         if epoch % tr.get("checkpoint_every", 20) == 0:
             epoch_ckpt = ckpt_dir / f"epoch{epoch}.pt"
             torch.save(
-                torch.load(last_path, map_location="cpu", weights_only=True), epoch_ckpt
+                {
+                    "epoch": epoch,
+                    "model_state_dict": model.state_dict(),
+                    "optimizer_state_dict": opt.state_dict(),
+                    "loss": final_loss,
+                    "backbone": cfg.get("model", {}).get(
+                        "backbone", "mae_vit_small_patch16"
+                    ),
+                    "ssl": ssl_cfg,
+                },
+                epoch_ckpt,
             )
     wandb.finish()
     return {

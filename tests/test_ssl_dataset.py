@@ -50,13 +50,15 @@ class TestSSLPretrainDataset:
         assert len(ds) == N_FRAMES * 2
 
     def test_item_shape_and_dtype(self, synthetic_cxi):
-        crop, peak_patches = _dataset(synthetic_cxi)[0]
+        crop, peak_patches, valid_mask = _dataset(synthetic_cxi)[0]
         assert crop.shape == (1, 224, 224)
         assert crop.dtype == torch.float32
         assert peak_patches.shape == (196,) and peak_patches.dtype == torch.bool
+        assert valid_mask.shape == (1, 224, 224)
+        assert valid_mask.dtype == torch.float32
 
     def test_no_hitfinder_means_no_peak_patches(self, synthetic_cxi):
-        _, peak_patches = _dataset(synthetic_cxi)[0]
+        _, peak_patches, _ = _dataset(synthetic_cxi)[0]
         assert not peak_patches.any()
 
     def test_hitfinder_centroids_map_to_patch_ids(self, synthetic_cxi):
@@ -70,7 +72,7 @@ class TestSSLPretrainDataset:
         )
         found = False
         for i in range(len(ds)):
-            _, peak_patches = ds[i]
+            _, peak_patches, _ = ds[i]
             if peak_patches.any():
                 found = True
                 break
@@ -87,8 +89,8 @@ class TestSSLPretrainDataset:
         assert ids.sum() == 1
 
     def test_deterministic_given_seed(self, synthetic_cxi):
-        a, _ = _dataset(synthetic_cxi)[3]
-        b, _ = _dataset(synthetic_cxi)[3]
+        a, _, _ = _dataset(synthetic_cxi)[3]
+        b, _, _ = _dataset(synthetic_cxi)[3]
         assert torch.equal(a, b)
 
     def test_loader_batches(self, synthetic_cxi):
@@ -99,6 +101,7 @@ class TestSSLPretrainDataset:
             num_workers=0,
             shuffle=False,
         )
-        crops, peaks = next(iter(dl))
+        crops, peaks, vmasks = next(iter(dl))
         assert crops.shape == (4, 1, 224, 224)
         assert peaks.shape == (4, 196)
+        assert vmasks.shape == (4, 1, 224, 224)

@@ -28,7 +28,12 @@ def _masking_from_noise(
     B, L = noise.shape
     len_keep = int(L * (1 - mask_ratio))
     ids_shuffle = torch.argsort(noise, dim=1)
-    ids_restore = torch.argsort(ids_shuffle, dim=1)
+    # O(B·L) scatter inverse — avoids a second O(B·L·log L) argsort
+    ids_restore = torch.zeros_like(ids_shuffle).scatter_(
+        1,
+        ids_shuffle,
+        torch.arange(L, device=noise.device).unsqueeze(0).expand(B, -1),
+    )
     ids_keep = ids_shuffle[:, :len_keep]
     mask = torch.ones(B, L, device=noise.device)
     mask[:, :len_keep] = 0

@@ -51,7 +51,7 @@ def main() -> None:
         shuffle=True,
         seed=cfg["seed"],
     )
-    crops, _ = next(iter(dl))
+    crops, _, _ = next(iter(dl))
 
     with torch.no_grad():
         _, pred, mask = model(crops, mask_ratio=cfg["ssl"]["mask_ratio"])

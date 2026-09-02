@@ -25,15 +25,6 @@ ALL_PREFIXES = [
 ]
 
 
-def _variant_label(data: dict, prefix: str) -> str:
-    """Derive a display label from results.json keys when present."""
-    track = data.get("track")
-    probe = data.get("probe")
-    if track == "ssl":
-        return "MAE-probe" if probe else "MAE-finetune"
-    return prefix
-
-
 def load_results(checkpoints_dir: Path, run_prefix: str) -> list[dict]:
     results = []
     for path in sorted(checkpoints_dir.glob(f"{run_prefix}-fold*/results.json")):

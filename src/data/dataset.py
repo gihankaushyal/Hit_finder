@@ -492,14 +492,10 @@ class SSLPretrainCXIDataset(Dataset):
 
         cxi_paths = [Path(session_map[sid]) for sid in session_ids]
 
-        unique_paths = set(cxi_paths)
-        self._path_to_desc: dict[Path, str] = {}
+        # Descriptor cache populated lazily in __getitem__ (per DataLoader worker)
+        # so that HDF5 opens do not happen in __init__ before worker fork.
+        self._path_to_desc: dict[Path, str | None] = {}
         self._path_to_geom: dict[Path, dict[str, float]] = {}
-        for p in unique_paths:
-            try:
-                self._path_to_desc[p] = read_detector_description(p)
-            except (ValueError, KeyError, OSError):
-                pass
 
         # Flat (path, frame_idx, crop_idx) index. count_frames opens the file
         # once here (metadata only); frame data itself is read lazily.
@@ -524,6 +520,11 @@ class SSLPretrainCXIDataset(Dataset):
     def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
         path, frame_idx, _crop_idx = self._index[idx]
         rng = np.random.default_rng(self._seed * 1_000_003 + idx)
+        if path not in self._path_to_desc:
+            try:
+                self._path_to_desc[path] = read_detector_description(path)
+            except (ValueError, KeyError, OSError):
+                self._path_to_desc[path] = None
         gcn_frame, valid_mask, centroids = _load_gcn_frame(
             path,
             frame_idx,
@@ -560,7 +561,9 @@ class SSLPretrainCXIDataset(Dataset):
 
         img = lcn(stacked[:, :, 0], mask=stacked[:, :, 1] > 0.5)
         peak_patches = _patch_ids_from_map(stacked[:, :, 2] > 0.5)
+        crop_valid = (stacked[:, :, 1] > 0.5).astype(np.float32)
         return (
             torch.from_numpy(np.ascontiguousarray(img)).unsqueeze(0).float(),
             torch.from_numpy(peak_patches),
+            torch.from_numpy(np.ascontiguousarray(crop_valid)).unsqueeze(0).float(),
         )
