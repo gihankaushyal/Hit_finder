@@ -161,9 +161,17 @@ def main() -> None:
     )
     p.add_argument("--device", default=None)
     p.add_argument("--resume", action="store_true")
+    p.add_argument(
+        "--epochs",
+        type=int,
+        default=None,
+        help="Override training.epochs from config (e.g. 100 for a smoke run).",
+    )
     args = p.parse_args()
 
     cfg = load_config(args.config)
+    if args.epochs is not None:
+        cfg["training"]["epochs"] = args.epochs
     device = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
     sessions, session_map = build_sessions(cfg["lodo"])
 
