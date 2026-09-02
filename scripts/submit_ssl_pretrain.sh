@@ -28,7 +28,7 @@ if [ -n "${EPOCHS}" ]; then
     EPOCHS_ARG="--epochs ${EPOCHS}"
 fi
 
-python -m src.training.train_ssl_pretrain \
+python -u -m src.training.train_ssl_pretrain \
     --config configs/ssl/mae_pretrain.yaml \
     --fold "${FOLD}" \
     --resume \
