@@ -12,7 +12,7 @@
 #SBATCH --gres=gpu:h100:1
 #SBATCH --nodelist=scg020
 #SBATCH -N 1
-#SBATCH -c 8
+#SBATCH -c 64
 #SBATCH --mem=128G
 #SBATCH --time=48:00:00
 #SBATCH --output=logs/ssl-pretrain-%j.out

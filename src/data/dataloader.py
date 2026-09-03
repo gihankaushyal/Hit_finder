@@ -118,6 +118,22 @@ def asymmetric_loader(
     )
 
 
+def _ssl_flatten_collate(
+    batch: list[tuple[torch.Tensor, torch.Tensor, torch.Tensor]],
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Flatten per-frame multi-crop batches into a flat crop batch.
+
+    Each dataset item is (N,1,H,W), (N,L), (N,1,H,W) where N=crops_per_frame.
+    torch.cat across the batch dimension yields (B*N, 1, H, W) so the training
+    loop sees the same shape as before regardless of crops_per_frame.
+    """
+    return (
+        torch.cat([b[0] for b in batch], dim=0),
+        torch.cat([b[1] for b in batch], dim=0),
+        torch.cat([b[2] for b in batch], dim=0),
+    )
+
+
 def ssl_crop_loader(
     session_map: dict[str, Path],
     session_ids: list[str],
@@ -131,6 +147,10 @@ def ssl_crop_loader(
 ) -> DataLoader:
     """DataLoader for MAE pretraining crops (SSLPretrainCXIDataset).
 
+    batch_size controls the number of crops per GPU batch (after flatten collate).
+    The DataLoader uses loader_batch = batch_size // crops_per_frame frames per
+    batch so that collate expands each back to batch_size crops.
+
     GPU hitfinder backends require num_workers=0 — CUDA contexts cannot be
     forked into DataLoader worker processes (enforced by the caller, same
     convention as asymmetric_loader).
@@ -143,10 +163,17 @@ def ssl_crop_loader(
         hitfinder=hitfinder,
         min_valid_frac=min_valid_frac,
     )
+    if batch_size % crops_per_frame != 0:
+        raise ValueError(
+            f"batch_size ({batch_size}) must be divisible by crops_per_frame "
+            f"({crops_per_frame}) so the flatten collate yields exactly batch_size crops."
+        )
+    loader_batch = batch_size // crops_per_frame
     return DataLoader(
         ds,
-        batch_size=batch_size,
+        batch_size=loader_batch,
         shuffle=shuffle,
         num_workers=num_workers,
         pin_memory=torch.cuda.is_available(),
+        collate_fn=_ssl_flatten_collate,
     )

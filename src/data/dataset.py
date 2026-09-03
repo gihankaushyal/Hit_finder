@@ -461,8 +461,12 @@ class SSLPretrainCXIDataset(Dataset):
     crop with >= min_valid_frac valid pixels → rot90/flip → masked LCN.
     No cutout — MAE masking replaces it. No labels.
 
-    Each item is (crop tensor (1, 224, 224) float32, peak_patches (196,) bool)
-    where peak_patches marks ViT-S/16 patch ids containing hitfinder centroids
+    Each item is a tuple of stacked tensors:
+        crops     (crops_per_frame, 1, 224, 224) float32
+        peaks     (crops_per_frame, 196)          bool
+        vmasks    (crops_per_frame, 1, 224, 224)  float32
+    _load_gcn_frame runs ONCE per frame; all crops share the assembled result.
+    peak_patches marks ViT-S/16 patch ids containing hitfinder centroids
     (all-False when no hitfinder is supplied or the crop has no peaks).
 
     Args:
@@ -488,6 +492,7 @@ class SSLPretrainCXIDataset(Dataset):
         self._hitfinder = hitfinder
         self._seed = seed
         self._min_valid_frac = min_valid_frac
+        self._crops_per_frame = crops_per_frame
         self._last_geom_path_holder: list = [None]
 
         cxi_paths = [Path(session_map[sid]) for sid in session_ids]
@@ -497,9 +502,10 @@ class SSLPretrainCXIDataset(Dataset):
         self._path_to_desc: dict[Path, str | None] = {}
         self._path_to_geom: dict[Path, dict[str, float]] = {}
 
-        # Flat (path, frame_idx, crop_idx) index. count_frames opens the file
-        # once here (metadata only); frame data itself is read lazily.
-        self._index: list[tuple[Path, int, int]] = []
+        # Per-frame index — one entry per frame regardless of crops_per_frame.
+        # _load_gcn_frame (HDF5 + Reborn assembly + GCN) is called once per frame;
+        # all crops are drawn inside __getitem__ from the already-assembled result.
+        self._index: list[tuple[Path, int]] = []
         for p in cxi_paths:
             try:
                 n = count_frames(p)
@@ -511,20 +517,22 @@ class SSLPretrainCXIDataset(Dataset):
                 )
                 continue
             for i in range(n):
-                for c in range(crops_per_frame):
-                    self._index.append((p, i, c))
+                self._index.append((p, i))
 
     def __len__(self) -> int:
         return len(self._index)
 
-    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
-        path, frame_idx, _crop_idx = self._index[idx]
+    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        path, frame_idx = self._index[idx]
         rng = np.random.default_rng(self._seed * 1_000_003 + idx)
+
         if path not in self._path_to_desc:
             try:
                 self._path_to_desc[path] = read_detector_description(path)
             except (ValueError, KeyError, OSError):
                 self._path_to_desc[path] = None
+
+        # Assembly + GCN run ONCE per frame regardless of crops_per_frame.
         gcn_frame, valid_mask, centroids = _load_gcn_frame(
             path,
             frame_idx,
@@ -533,37 +541,52 @@ class SSLPretrainCXIDataset(Dataset):
             self._hitfinder,
             self._last_geom_path_holder,
         )
-
         fh, fw = gcn_frame.shape
-        best: tuple[float, int, int] | None = None
-        for _ in range(SSL_CROP_MAX_TRIES):
-            top = int(rng.integers(0, max(fh - _SSL_CROP, 0) + 1))
-            left = int(rng.integers(0, max(fw - _SSL_CROP, 0) + 1))
-            frac = float(
-                valid_mask[top : top + _SSL_CROP, left : left + _SSL_CROP].mean()
+
+        crop_tensors: list[torch.Tensor] = []
+        peak_tensors: list[torch.Tensor] = []
+        vmask_tensors: list[torch.Tensor] = []
+
+        for _ in range(self._crops_per_frame):
+            best: tuple[float, int, int] | None = None
+            for _attempt in range(SSL_CROP_MAX_TRIES):
+                top = int(rng.integers(0, max(fh - _SSL_CROP, 0) + 1))
+                left = int(rng.integers(0, max(fw - _SSL_CROP, 0) + 1))
+                frac = float(
+                    valid_mask[top : top + _SSL_CROP, left : left + _SSL_CROP].mean()
+                )
+                if best is None or frac > best[0]:
+                    best = (frac, top, left)
+                if frac >= self._min_valid_frac:
+                    break
+            _, top, left = best
+
+            crop_img = gcn_frame[top : top + _SSL_CROP, left : left + _SSL_CROP]
+            crop_mask = valid_mask[top : top + _SSL_CROP, left : left + _SSL_CROP]
+
+            # Centroid channel travels through rot90/flip so patch ids stay correct
+            # under augmentation (same co-transform idiom as AsymmetricCXIDataset).
+            rel = centroids - np.array([left, top], dtype=np.float64)
+            stacked = np.dstack(
+                [crop_img, crop_mask.astype(np.float64), _centroid_map(rel)]
             )
-            if best is None or frac > best[0]:
-                best = (frac, top, left)
-            if frac >= self._min_valid_frac:
-                break
-        _, top, left = best
-        crop_img = gcn_frame[top : top + _SSL_CROP, left : left + _SSL_CROP]
-        crop_mask = valid_mask[top : top + _SSL_CROP, left : left + _SSL_CROP]
+            stacked = random_rot90(stacked, rng)
+            stacked = random_flip(stacked, rng)
 
-        # Centroid channel travels through rot90/flip so patch ids stay correct
-        # under augmentation (same co-transform idiom as AsymmetricCXIDataset).
-        rel = centroids - np.array([left, top], dtype=np.float64)
-        stacked = np.dstack(
-            [crop_img, crop_mask.astype(np.float64), _centroid_map(rel)]
-        )
-        stacked = random_rot90(stacked, rng)
-        stacked = random_flip(stacked, rng)
+            img = lcn(stacked[:, :, 0], mask=stacked[:, :, 1] > 0.5)
+            peak_patches = _patch_ids_from_map(stacked[:, :, 2] > 0.5)
+            crop_valid = (stacked[:, :, 1] > 0.5).astype(np.float32)
 
-        img = lcn(stacked[:, :, 0], mask=stacked[:, :, 1] > 0.5)
-        peak_patches = _patch_ids_from_map(stacked[:, :, 2] > 0.5)
-        crop_valid = (stacked[:, :, 1] > 0.5).astype(np.float32)
+            crop_tensors.append(
+                torch.from_numpy(np.ascontiguousarray(img)).unsqueeze(0).float()
+            )
+            peak_tensors.append(torch.from_numpy(peak_patches))
+            vmask_tensors.append(
+                torch.from_numpy(np.ascontiguousarray(crop_valid)).unsqueeze(0).float()
+            )
+
         return (
-            torch.from_numpy(np.ascontiguousarray(img)).unsqueeze(0).float(),
-            torch.from_numpy(peak_patches),
-            torch.from_numpy(np.ascontiguousarray(crop_valid)).unsqueeze(0).float(),
+            torch.stack(crop_tensors),  # (N, 1, 224, 224)
+            torch.stack(peak_tensors),  # (N, 196)
+            torch.stack(vmask_tensors),  # (N, 1, 224, 224)
         )
