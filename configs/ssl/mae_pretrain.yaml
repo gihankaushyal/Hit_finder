@@ -23,7 +23,7 @@ training:
   learning_rate: 1.5e-4
   weight_decay: 0.05
   batch_size: 256
-  num_workers: 8
+  num_workers: 64
   grad_clip: 1.0
   checkpoint_every: 20     # also save reconstruction sample images
 
