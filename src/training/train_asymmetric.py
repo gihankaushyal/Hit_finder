@@ -6,21 +6,18 @@ Train a fresh ResNet18 for each LODO fold using AsymmetricCXIDataset:
   - Test: cross-detector frames with same aggregation
 
 Usage:
-    python scripts/train_asymmetric.py --config configs/supervised/resnet18_asymmetric.yaml
-    python scripts/train_asymmetric.py --config ... --folds 1   # single fold smoke test
-    python scripts/train_asymmetric.py --config ... --device cpu
+    python -m src.training.train_asymmetric --config configs/supervised/resnet18_asymmetric.yaml
+    python -m src.training.train_asymmetric --config ... --folds 1   # single fold smoke test
+    python -m src.training.train_asymmetric --config ... --device cpu
 """
 
 from __future__ import annotations
 
 import argparse
-import sys
 from pathlib import Path
 
 import numpy as np
 import torch
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.evaluation.benchmark import (
     build_lodo_folds,

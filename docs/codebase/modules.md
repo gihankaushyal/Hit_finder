@@ -5,7 +5,7 @@
 Dependency layers flow bottom to top. No circular imports exist.
 
 ```
-Layer 5 — Scripts        scripts/train_asymmetric.py  scripts/run_pipeline_debug.py  …
+Layer 5 — Scripts        src/training/train_asymmetric.py  scripts/run_pipeline_debug.py  …
 Layer 4 — DataLoader     src/data/dataloader.py
 Layer 3 — Dataset        src/data/dataset.py          src/evaluation/benchmark.py
 Layer 2 — Pipeline       src/preprocessing/pipeline.py
@@ -76,7 +76,7 @@ PyTorch Dataset and DataLoader wrappers. `AsymmetricCXIDataset` is the productio
 - Returns `None` if no valid miss crop found after 50 attempts (filtered by `none_collate_fn`)
 
 **Imports from:** `src/preprocessing/*`, `src/hitfinders/*`
-**Imported by:** `scripts/train_asymmetric.py`
+**Imported by:** `src/training/train_asymmetric.py`
 
 ---
 
@@ -95,7 +95,7 @@ def build_supervised_model(backbone: str = "resnet18", pretrained: bool = True, 
 ```
 
 **Imports from:** `timm`
-**Imported by:** `scripts/train_asymmetric.py`
+**Imported by:** `src/training/train_asymmetric.py`
 
 ---
 
@@ -110,7 +110,7 @@ Training loop functions called once per epoch by the entry-point scripts.
 | `train_ssl_finetune.py` | SSL fine-tune loop (planned) | — |
 
 **Imports from:** `torch`, `wandb`
-**Imported by:** `scripts/train_asymmetric.py`
+**Imported by:** `src/training/train_asymmetric.py`
 
 ---
 
@@ -130,7 +130,7 @@ def run_patch_agg(model, sessions, cxi_paths, device, aggregation="vote", batch_
 Returns `{"ap": float, "auc_roc": float, "f1": float, "threshold": float}`.
 
 **Imports from:** `src/preprocessing/{geometry,io,pipeline}`, `src/evaluation/metrics`
-**Imported by:** `scripts/train_asymmetric.py`, `scripts/aggregate_lodo_results.py`
+**Imported by:** `src/training/train_asymmetric.py`, `scripts/aggregate_lodo_results.py`
 
 ---
 
@@ -152,7 +152,7 @@ All scripts are self-contained and import from `src/`. Run with `python scripts/
 
 | Script | Purpose | Key imports |
 |--------|---------|-------------|
-| `train_asymmetric.py` | LODO training: asymmetric pipeline + wandb logging | `data`, `models`, `training`, `evaluation`, `hitfinders`, `utils` |
+| `src/training/train_asymmetric.py` | LODO training: asymmetric pipeline + wandb logging | `data`, `models`, `training`, `evaluation`, `hitfinders`, `utils` |
 | `run_pipeline_debug.py` | Debug and profile the preprocessing pipeline | `preprocessing.*`, `data`, `hitfinders.gpu` |
 | `smoke_test_detector_shapes.py` | Verify geometry + assembly for all detectors | `preprocessing.{geometry,io,augment,pipeline}` |
 | `visualize_assembled.py` | Save assembled detector images to PNG | `preprocessing.{geometry,io,pipeline}`, `matplotlib` |

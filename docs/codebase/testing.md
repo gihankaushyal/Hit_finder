@@ -39,7 +39,7 @@ pytest
 | `test_asymmetric_dataset.py` | `AsymmetricCXIDataset`: centroid crops, miss crops, peak-aware cutout | `MockHitfinder` |
 | `test_models.py` | `build_supervised_model()` for resnet18/50 | `torch.zeros()` |
 | `test_train_supervised.py` | `train_one_epoch()`: loss decreases, returns metrics dict | small synthetic loader |
-| `test_train_asymmetric_resume.py` | Resume-from-checkpoint logic in `scripts/train_asymmetric.py` | tmp checkpoint dir |
+| `test_train_asymmetric_resume.py` | Resume-from-checkpoint logic in `src/training/train_asymmetric.py` | tmp checkpoint dir |
 | `test_evaluation.py` | `metrics.py`: AP, AUC-ROC, F1 edge cases | `np.array` fixtures |
 | `test_patch_eval.py` | Patch-level centroid crop geometry | synthetic canvas + centroids |
 | `test_vote_aggregation.py` | Vote aggregation: frame score formula, threshold behavior | synthetic patch scores |
