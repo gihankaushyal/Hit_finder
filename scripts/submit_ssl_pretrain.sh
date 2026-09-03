@@ -2,6 +2,10 @@
 # Usage:
 #   Smoke run (~100 epochs): sbatch scripts/submit_ssl_pretrain.sh <fold_id> 100
 #   Full run  (400 epochs):  sbatch scripts/submit_ssl_pretrain.sh <fold_id>
+#
+# CXI files are staged from NFS to local NVMe (/tmp) before training starts.
+# This eliminates the NFS I/O bottleneck (~1.3 h/epoch → ~5 min/epoch target).
+# Staged files are cleaned up automatically when the job exits.
 #SBATCH --job-name=sfx-ssl-pretrain
 #SBATCH -p general
 #SBATCH -q grp_cxfel
@@ -23,6 +27,30 @@ source activate sfx-hitfinder
 source .secrets/wandb.env
 mkdir -p logs
 
+# ---------------------------------------------------------------------------
+# Stage CXI data to local NVMe (/tmp) — avoids NFS read bottleneck
+# ---------------------------------------------------------------------------
+NFS_SRC="/data/bioxfel/user/gihan/Resonet/production"
+STAGE="/tmp/sfx_stage_${SLURM_JOB_ID}"
+mkdir -p "${STAGE}"
+
+# Clean up staged data when the job exits (normal, error, or scancel)
+trap 'echo "[stage] cleaning up ${STAGE}"; rm -rf "${STAGE}"' EXIT
+
+echo "[stage] copying CXI files to ${STAGE} (background, parallel) ..."
+for det_dir in agipd_20k jungfrau_20k epix10k_20k eiger4m_20k; do
+    src="${NFS_SRC}/${det_dir}"
+    if [ -d "${src}" ]; then
+        mkdir -p "${STAGE}/${det_dir}"
+        cp "${src}"/compressed*.cxi "${STAGE}/${det_dir}/" &
+    fi
+done
+wait
+echo "[stage] staging complete. $(du -sh ${STAGE} | cut -f1) copied to local NVMe."
+
+# ---------------------------------------------------------------------------
+# Launch training
+# ---------------------------------------------------------------------------
 EPOCHS_ARG=""
 if [ -n "${EPOCHS}" ]; then
     EPOCHS_ARG="--epochs ${EPOCHS}"
@@ -32,4 +60,5 @@ python -u -m src.training.train_ssl_pretrain \
     --config configs/ssl/mae_pretrain.yaml \
     --fold "${FOLD}" \
     --resume \
+    --stage-dir "${STAGE}" \
     ${EPOCHS_ARG}

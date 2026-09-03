@@ -167,11 +167,29 @@ def main() -> None:
         default=None,
         help="Override training.epochs from config (e.g. 100 for a smoke run).",
     )
+    p.add_argument(
+        "--stage-dir",
+        default=None,
+        metavar="DIR",
+        help=(
+            "Local directory containing pre-staged CXI subdirs "
+            "(e.g. /tmp/sfx_stage_12345). Replaces the parent path of every "
+            "lodo.detector_dirs entry so training reads from local NVMe "
+            "instead of NFS."
+        ),
+    )
     args = p.parse_args()
 
     cfg = load_config(args.config)
     if args.epochs is not None:
         cfg["training"]["epochs"] = args.epochs
+    if args.stage_dir is not None:
+        from pathlib import Path as _Path
+
+        stage = _Path(args.stage_dir)
+        for det, nfs_path in cfg["lodo"]["detector_dirs"].items():
+            cfg["lodo"]["detector_dirs"][det] = str(stage / _Path(nfs_path).name)
+        print(f"[stage] detector_dirs remapped to {args.stage_dir}")
     device = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
     sessions, session_map = build_sessions(cfg["lodo"])
 
