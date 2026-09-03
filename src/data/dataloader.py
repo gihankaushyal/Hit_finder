@@ -163,7 +163,12 @@ def ssl_crop_loader(
         hitfinder=hitfinder,
         min_valid_frac=min_valid_frac,
     )
-    loader_batch = max(1, batch_size // crops_per_frame)
+    if batch_size % crops_per_frame != 0:
+        raise ValueError(
+            f"batch_size ({batch_size}) must be divisible by crops_per_frame "
+            f"({crops_per_frame}) so the flatten collate yields exactly batch_size crops."
+        )
+    loader_batch = batch_size // crops_per_frame
     return DataLoader(
         ds,
         batch_size=loader_batch,

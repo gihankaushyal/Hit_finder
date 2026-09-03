@@ -549,7 +549,7 @@ class SSLPretrainCXIDataset(Dataset):
 
         for _ in range(self._crops_per_frame):
             best: tuple[float, int, int] | None = None
-            for _ in range(SSL_CROP_MAX_TRIES):
+            for _attempt in range(SSL_CROP_MAX_TRIES):
                 top = int(rng.integers(0, max(fh - _SSL_CROP, 0) + 1))
                 left = int(rng.integers(0, max(fw - _SSL_CROP, 0) + 1))
                 frac = float(

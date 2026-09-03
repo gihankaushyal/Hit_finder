@@ -114,34 +114,21 @@ def run_pretrain(
         final_loss = float(np.mean(losses)) if losses else float("nan")
         epochs_run += 1
         wandb.log({"epoch": epoch, "pretrain/loss": final_loss, "pretrain/lr": lr})
-        torch.save(
-            {
-                "epoch": epoch,
-                "model_state_dict": model.state_dict(),
-                "optimizer_state_dict": opt.state_dict(),
-                "loss": final_loss,
-                "backbone": cfg.get("model", {}).get(
-                    "backbone", "mae_vit_small_patch16"
-                ),
-                "ssl": ssl_cfg,
-            },
-            last_path,
-        )
+        ckpt_payload = {
+            "epoch": epoch,
+            "model_state_dict": model.state_dict(),
+            "optimizer_state_dict": opt.state_dict(),
+            "loss": final_loss,
+            "backbone": cfg.get("model", {}).get("backbone", "mae_vit_small_patch16"),
+            "ssl": ssl_cfg,
+            # detector_dirs snapshot lets resume validation detect data-source drift
+            # (e.g. a different --stage-dir that wasn't copied from the same NFS source).
+            "detector_dirs": dict(cfg["lodo"]["detector_dirs"]),
+        }
+        torch.save(ckpt_payload, last_path)
         if epoch % tr.get("checkpoint_every", 20) == 0:
             epoch_ckpt = ckpt_dir / f"epoch{epoch}.pt"
-            torch.save(
-                {
-                    "epoch": epoch,
-                    "model_state_dict": model.state_dict(),
-                    "optimizer_state_dict": opt.state_dict(),
-                    "loss": final_loss,
-                    "backbone": cfg.get("model", {}).get(
-                        "backbone", "mae_vit_small_patch16"
-                    ),
-                    "ssl": ssl_cfg,
-                },
-                epoch_ckpt,
-            )
+            torch.save(ckpt_payload, epoch_ckpt)
     wandb.finish()
     return {
         "epochs_run": epochs_run,
