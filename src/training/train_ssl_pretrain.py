@@ -113,7 +113,9 @@ def run_pretrain(
             losses.append(loss.item())
         final_loss = float(np.mean(losses)) if losses else float("nan")
         epochs_run += 1
-        wandb.log({"epoch": epoch, "pretrain/loss": final_loss, "pretrain/lr": lr})
+        wandb.log(
+            {"epoch": epoch, "pretrain/loss": final_loss, "pretrain/lr": lr}, step=epoch
+        )
         ckpt_payload = {
             "epoch": epoch,
             "model_state_dict": model.state_dict(),
