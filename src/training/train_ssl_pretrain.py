@@ -81,6 +81,9 @@ def run_pretrain(
         tags=cfg["wandb"].get("tags", []),
         resume="allow",
     )
+    wandb.define_metric("epoch")
+    wandb.define_metric("pretrain/loss", step_metric="epoch")
+    wandb.define_metric("pretrain/lr", step_metric="epoch")
 
     epochs = tr["epochs"]
     final_loss = float("nan")
