@@ -125,7 +125,7 @@ def run_pretrain(
             "ssl": ssl_cfg,
             # detector_dirs snapshot lets resume validation detect data-source drift
             # (e.g. a different --stage-dir that wasn't copied from the same NFS source).
-            "detector_dirs": dict(cfg["lodo"]["detector_dirs"]),
+            "detector_dirs": dict(cfg.get("lodo", {}).get("detector_dirs", {})),
         }
         torch.save(ckpt_payload, last_path)
         if epoch % tr.get("checkpoint_every", 20) == 0:
