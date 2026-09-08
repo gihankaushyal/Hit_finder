@@ -14,7 +14,7 @@ ssl:
   decoder_embed_dim: 256
   decoder_depth: 4
   decoder_num_heads: 8
-  crops_per_frame: 2
+  crops_per_frame: 4
   min_valid_frac: 0.5
 
 training:
@@ -23,7 +23,7 @@ training:
   learning_rate: 1.5e-4
   weight_decay: 0.05
   batch_size: 256
-  num_workers: 64
+  num_workers: 32
   grad_clip: 1.0
   checkpoint_every: 20     # also save reconstruction sample images
 
