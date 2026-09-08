@@ -176,9 +176,13 @@ def main() -> None:
         from pathlib import Path as _Path
 
         stage = _Path(args.stage_dir)
+        remapped = []
         for det, nfs_path in cfg["lodo"]["detector_dirs"].items():
-            cfg["lodo"]["detector_dirs"][det] = str(stage / _Path(nfs_path).name)
-        print(f"[stage] detector_dirs remapped to {args.stage_dir}")
+            staged = stage / _Path(nfs_path).name
+            if staged.is_dir():
+                cfg["lodo"]["detector_dirs"][det] = str(staged)
+                remapped.append(det)
+        print(f"[stage] detector_dirs remapped to {args.stage_dir}: {remapped}")
     device = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
     sessions, session_map = build_sessions(cfg["lodo"])
 
