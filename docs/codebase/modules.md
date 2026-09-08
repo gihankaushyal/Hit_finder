@@ -67,7 +67,7 @@ PyTorch Dataset and DataLoader wrappers. `AsymmetricCXIDataset` is the productio
 
 | File | Purpose | Key exports |
 |------|---------|-------------|
-| `dataset.py` | Dataset classes | `UnlabeledDataset` (SSL), `MultiFrameCXIDataset` (deprecated), `AsymmetricCXIDataset` ⚡ |
+| `dataset.py` | Dataset classes | `UnlabeledDataset` (Track 2 SSL — reads `.img`/CXI, no labels, used by `ssl_pretrain_loader()`), `MultiFrameCXIDataset` ⚡ (deprecated), `AsymmetricCXIDataset` ⚡ |
 | `dataloader.py` | DataLoader factory functions | `ssl_pretrain_loader()`, `asymmetric_loader()`, `none_collate_fn()` |
 | `synthetic.py` | Synthetic data helpers | (unused — reserved for future tests) |
 
@@ -77,6 +77,7 @@ PyTorch Dataset and DataLoader wrappers. `AsymmetricCXIDataset` is the productio
 
 **Imports from:** `src/preprocessing/*`, `src/hitfinders/*`
 **Imported by:** `src/training/train_asymmetric.py`
+**Track separation:** `UnlabeledDataset` is imported by `src/training/train_ssl_pretrain.py` only. `AsymmetricCXIDataset` is imported by `src/training/train_asymmetric.py` only. The two tracks have separate data paths from the dataset layer up.
 
 ---
 
@@ -87,12 +88,18 @@ Model factory functions. Both return `(B, 2)` logit tensors from `(B, 1, 224, 22
 | File | Purpose | Key exports |
 |------|---------|-------------|
 | `supervised.py` | ResNet18/50 builder via timm | `build_supervised_model(backbone, pretrained, num_classes)` |
-| `ssl.py` | MAE ViT-Base builder (planned) | `build_mae_model()` |
+| `ssl.py` | MAE ViT-S/16 encoder + classification head (Track 2) | `build_mae_model()` |
 
 **`build_supervised_model` signature:**
 ```python
 def build_supervised_model(backbone: str = "resnet18", pretrained: bool = True, num_classes: int = 2) -> nn.Module
 ```
+
+**`build_mae_model` signature:**
+```python
+def build_mae_model(pretrained_checkpoint: str | None = None, num_classes: int = 2) -> nn.Module
+```
+Returns a ViT-S/16 MAE encoder with a linear classification head. Output: `(B, 2)` logits from `(B, 1, 224, 224)` float32 input — same contract as `build_supervised_model`.
 
 **Imports from:** `timm`
 **Imported by:** `src/training/train_asymmetric.py`
@@ -101,16 +108,18 @@ def build_supervised_model(backbone: str = "resnet18", pretrained: bool = True, 
 
 ## `src/training/`
 
-Training loop functions called once per epoch by the entry-point scripts.
+Training loop functions and the primary entry-point scripts. Invoked as `python -m src.training.<name>`.
 
 | File | Purpose | Key exports |
 |------|---------|-------------|
-| `train_supervised.py` | One-epoch supervised training loop | `train_one_epoch(model, loader, optimizer, device)` |
-| `train_ssl_pretrain.py` | MAE pretraining loop (planned) | — |
-| `train_ssl_finetune.py` | SSL fine-tune loop (planned) | — |
+| `train_asymmetric.py` | **Primary Track 1 entry point** — LODO training loop, hitfinder-guided crop pipeline, wandb logging | `main()` |
+| `lodo.py` | Shared LODO fold loop + session builder used by both Track 1 and Track 2 | `build_sessions()`, `run_lodo()` |
+| `train_supervised.py` | One-epoch supervised training loop (utility, called by `train_asymmetric.py`) | `train_one_epoch(model, loader, optimizer, device)` |
+| `train_ssl_pretrain.py` | MAE pretraining loop — mask 75% of patches, reconstruct, log pixel MSE | `main()` |
+| `train_ssl_finetune.py` | SSL fine-tuning loop — attach classification head, train on labeled CXI | `main()` |
 
-**Imports from:** `torch`, `wandb`
-**Imported by:** `src/training/train_asymmetric.py`
+**Imports from:** `torch`, `wandb`, `src/data/`, `src/models/`, `src/evaluation/`
+**Imported by:** Nothing (entry points)
 
 ---
 
@@ -148,11 +157,10 @@ Config lookup order: `configs/base.yaml` merged with `configs/<track>/<name>.yam
 
 ## `scripts/` — Entry Points
 
-All scripts are self-contained and import from `src/`. Run with `python scripts/<name>.py --config <name>`.
+All scripts are self-contained and import from `src/`. Run with `python scripts/<name>.py`. Training entry points live in `src/training/` and are run with `python -m src.training.<name> --config <name>`.
 
 | Script | Purpose | Key imports |
 |--------|---------|-------------|
-| `src/training/train_asymmetric.py` | LODO training: asymmetric pipeline + wandb logging | `data`, `models`, `training`, `evaluation`, `hitfinders`, `utils` |
 | `run_pipeline_debug.py` | Debug and profile the preprocessing pipeline | `preprocessing.*`, `data`, `hitfinders.gpu` |
 | `smoke_test_detector_shapes.py` | Verify geometry + assembly for all detectors | `preprocessing.{geometry,io,augment,pipeline}` |
 | `visualize_assembled.py` | Save assembled detector images to PNG | `preprocessing.{geometry,io,pipeline}`, `matplotlib` |

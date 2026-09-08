@@ -6,19 +6,25 @@ This reference covers the Hit_finder SFX hit-classification system — a deep le
 
 ---
 
-## Pipeline Overview
+## Two-Track Architecture
 
-The diagram below shows every component from raw frames to SLURM job submission:
+The project runs two parallel modeling strategies that share the same preprocessing pipeline:
 
-![Pipeline Overview](../assets/pipeline_architecture.png)
+**Track 1 — Supervised** trains a ResNet18/50 directly on labeled CXI frames. A hitfinder (PF8 or GPU) locates Bragg peaks on each frame; crops centered on those peaks become positive training examples, while crops placed ≥50 px from all peaks become negatives. Labels are derived on-the-fly — no pre-labeled dataset required beyond the CXI files themselves.
+
+**Track 2 — Self-Supervised (MAE)** pretrain a ViT-S/16 encoder on a large pool of *unlabeled* diffraction frames using masked autoencoders (MAE): 75% of 224×224 patches are masked out and the model learns to reconstruct them from context. A classification head is then fine-tuned on the same labeled CXI data as Track 1.
+
+Both tracks run the **identical preprocessing pipeline** — GCN on the full assembled frame → gap fill → 224×224 crop/tile → LCN → augmentation — so any preprocessing change affects both. The comparison between Track 1 and Track 2 is itself a scientific contribution of this project.
 
 ---
 
 ## Module Dependency Graph
 
-Auto-generated from the live codebase (849 nodes, 1515 edges). Thicker clusters are tighter communities; god nodes are the most-connected functions:
+Auto-generated from the live codebase. Thicker clusters are tighter communities; ⚡ badges mark the most-connected functions (highest blast radius):
 
-![Module Dependency Graph](../assets/module-graph.svg)
+![Module Dependency Graph](../assets/module-graph-curated.svg)
+
+> **For function-level exploration with pan/zoom/search** — open [`graphify-out/graph.html`](../../graphify-out/graph.html) in a browser (849 nodes, 1515 edges).
 
 ---
 

@@ -40,6 +40,9 @@ pytest
 | `test_models.py` | `build_supervised_model()` for resnet18/50 | `torch.zeros()` |
 | `test_train_supervised.py` | `train_one_epoch()`: loss decreases, returns metrics dict | small synthetic loader |
 | `test_train_asymmetric_resume.py` | Resume-from-checkpoint logic in `src/training/train_asymmetric.py` | tmp checkpoint dir |
+| `test_ssl_dataset.py` | `SSLPretrainCXIDataset` — random valid-region crops for MAE pretraining | synthetic CXI + valid-pixel mask |
+| `test_ssl_model.py` | `src/models/ssl.py` — MAE ViT-S/16 builder, masking pipeline, pixel MSE loss | `torch.zeros()` |
+| `test_train_ssl.py` | SSL pretraining and fine-tuning loops (CPU smoke test, `MockHitfinder`) | small synthetic loader |
 | `test_evaluation.py` | `metrics.py`: AP, AUC-ROC, F1 edge cases | `np.array` fixtures |
 | `test_patch_eval.py` | Patch-level centroid crop geometry | synthetic canvas + centroids |
 | `test_vote_aggregation.py` | Vote aggregation: frame score formula, threshold behavior | synthetic patch scores |

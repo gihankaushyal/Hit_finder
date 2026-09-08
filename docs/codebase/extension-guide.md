@@ -14,12 +14,12 @@ Add support for a detector geometry not yet in the system.
 
   ```python
   elif desc == "MY_DETECTOR":
-      return load_pad_geometry(cxi_path, geom_file="configs/geom/my_detector.geom")
+      return load_pad_geometry(cxi_path, geom_file="src/preprocessing/data/my_detector.geom")
   ```
 
 - [ ] **2. Add `.geom` file (if CrystFEL-style geometry)**
 
-  Place it at `configs/geom/my_detector.geom`. CrystFEL geometry format:
+  Place it at `src/preprocessing/data/my_detector.geom`. This directory co-locates geometry files with the preprocessing code that loads them. CrystFEL geometry format:
   `p0/corner_x`, `p0/corner_y`, `p0/fs`, `p0/ss`, etc.
 
 - [ ] **3. Add to `DETECTOR_LOADERS` in `src/preprocessing/geometry.py`**
@@ -102,7 +102,7 @@ Add a new peak-finding algorithm that implements the `Hitfinder` protocol.
       ...
   ```
 
-- [ ] **3. Add config key in `configs/supervised/resnet18_asymmetric.yaml`**
+- [ ] **3. Add config key in `configs/supervised/resnet18_resonet.yaml`**
 
   ```yaml
   hitfinder:
@@ -222,4 +222,57 @@ Add a metric that is computed alongside AP, AUC-ROC, and F1 after vote aggregati
       y_true  = np.array([0, 0, 0])
       y_score = np.array([0.1, 0.2, 0.3])
       assert my_metric(y_true, y_score) == 0.0
+  ```
+
+---
+
+## New SSL Pretraining Config {#new-ssl-config}
+
+Add a hyperparameter variant for MAE pretraining (different mask ratio, patch size, or learning rate). The MAE backbone is fixed at ViT-S/16 — this recipe is for config variants only, not new architectures.
+
+- [ ] **1. Create a YAML file under `configs/ssl/`**
+
+  ```yaml
+  # configs/ssl/mae_pretrain_v2.yaml
+  model:
+    mask_ratio: 0.80          # fraction of patches masked (default: 0.75)
+    patch_size: 16            # ViT patch size in pixels
+  training:
+    learning_rate: 1.5e-4
+    num_epochs: 200
+    batch_size: 64
+    warmup_epochs: 10
+  data:
+    file_list: data/splits/ssl_train.txt   # plaintext list of .img or .cxi paths
+  ```
+
+  Required keys: `model.mask_ratio`, `model.patch_size`, `training.learning_rate`, `training.num_epochs`, `data.file_list`. All other keys are optional and fall back to `configs/base.yaml` via `load_config()`.
+
+- [ ] **2. Verify `load_config()` merges correctly**
+
+  ```python
+  from src.utils.config import load_config
+  cfg = load_config("ssl/mae_pretrain_v2")
+  assert cfg["model"]["mask_ratio"] == 0.80
+  assert "training" in cfg
+  ```
+
+- [ ] **3. Launch pretraining with the new config**
+
+  ```bash
+  source .secrets/wandb.env
+  python -m src.training.train_ssl_pretrain \
+      --config configs/ssl/mae_pretrain_v2.yaml \
+      --fold 1
+  ```
+
+- [ ] **4. Add a config-load test in `tests/test_config.py`**
+
+  ```python
+  def test_ssl_config_loads_mask_ratio(tmp_path):
+      cfg_path = tmp_path / "ssl" / "mae_pretrain_v2.yaml"
+      cfg_path.parent.mkdir()
+      cfg_path.write_text("model:\n  mask_ratio: 0.80\n  patch_size: 16\n")
+      cfg = load_config(str(cfg_path))
+      assert cfg["model"]["mask_ratio"] == pytest.approx(0.80)
   ```

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import math
+import shutil
 from pathlib import Path
 
 import numpy as np
@@ -85,6 +86,7 @@ def run_pretrain(
     final_loss = float("nan")
     epochs_run = 0
     for epoch in range(start_epoch, epochs + 1):
+        dl.dataset.set_epoch(epoch)
         lr = _cosine_lr(
             tr["learning_rate"], epoch - 1, tr.get("warmup_epochs", 0), epochs
         )
@@ -113,7 +115,9 @@ def run_pretrain(
             losses.append(loss.item())
         final_loss = float(np.mean(losses)) if losses else float("nan")
         epochs_run += 1
-        wandb.log({"epoch": epoch, "pretrain/loss": final_loss, "pretrain/lr": lr})
+        wandb.log(
+            {"epoch": epoch, "pretrain/loss": final_loss, "pretrain/lr": lr}, step=epoch
+        )
         ckpt_payload = {
             "epoch": epoch,
             "model_state_dict": model.state_dict(),
@@ -123,12 +127,12 @@ def run_pretrain(
             "ssl": ssl_cfg,
             # detector_dirs snapshot lets resume validation detect data-source drift
             # (e.g. a different --stage-dir that wasn't copied from the same NFS source).
-            "detector_dirs": dict(cfg["lodo"]["detector_dirs"]),
+            "detector_dirs": dict(cfg.get("lodo", {}).get("detector_dirs", {})),
         }
         torch.save(ckpt_payload, last_path)
         if epoch % tr.get("checkpoint_every", 20) == 0:
             epoch_ckpt = ckpt_dir / f"epoch{epoch}.pt"
-            torch.save(ckpt_payload, epoch_ckpt)
+            shutil.copy2(last_path, epoch_ckpt)
     wandb.finish()
     return {
         "epochs_run": epochs_run,
@@ -174,9 +178,13 @@ def main() -> None:
         from pathlib import Path as _Path
 
         stage = _Path(args.stage_dir)
+        remapped = []
         for det, nfs_path in cfg["lodo"]["detector_dirs"].items():
-            cfg["lodo"]["detector_dirs"][det] = str(stage / _Path(nfs_path).name)
-        print(f"[stage] detector_dirs remapped to {args.stage_dir}")
+            staged = stage / _Path(nfs_path).name
+            if staged.is_dir():
+                cfg["lodo"]["detector_dirs"][det] = str(staged)
+                remapped.append(det)
+        print(f"[stage] detector_dirs remapped to {args.stage_dir}: {remapped}")
     device = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
     sessions, session_map = build_sessions(cfg["lodo"])
 
