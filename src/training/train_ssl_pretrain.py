@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import math
+import shutil
 from pathlib import Path
 
 import numpy as np
@@ -85,6 +86,7 @@ def run_pretrain(
     final_loss = float("nan")
     epochs_run = 0
     for epoch in range(start_epoch, epochs + 1):
+        dl.dataset.set_epoch(epoch)
         lr = _cosine_lr(
             tr["learning_rate"], epoch - 1, tr.get("warmup_epochs", 0), epochs
         )
@@ -130,7 +132,7 @@ def run_pretrain(
         torch.save(ckpt_payload, last_path)
         if epoch % tr.get("checkpoint_every", 20) == 0:
             epoch_ckpt = ckpt_dir / f"epoch{epoch}.pt"
-            torch.save(ckpt_payload, epoch_ckpt)
+            shutil.copy2(last_path, epoch_ckpt)
     wandb.finish()
     return {
         "epochs_run": epochs_run,

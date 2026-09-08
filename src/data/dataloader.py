@@ -151,10 +151,27 @@ def ssl_crop_loader(
     The DataLoader uses loader_batch = batch_size // crops_per_frame frames per
     batch so that collate expands each back to batch_size crops.
 
-    GPU hitfinder backends require num_workers=0 — CUDA contexts cannot be
-    forked into DataLoader worker processes (enforced by the caller, same
-    convention as asymmetric_loader).
+    Shuffle granularity: shuffle=True reorders *frames*, not individual crops.
+    All crops_per_frame crops from the same frame always land in the same batch.
+    With crops_per_frame=N, each GPU batch draws from batch_size//N unique frames.
+    This is intentional — _load_gcn_frame runs once per frame.
+
+    GPU hitfinder ⇒ num_workers=0 is enforced here (CUDA contexts cannot be
+    forked into DataLoader worker processes).
     """
+    from src.hitfinders.gpu import GPUHitfinder
+
+    if isinstance(hitfinder, GPUHitfinder) and num_workers > 0:
+        import warnings
+
+        warnings.warn(
+            "GPUHitfinder requires num_workers=0 (CUDA context cannot be shared "
+            "across forked DataLoader workers). Overriding num_workers to 0.",
+            UserWarning,
+            stacklevel=2,
+        )
+        num_workers = 0
+
     ds = SSLPretrainCXIDataset(
         session_ids=session_ids,
         session_map=session_map,
@@ -169,6 +186,7 @@ def ssl_crop_loader(
             f"({crops_per_frame}) so the flatten collate yields exactly batch_size crops."
         )
     loader_batch = batch_size // crops_per_frame
+    generator = torch.Generator().manual_seed(seed)
     return DataLoader(
         ds,
         batch_size=loader_batch,
@@ -176,4 +194,5 @@ def ssl_crop_loader(
         num_workers=num_workers,
         pin_memory=torch.cuda.is_available(),
         collate_fn=_ssl_flatten_collate,
+        generator=generator,
     )

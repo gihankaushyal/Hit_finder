@@ -491,6 +491,7 @@ class SSLPretrainCXIDataset(Dataset):
     ) -> None:
         self._hitfinder = hitfinder
         self._seed = seed
+        self._epoch: int = 0
         self._min_valid_frac = min_valid_frac
         self._crops_per_frame = crops_per_frame
         self._last_geom_path_holder: list = [None]
@@ -522,9 +523,21 @@ class SSLPretrainCXIDataset(Dataset):
     def __len__(self) -> int:
         return len(self._index)
 
+    def set_epoch(self, epoch: int) -> None:
+        """Advance the epoch counter so each epoch draws different crops.
+
+        Call this at the start of every training epoch (before iterating the
+        DataLoader) so that per-frame RNG seeds vary across epochs and the model
+        sees different 224×224 windows each pass.
+        """
+        self._epoch = epoch
+
     def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         path, frame_idx = self._index[idx]
-        rng = np.random.default_rng(self._seed * 1_000_003 + idx)
+        # Fold epoch into seed so crop positions vary across epochs.
+        rng = np.random.default_rng(
+            self._seed * 1_000_003 + self._epoch * len(self._index) + idx
+        )
 
         if path not in self._path_to_desc:
             try:
@@ -533,14 +546,27 @@ class SSLPretrainCXIDataset(Dataset):
                 self._path_to_desc[path] = None
 
         # Assembly + GCN run ONCE per frame regardless of crops_per_frame.
-        gcn_frame, valid_mask, centroids = _load_gcn_frame(
-            path,
-            frame_idx,
-            self._path_to_desc.get(path),
-            self._path_to_geom,
-            self._hitfinder,
-            self._last_geom_path_holder,
-        )
+        try:
+            gcn_frame, valid_mask, centroids = _load_gcn_frame(
+                path,
+                frame_idx,
+                self._path_to_desc.get(path),
+                self._path_to_geom,
+                self._hitfinder,
+                self._last_geom_path_holder,
+            )
+        except (OSError, KeyError, ValueError, RuntimeError) as exc:
+            warnings.warn(
+                f"SSLPretrainCXIDataset: skipping frame {frame_idx} of {path}: {exc}",
+                stacklevel=2,
+            )
+            n_patches = (_SSL_CROP // _SSL_PATCH) ** 2
+            zeros_img = torch.zeros(self._crops_per_frame, 1, _SSL_CROP, _SSL_CROP)
+            zeros_peaks = torch.zeros(
+                self._crops_per_frame, n_patches, dtype=torch.bool
+            )
+            zeros_vmask = torch.zeros(self._crops_per_frame, 1, _SSL_CROP, _SSL_CROP)
+            return zeros_img, zeros_peaks, zeros_vmask
         fh, fw = gcn_frame.shape
 
         crop_tensors: list[torch.Tensor] = []
