@@ -15,6 +15,7 @@ training:
   epochs: 100
   learning_rate: 5.0e-5    # lower than ResNet's 1e-4 — full ViT fine-tune convention
   early_stopping_patience: 10
+  num_workers: 32
 
 lodo:
   detector_dirs:
