@@ -116,7 +116,8 @@ def _train_fold(
     patience = cfg["training"].get("early_stopping_patience", 10)
 
     prefix = run_name_prefix or f"{backbone}-asymmetric"
-    run_name = f"{prefix}-fold{fold_id}-seed{seed}"
+    run_suffix = cfg.get("wandb", {}).get("run_suffix", "")
+    run_name = f"{prefix}-fold{fold_id}-seed{seed}{run_suffix}"
 
     label_key = cfg["lodo"].get("label_key", "entry_1/labels/hit")
 
@@ -177,9 +178,11 @@ def _train_fold(
     wandb.init(
         project=cfg["wandb"]["project"],
         entity=cfg["wandb"].get("entity"),
+        id=run_name,
         name=run_name,
         config={**cfg, "fold_id": fold_id, "test_detector": fold["test_detector"]},
         tags=cfg["wandb"].get("tags", []),
+        resume="allow",
     )
     wandb.define_metric("epoch")
     wandb.define_metric("train/*", step_metric="epoch")

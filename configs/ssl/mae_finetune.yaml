@@ -45,3 +45,4 @@ benchmark:
 
 wandb:
   tags: [ssl-finetune]
+  run_suffix: -v2
