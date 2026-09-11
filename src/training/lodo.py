@@ -177,12 +177,13 @@ def _train_fold(
     wandb.init(
         project=cfg["wandb"]["project"],
         entity=cfg["wandb"].get("entity"),
-        id=run_name,
         name=run_name,
         config={**cfg, "fold_id": fold_id, "test_detector": fold["test_detector"]},
         tags=cfg["wandb"].get("tags", []),
-        resume="allow",
     )
+    wandb.define_metric("epoch")
+    wandb.define_metric("train/*", step_metric="epoch")
+    wandb.define_metric("val/*", step_metric="epoch")
 
     wandb.log({"hitfinder/backend": cfg["hitfinder"]["backend"]})
 
@@ -252,7 +253,8 @@ def _train_fold(
                     "val/auc": val_m["auc_roc"],
                     "val/f1": val_m["f1"],
                     "hitfinder/n_peaks_mean": float("nan"),
-                }
+                },
+                step=epoch,
             )
 
             if not np.isnan(val_m["f1"]) and val_m["f1"] > best_f1:
