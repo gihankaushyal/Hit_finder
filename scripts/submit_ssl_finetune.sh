@@ -14,7 +14,10 @@
 
 set -euo pipefail
 FOLD="${1:?fold id required (1-4)}"
-EXTRA="${2:-}"
+shift
+EXTRA=("$@")
+
+STAGE_DIR="${SHARED_STAGE:-/tmp/sfx_stage_shared}"
 
 module load mamba/latest
 source activate sfx-hitfinder
@@ -25,4 +28,5 @@ python -m src.training.train_ssl_finetune \
     --config configs/ssl/mae_finetune.yaml \
     --fold "${FOLD}" \
     --pretrain-checkpoint "checkpoints/mae-vits16-fold${FOLD}-seed42/last.pt" \
-    ${EXTRA}
+    --stage-dir "${STAGE_DIR}" \
+    "${EXTRA[@]}"
