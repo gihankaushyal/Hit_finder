@@ -376,12 +376,19 @@ class AsymmetricCXIDataset(Dataset):
     def __getitem__(self, idx: int) -> tuple[torch.Tensor, int] | None:
         path, frame_idx = self._index[idx]
         desc = self._path_to_desc.get(path)
+        # Metadata gating: only run the hitfinder for frames the embedded
+        # ground-truth label marks as a hit. Non-hit frames skip PF8 entirely
+        # — _load_gcn_frame's `if hitfinder is not None` guard already
+        # short-circuits every hitfinder-related step and returns empty
+        # centroids, so the rest of this method is unchanged for that case.
+        label = self._labels[idx]
+        hitfinder = self._hitfinder if label == 1 else None
         assembled, valid_mask, centroids = _load_gcn_frame(
             path,
             frame_idx,
             desc,
             self._path_to_geom,
-            self._hitfinder,
+            hitfinder,
             self._last_geom_path_holder,
         )
 

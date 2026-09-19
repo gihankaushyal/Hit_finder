@@ -164,8 +164,16 @@ def test_len(synthetic_cxi: Path) -> None:
 
 
 def test_hit_path_returns_crop_shape_and_label_one(synthetic_cxi: Path) -> None:
-    """When hitfinder returns peaks, __getitem__ takes Path A: (1,224,224) tensor, label=1."""
-    # Peak at centre of 512×512 frame — well within padded bounds
+    """Metadata-hit frames with a peak found return a valid (1,224,224) crop.
+
+    Only indices 0-3 (metadata hit, per the synthetic_cxi fixture) are
+    exercised here: indices 4-7 are metadata non-hit and never reach the
+    hitfinder at all (see test_non_hit_frame_never_calls_hitfinder). Label is
+    not asserted to be strictly 1 here because metadata-hit frames with
+    centroids now go through a 50/50 coin toss between a peak-centred crop
+    (label=1) and a hard-negative crop (label=0) — see
+    test_hit_frame_coin_toss_produces_both_labels for that behavior.
+    """
     peaks = np.array([[256.0, 256.0]], dtype=np.float32)
     hf = MockHitfinder(peaks=peaks)
     ds = AsymmetricCXIDataset(
@@ -174,13 +182,13 @@ def test_hit_path_returns_crop_shape_and_label_one(synthetic_cxi: Path) -> None:
         hitfinder=hf,
         label_key=LABEL_KEY,
     )
-    for idx in range(len(ds)):
+    for idx in range(N_HITS):  # indices 0-3 are metadata hit
         result = ds[idx]
-        assert result is not None, f"item {idx}: unexpected None from Path A"
+        assert result is not None, f"item {idx}: unexpected None"
         tensor, label = result
         assert tensor.shape == (1, 224, 224), f"item {idx}: wrong shape {tensor.shape}"
         assert tensor.dtype == torch.float32, f"item {idx}: wrong dtype {tensor.dtype}"
-        assert label == 1, f"item {idx}: expected label=1 (hit crop), got {label}"
+        assert label in (0, 1), f"item {idx}: unexpected label {label}"
 
 
 def test_miss_path_returns_crop_shape_and_label_zero(synthetic_cxi: Path) -> None:
@@ -201,6 +209,27 @@ def test_miss_path_returns_crop_shape_and_label_zero(synthetic_cxi: Path) -> Non
         assert tensor.shape == (1, 224, 224), f"item {idx}: wrong shape {tensor.shape}"
         assert tensor.dtype == torch.float32, f"item {idx}: wrong dtype {tensor.dtype}"
         assert label == 0, f"item {idx}: expected label=0 (miss crop), got {label}"
+
+
+def test_non_hit_frame_never_calls_hitfinder(synthetic_cxi: Path) -> None:
+    """Metadata NON-HIT frames (indices 4-7) must never invoke find_peaks."""
+
+    class RaisingHitfinder:
+        def find_peaks(self, assembled: np.ndarray) -> np.ndarray:
+            raise AssertionError("find_peaks must not be called for a non-hit frame")
+
+    ds = AsymmetricCXIDataset(
+        session_ids=["s0"],
+        session_map={"s0": synthetic_cxi},
+        hitfinder=RaisingHitfinder(),
+        label_key=LABEL_KEY,
+    )
+    for idx in range(N_HITS, N_FRAMES):  # indices 4-7 are metadata non-hit
+        result = ds[idx]
+        assert result is not None
+        tensor, label = result
+        assert label == 0, f"item {idx}: metadata non-hit must yield label=0"
+        assert tensor.shape == (1, 224, 224)
 
 
 def test_crop_is_normalised(synthetic_cxi: Path) -> None:
