@@ -125,6 +125,27 @@ def test_pad_border_centroid_shift() -> None:
     assert _crop_contains_centroid(top=r, left=c, size=224, centroids=centroids_shifted)
 
 
+def test_path_a_crop_centres_on_peak() -> None:
+    """_path_a_crop returns a crop centred on the given peak and label=1."""
+    from src.data.dataset import _path_a_crop
+
+    padded = np.arange(736 * 736, dtype=np.float32).reshape(736, 736)
+    centroids = np.array([[400.0, 300.0]], dtype=np.float32)  # [x, y]
+    rng = np.random.default_rng(0)
+
+    crop, label = _path_a_crop(padded, centroids, rng, ph=736, pw=736, size=224)
+
+    assert label == 1
+    assert crop.shape == (224, 224)
+    # Crop top-left should place the peak at the crop centre: cx-112, cy-112.
+    expected_left = 400 - 112
+    expected_top = 300 - 112
+    np.testing.assert_array_equal(
+        crop,
+        padded[expected_top : expected_top + 224, expected_left : expected_left + 224],
+    )
+
+
 # ---------------------------------------------------------------------------
 # AsymmetricCXIDataset structural tests
 # ---------------------------------------------------------------------------

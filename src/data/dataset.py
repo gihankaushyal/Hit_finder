@@ -170,6 +170,37 @@ def _crop_within_margin(
     return bool(near.any())
 
 
+def _path_a_crop(
+    padded: np.ndarray,
+    centroids: np.ndarray,
+    rng: np.random.Generator,
+    ph: int,
+    pw: int,
+    size: int,
+) -> tuple[np.ndarray, int]:
+    """Crop centred on a randomly chosen Bragg peak.
+
+    Args:
+        padded: (H, W) or (H, W, C) padded frame stack to crop from.
+        centroids: (N, 2) float32 array of [x, y] pairs in padded coordinates.
+            Must be non-empty.
+        rng: Numpy Generator used to pick which centroid to centre on.
+        ph: Padded frame height.
+        pw: Padded frame width.
+        size: Side length of the square crop in pixels.
+
+    Returns:
+        (crop, label) where label is always 1.
+    """
+    peak = centroids[int(rng.integers(0, len(centroids)))]
+    cx = int(round(float(peak[0])))  # column
+    cy = int(round(float(peak[1])))  # row
+    left = int(np.clip(cx - size // 2, 0, pw - size))
+    top = int(np.clip(cy - size // 2, 0, ph - size))
+    crop = padded[top : top + size, left : left + size].copy()
+    return crop, 1
+
+
 def _load_gcn_frame(
     path: Path,
     frame_idx: int,
@@ -378,14 +409,7 @@ class AsymmetricCXIDataset(Dataset):
 
         # --- Guided crop ---
         if centroids.shape[0] > 0:
-            # Path A: hit crop centred on a randomly chosen Bragg peak → label=1
-            peak = centroids[int(rng.integers(0, len(centroids)))]
-            cx = int(round(float(peak[0])))  # column
-            cy = int(round(float(peak[1])))  # row
-            left = int(np.clip(cx - _CROP // 2, 0, pw - _CROP))
-            top = int(np.clip(cy - _CROP // 2, 0, ph - _CROP))
-            crop = padded[top : top + _CROP, left : left + _CROP].copy()
-            derived_label = 1
+            crop, derived_label = _path_a_crop(padded, centroids, rng, ph, pw, _CROP)
         else:
             # Path B: miss crop — random position with 50 px clearance from all peaks → label=0
             crop = None
