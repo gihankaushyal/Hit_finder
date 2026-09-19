@@ -299,14 +299,24 @@ class AsymmetricCXIDataset(Dataset):
     """Primary training dataset: hitfinder-guided crop with augmentation and normalisation.
 
     For each frame:
-      1. Read + assemble to native resolution
-      2. Call set_geometry on hitfinder (if supported) with CXI dist/wavelength/pixel_size
-      3. Run hitfinder on raw assembled frame → centroids (N_peaks, 2)
+      1. Read the embedded ground-truth label; the hitfinder only runs when
+         the label is HIT (metadata gating — see step 3)
+      2. Read + assemble to native resolution
+      3. If metadata HIT: call set_geometry on hitfinder (if supported) with
+         CXI dist/wavelength/pixel_size, then run hitfinder on the raw
+         assembled frame → centroids (N_peaks, 2). If metadata NON-HIT, the
+         hitfinder is skipped entirely and centroids is empty.
       4. Apply GCN to the full assembled frame
       5. Pad frame by PAD_BORDER_DEFAULT px on each edge; shift centroids
       6. Guided crop (224×224) → derived label:
-           Path A (peaks found): crop centred on a random Bragg peak → label=1
-           Path B (no peaks):    random crop with 50 px clearance from all peaks → label=0
+           Metadata HIT, centroids found: 50/50 coin toss —
+             Path A: crop centred on a random Bragg peak → label=1
+             Path B: crop with 50 px clearance from all peaks (hard-negative
+               background from a real hit frame) → label=0; falls back to
+               Path A if no clear position is found within 50 attempts
+           Metadata HIT, no centroids found: random crop → label=0
+           Metadata NON-HIT: random crop (no clearance check needed,
+             centroids is always empty) → label=0
       7. Augment (geometric): random_rot90 → random_flip
       8. Normalise: masked LCN (GCN already applied to full frame in step 4)
       9. Augment: peak-aware random_cutout (after LCN — holes are exact 0
@@ -416,9 +426,34 @@ class AsymmetricCXIDataset(Dataset):
 
         # --- Guided crop ---
         if centroids.shape[0] > 0:
-            crop, derived_label = _path_a_crop(padded, centroids, rng, ph, pw, _CROP)
+            # Metadata HIT frame with centroids found: 50/50 coin toss between
+            # Path A (peak-centred, label=1) and Path B (hard-negative crop
+            # sampled from this same hit frame's background, label=0). Path B
+            # falls back to Path A if no 50px-clear position exists — the
+            # frame has known peaks, so a valid Path A crop always exists.
+            if rng.random() < 0.5:
+                crop, derived_label = _path_a_crop(
+                    padded, centroids, rng, ph, pw, _CROP
+                )
+            else:
+                crop = None
+                for _ in range(50):
+                    top = int(rng.integers(0, ph - _CROP + 1))
+                    left = int(rng.integers(0, pw - _CROP + 1))
+                    if not _crop_within_margin(top, left, _CROP, centroids, margin=50):
+                        crop = padded[top : top + _CROP, left : left + _CROP].copy()
+                        break
+                if crop is None:
+                    crop, derived_label = _path_a_crop(
+                        padded, centroids, rng, ph, pw, _CROP
+                    )
+                else:
+                    derived_label = 0
         else:
             # Path B: miss crop — random position with 50 px clearance from all peaks → label=0
+            # (centroids is empty here either because the frame is metadata
+            # NON-HIT and the hitfinder never ran, or the frame is metadata HIT
+            # but the hitfinder found nothing — both fall through identically.)
             crop = None
             for _ in range(50):
                 top = int(rng.integers(0, ph - _CROP + 1))

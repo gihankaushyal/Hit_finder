@@ -232,6 +232,61 @@ def test_non_hit_frame_never_calls_hitfinder(synthetic_cxi: Path) -> None:
         assert tensor.shape == (1, 224, 224)
 
 
+def test_hit_frame_coin_toss_produces_both_labels(synthetic_cxi: Path) -> None:
+    """Across many seeds, a metadata-hit frame with a peak yields both labels."""
+    peaks = np.array([[256.0, 256.0]], dtype=np.float32)
+    hf = MockHitfinder(peaks=peaks)
+    labels_seen: set[int] = set()
+    for seed in range(30):
+        ds = AsymmetricCXIDataset(
+            session_ids=["s0"],
+            session_map={"s0": synthetic_cxi},
+            hitfinder=hf,
+            label_key=LABEL_KEY,
+            seed=seed,
+        )
+        result = ds[0]  # index 0 is metadata hit
+        assert result is not None
+        _, label = result
+        labels_seen.add(label)
+        if labels_seen == {0, 1}:
+            break
+    assert labels_seen == {
+        0,
+        1,
+    }, f"expected both labels across 30 seeds from the coin toss, got {labels_seen}"
+
+
+def test_hit_path_b_falls_back_to_path_a_when_margin_search_fails(
+    synthetic_cxi: Path,
+) -> None:
+    """When peaks blanket the frame, no 50px-clear crop exists — must fall back
+    to a peak-centred crop (label=1) instead of ever returning None."""
+    # Dense grid of peaks covering the full 736x736 padded frame (512 + 2*112)
+    # at 80px spacing, well under the 2*50=100px margin needed for any gap.
+    xs = np.arange(0, 736, 80)
+    ys = np.arange(0, 736, 80)
+    grid = np.array([[x, y] for x in xs for y in ys], dtype=np.float32)
+    hf = MockHitfinder(peaks=grid)
+    for seed in range(10):
+        ds = AsymmetricCXIDataset(
+            session_ids=["s0"],
+            session_map={"s0": synthetic_cxi},
+            hitfinder=hf,
+            label_key=LABEL_KEY,
+            seed=seed,
+        )
+        result = ds[0]  # index 0 is metadata hit
+        assert result is not None, f"seed {seed}: fallback must never return None"
+        tensor, label = result
+        assert tensor.shape == (1, 224, 224)
+        assert label == 1, (
+            f"seed {seed}: dense peak grid leaves no clear region, so every "
+            f"draw (Path A directly, or Path B falling back) must land on "
+            f"label=1, got {label}"
+        )
+
+
 def test_crop_is_normalised(synthetic_cxi: Path) -> None:
     """Returned tensor values are not in raw detector range — GCN+LCN has been applied."""
     peaks = np.array([[256.0, 256.0]], dtype=np.float32)
