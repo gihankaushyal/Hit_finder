@@ -410,3 +410,49 @@ def test_set_geometry_called_with_cxi_params(synthetic_cxi: Path) -> None:
     assert call["dist"] == pytest.approx(0.1)
     assert call["wavelength"] == pytest.approx(1.3e-10)
     assert call["pixel_size"] == pytest.approx(1e-4)
+
+
+@pytest.fixture(scope="module")
+def malformed_label_cxi(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """Create an 8-frame CXI file where one embedded label is out of range.
+
+    Same layout as synthetic_cxi, but frame index 2 (nominally a hit) is
+    corrupted to -1 to exercise the out-of-range label warning.
+    """
+    tmp = tmp_path_factory.mktemp("data")
+    path = tmp / "malformed.cxi"
+    rng = np.random.default_rng(42)
+    frames = rng.random((N_FRAMES, H, W)).astype(np.float32)
+    labels = np.array([1, 1, -1, 1, 0, 0, 0, 0], dtype=np.float32)
+    with h5py.File(path, "w") as f:
+        f.create_dataset(DATA_KEY, data=frames)
+        f.create_dataset(LABEL_KEY, data=labels)
+        det_grp = f.require_group("entry_1/instrument_1/detector_1")
+        det_grp.create_dataset("description", data=np.bytes_(b"Jungfrau 4M"))
+        det_grp.create_dataset("distance", data=np.float64(0.1))
+        det_grp.create_dataset("x_pixel_size", data=np.float64(1e-4))
+        src_grp = f.require_group("entry_1/instrument_1/source_1")
+        src_grp.create_dataset("wavelength", data=np.float64(1.3e-10))
+    return path
+
+
+def test_out_of_range_label_warns_and_still_functions(
+    malformed_label_cxi: Path,
+) -> None:
+    """An out-of-range embedded label (e.g. -1) triggers a UserWarning but the
+    dataset still builds correctly and the frame is treated as non-hit."""
+    hf = MockHitfinder()
+    with pytest.warns(UserWarning, match="out-of-range embedded label"):
+        ds = AsymmetricCXIDataset(
+            session_ids=["s0"],
+            session_map={"s0": malformed_label_cxi},
+            hitfinder=hf,
+            label_key=LABEL_KEY,
+        )
+    assert len(ds) == N_FRAMES
+
+    result = ds[2]  # the corrupted frame (raw label -1)
+    assert result is not None
+    tensor, label = result
+    assert tensor.shape == (1, 224, 224)
+    assert label == 0, f"out-of-range label must be treated as non-hit, got {label}"

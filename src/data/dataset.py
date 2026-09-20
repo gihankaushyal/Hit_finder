@@ -423,7 +423,15 @@ class AsymmetricCXIDataset(Dataset):
                 continue
             for i, raw in enumerate(arr):
                 self._index.append((p, i))
-                self._labels.append(int(round(float(raw))))
+                lbl = int(round(float(raw)))
+                if lbl not in (0, 1):
+                    warnings.warn(
+                        f"AsymmetricCXIDataset: out-of-range embedded label "
+                        f"{lbl!r} (raw={raw!r}) at {p} frame {i}; expected 0 "
+                        "or 1, treating as non-hit.",
+                        stacklevel=2,
+                    )
+                self._labels.append(lbl)
 
     def __len__(self) -> int:
         return len(self._index)
