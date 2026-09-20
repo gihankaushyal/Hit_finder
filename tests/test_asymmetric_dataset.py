@@ -191,6 +191,104 @@ def test_hit_path_returns_crop_shape_and_label_one(synthetic_cxi: Path) -> None:
         assert label in (0, 1), f"item {idx}: unexpected label {label}"
 
 
+def test_hit_path_a_forced_returns_label_one_for_all_hit_indices(
+    synthetic_cxi: Path,
+) -> None:
+    """hit_frac=1.0 forces Path A (rng.random() < 1.0 is always True, since
+    np.random.Generator.random() draws from [0, 1)), so every metadata-hit
+    index with a peak present must return label=1 individually — not just
+    index 0 (which test_hit_frame_coin_toss_produces_both_labels happens to
+    exercise via seed-hunting)."""
+    peaks = np.array([[256.0, 256.0]], dtype=np.float32)
+    hf = MockHitfinder(peaks=peaks)
+    ds = AsymmetricCXIDataset(
+        session_ids=["s0"],
+        session_map={"s0": synthetic_cxi},
+        hitfinder=hf,
+        label_key=LABEL_KEY,
+        hit_frac=1.0,
+    )
+    for idx in range(
+        N_HITS
+    ):  # indices 0-3 are metadata hit (see synthetic_cxi fixture)
+        result = ds[idx]
+        assert result is not None, f"item {idx}: unexpected None"
+        tensor, label = result
+        assert tensor.shape == (1, 224, 224), f"item {idx}: wrong shape {tensor.shape}"
+        assert tensor.dtype == torch.float32, f"item {idx}: wrong dtype {tensor.dtype}"
+        assert (
+            label == 1
+        ), f"item {idx}: hit_frac=1.0 must force Path A (label=1), got {label}"
+
+
+def test_hit_path_b_coin_toss_crop_satisfies_margin(synthetic_cxi: Path) -> None:
+    """A successful coin-toss-triggered Path B crop must respect the 50px
+    margin from every centroid.
+
+    hit_frac=0.0 forces the coin toss to always take the Path B branch for
+    metadata-hit frames with centroids present (rng.random() < 0.0 is never
+    true). The peak is placed near a corner of the 736x736 padded frame
+    (512 + 2*112) so plenty of clear area remains for _sample_clear_crop to
+    find a valid position. We wrap _crop_within_margin to record every
+    (top, left, result) it is asked to evaluate inside _sample_clear_crop's
+    search loop, then confirm the position that was ultimately accepted
+    (i.e. the last call before ds[idx] returns, whose result was False)
+    truly clears the margin.
+    """
+    from unittest.mock import patch
+
+    from src.data.dataset import _crop_within_margin as _real_crop_within_margin
+
+    # Peak near a corner in un-padded assembled coords; _load_gcn_frame shifts
+    # centroids by PAD_BORDER_DEFAULT before the crop search runs.
+    peaks = np.array([[50.0, 50.0]], dtype=np.float32)
+    hf = MockHitfinder(peaks=peaks)
+    ds = AsymmetricCXIDataset(
+        session_ids=["s0"],
+        session_map={"s0": synthetic_cxi},
+        hitfinder=hf,
+        label_key=LABEL_KEY,
+        hit_frac=0.0,
+        hard_neg_max_attempts=50,
+    )
+
+    recorded: list[tuple[int, int, bool]] = []
+
+    def spy(top: int, left: int, size: int, centroids: np.ndarray, margin: int = 50):
+        result = _real_crop_within_margin(
+            top=top, left=left, size=size, centroids=centroids, margin=margin
+        )
+        recorded.append((top, left, result))
+        return result
+
+    with patch("src.data.dataset._crop_within_margin", side_effect=spy):
+        result = ds[0]  # index 0 is metadata hit, centroids present
+
+    assert result is not None
+    tensor, label = result
+    assert tensor.shape == (1, 224, 224)
+    assert label == 0, f"hit_frac=0.0 must choose Path B (label=0), got {label}"
+
+    # The accepted position is the last recorded call — _sample_clear_crop
+    # returns immediately once _crop_within_margin reports False.
+    assert recorded, "expected _crop_within_margin to be called at least once"
+    accepted_top, accepted_left, accepted_result = recorded[-1]
+    assert accepted_result is False, (
+        "the last _crop_within_margin call before ds[idx] returned must have "
+        "been the accepted (clear) position"
+    )
+
+    # Independently re-verify the geometric clearance property.
+    padded_peaks = peaks + PAD_BORDER_DEFAULT
+    assert not _crop_within_margin(
+        top=accepted_top,
+        left=accepted_left,
+        size=224,
+        centroids=padded_peaks,
+        margin=50,
+    ), "accepted Path B crop must clear the 50px margin from every centroid"
+
+
 def test_miss_path_returns_crop_shape_and_label_zero(synthetic_cxi: Path) -> None:
     """When hitfinder finds no peaks, __getitem__ takes Path B: (1,224,224) tensor, label=0."""
     hf = MockHitfinder()  # returns empty (0, 2) centroid array
