@@ -201,6 +201,40 @@ def _path_a_crop(
     return crop, 1
 
 
+def _sample_clear_crop(
+    padded: np.ndarray,
+    centroids: np.ndarray,
+    rng: np.random.Generator,
+    ph: int,
+    pw: int,
+    size: int,
+    margin: int,
+    max_tries: int,
+) -> np.ndarray | None:
+    """Randomly sample a crop position with `margin` px clearance from every centroid.
+
+    Args:
+        padded: (H, W, C) padded frame stack to crop from.
+        centroids: (N, 2) float32 array of [x, y] pairs in padded coordinates.
+        rng: Numpy Generator used for position sampling.
+        ph: Padded frame height.
+        pw: Padded frame width.
+        size: Side length of the square crop in pixels.
+        margin: Clearance buffer in pixels around the crop boundary.
+        max_tries: Number of random positions to attempt before giving up.
+
+    Returns:
+        The cropped (size, size, C) array, or None if no clear position was
+        found within max_tries attempts.
+    """
+    for _ in range(max_tries):
+        top = int(rng.integers(0, ph - size + 1))
+        left = int(rng.integers(0, pw - size + 1))
+        if not _crop_within_margin(top, left, size, centroids, margin=margin):
+            return padded[top : top + size, left : left + size].copy()
+    return None
+
+
 def _load_gcn_frame(
     path: Path,
     frame_idx: int,
@@ -329,6 +363,12 @@ class AsymmetricCXIDataset(Dataset):
         hitfinder: Hitfinder Protocol instance (find_peaks method).
         label_key: HDF5 key for per-frame labels (used only to build the flat index).
         seed: Base RNG seed; per-sample seed is seed+idx for reproducibility.
+        hit_frac: Probability of choosing Path A (peak-centred, label=1) over
+            Path B (hard-negative) on a coin toss for metadata-HIT frames with
+            centroids found. Default 0.5.
+        hard_neg_max_attempts: Max random-position attempts when searching for
+            a hard-negative crop with margin clearance before falling back to
+            Path A (or returning None if no centroids exist). Default 50.
     """
 
     def __init__(
@@ -338,10 +378,15 @@ class AsymmetricCXIDataset(Dataset):
         hitfinder: Hitfinder,
         label_key: str = "entry_1/labels/hit",
         seed: int = 42,
+        hit_frac: float = 0.5,
+        hard_neg_max_attempts: int = 50,
     ) -> None:
         self._hitfinder = hitfinder
         self._label_key = label_key
         self._seed = seed
+        self._hit_frac = hit_frac
+        self._hard_neg_max_attempts = hard_neg_max_attempts
+        self._hard_neg_margin = 50
         self._last_geom_path_holder: list = [None]
 
         # Resolve session_map to Path objects for requested session_ids only.
@@ -431,18 +476,21 @@ class AsymmetricCXIDataset(Dataset):
             # sampled from this same hit frame's background, label=0). Path B
             # falls back to Path A if no 50px-clear position exists — the
             # frame has known peaks, so a valid Path A crop always exists.
-            if rng.random() < 0.5:
+            if rng.random() < self._hit_frac:
                 crop, derived_label = _path_a_crop(
                     padded, centroids, rng, ph, pw, _CROP
                 )
             else:
-                crop = None
-                for _ in range(50):
-                    top = int(rng.integers(0, ph - _CROP + 1))
-                    left = int(rng.integers(0, pw - _CROP + 1))
-                    if not _crop_within_margin(top, left, _CROP, centroids, margin=50):
-                        crop = padded[top : top + _CROP, left : left + _CROP].copy()
-                        break
+                crop = _sample_clear_crop(
+                    padded,
+                    centroids,
+                    rng,
+                    ph,
+                    pw,
+                    _CROP,
+                    margin=self._hard_neg_margin,
+                    max_tries=self._hard_neg_max_attempts,
+                )
                 if crop is None:
                     crop, derived_label = _path_a_crop(
                         padded, centroids, rng, ph, pw, _CROP
@@ -454,13 +502,16 @@ class AsymmetricCXIDataset(Dataset):
             # (centroids is empty here either because the frame is metadata
             # NON-HIT and the hitfinder never ran, or the frame is metadata HIT
             # but the hitfinder found nothing — both fall through identically.)
-            crop = None
-            for _ in range(50):
-                top = int(rng.integers(0, ph - _CROP + 1))
-                left = int(rng.integers(0, pw - _CROP + 1))
-                if not _crop_within_margin(top, left, _CROP, centroids, margin=50):
-                    crop = padded[top : top + _CROP, left : left + _CROP].copy()
-                    break
+            crop = _sample_clear_crop(
+                padded,
+                centroids,
+                rng,
+                ph,
+                pw,
+                _CROP,
+                margin=self._hard_neg_margin,
+                max_tries=self._hard_neg_max_attempts,
+            )
             if crop is None:
                 return None
             derived_label = 0

@@ -287,6 +287,55 @@ def test_hit_path_b_falls_back_to_path_a_when_margin_search_fails(
         )
 
 
+def test_hit_frac_zero_forces_path_b(synthetic_cxi: Path) -> None:
+    """hit_frac=0.0 means rng.random() < 0.0 is never true, so the coin toss
+    always takes the Path B (hard-negative) branch for metadata-hit frames."""
+    peaks = np.array([[256.0, 256.0]], dtype=np.float32)
+    hf = MockHitfinder(peaks=peaks)
+    for seed in range(5):
+        ds = AsymmetricCXIDataset(
+            session_ids=["s0"],
+            session_map={"s0": synthetic_cxi},
+            hitfinder=hf,
+            label_key=LABEL_KEY,
+            seed=seed,
+            hit_frac=0.0,
+        )
+        result = ds[0]  # index 0 is metadata hit
+        assert result is not None
+        tensor, label = result
+        assert tensor.shape == (1, 224, 224)
+        assert label == 0, (
+            f"seed {seed}: hit_frac=0.0 must always choose Path B "
+            f"(a clear crop exists far from the single peak), got label={label}"
+        )
+
+
+def test_hard_neg_max_attempts_zero_always_falls_back_to_path_a(
+    synthetic_cxi: Path,
+) -> None:
+    """hard_neg_max_attempts=0 means _sample_clear_crop's loop runs zero times
+    and immediately returns None, forcing the Path A fallback (label=1)."""
+    peaks = np.array([[256.0, 256.0]], dtype=np.float32)
+    hf = MockHitfinder(peaks=peaks)
+    ds = AsymmetricCXIDataset(
+        session_ids=["s0"],
+        session_map={"s0": synthetic_cxi},
+        hitfinder=hf,
+        label_key=LABEL_KEY,
+        hit_frac=0.0,  # always attempt Path B first
+        hard_neg_max_attempts=0,  # ...but immediately fail and fall back
+    )
+    result = ds[0]  # index 0 is metadata hit, centroids present
+    assert result is not None
+    tensor, label = result
+    assert tensor.shape == (1, 224, 224)
+    assert label == 1, (
+        "hard_neg_max_attempts=0 must exhaust the margin search instantly and "
+        f"fall back to _path_a_crop (label=1), got label={label}"
+    )
+
+
 def test_crop_is_normalised(synthetic_cxi: Path) -> None:
     """Returned tensor values are not in raw detector range — GCN+LCN has been applied."""
     peaks = np.array([[256.0, 256.0]], dtype=np.float32)
