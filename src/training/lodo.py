@@ -256,6 +256,7 @@ def _train_fold(
                 {
                     "epoch": epoch,
                     "train/loss": train_m["loss"],
+                    "train/realized_hit_frac": train_m["hit_frac"],
                     "val/ap": val_m["ap"],
                     "val/auc": val_m["auc_roc"],
                     "val/f1": val_m["f1"],
