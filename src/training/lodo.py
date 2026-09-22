@@ -127,6 +127,8 @@ def _train_fold(
     run_name = f"{prefix}-fold{fold_id}-seed{seed}{run_suffix}"
 
     label_key = cfg["lodo"].get("label_key", "entry_1/labels/hit")
+    hit_frac = cfg.get("asymmetric", {}).get("hit_frac", 0.5)
+    hard_neg_max_attempts = cfg.get("asymmetric", {}).get("hard_neg_max_attempts", 50)
 
     train_ids = [sid for sid, s in split_artifact["splits"].items() if s == SPLIT_TRAIN]
 
@@ -139,6 +141,8 @@ def _train_fold(
         shuffle=True,
         label_key=label_key,
         frame_cache=frame_cache,
+        hit_frac=hit_frac,
+        hard_neg_max_attempts=hard_neg_max_attempts,
     )
 
     bench_cfg = cfg.get("benchmark", {})
@@ -261,6 +265,7 @@ def _train_fold(
                 {
                     "epoch": epoch,
                     "train/loss": train_m["loss"],
+                    "train/realized_hit_frac": train_m["hit_frac"],
                     "val/ap": val_m["ap"],
                     "val/auc": val_m["auc_roc"],
                     "val/f1": val_m["f1"],

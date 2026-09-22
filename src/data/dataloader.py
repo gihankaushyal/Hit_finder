@@ -70,6 +70,8 @@ def asymmetric_loader(
     shuffle: bool = True,
     label_key: str = "entry_1/labels/hit",
     frame_cache: "FrameCache | None" = None,
+    hit_frac: float = 0.5,
+    hard_neg_max_attempts: int = 50,
 ) -> DataLoader:
     """DataLoader for asymmetric hitfinder-guided training.
 
@@ -88,6 +90,11 @@ def asymmetric_loader(
         shuffle: Shuffle each epoch.
         label_key: HDF5 key for per-frame labels (used only to build the index).
         frame_cache: Optional FrameCache for the preprocessing prefix.
+        hit_frac: Probability of Path A (peak-centred, label=1) vs Path B
+            (hard-negative) on the coin toss for metadata-HIT frames with
+            centroids found. Default 0.5.
+        hard_neg_max_attempts: Max random-position attempts when searching for
+            a hard-negative crop before falling back to Path A. Default 50.
 
     Returns:
         DataLoader yielding (tensor(B,1,224,224), label(B,)) pairs.
@@ -111,6 +118,8 @@ def asymmetric_loader(
         hitfinder=hitfinder,
         label_key=label_key,
         frame_cache=frame_cache,
+        hit_frac=hit_frac,
+        hard_neg_max_attempts=hard_neg_max_attempts,
     )
     return DataLoader(
         dataset,
