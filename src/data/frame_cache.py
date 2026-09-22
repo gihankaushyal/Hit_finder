@@ -224,6 +224,7 @@ class FrameCache:
         """
         self._reset_if_forked()
         det, stem = cache_key(cxi_path)
+        found_out_of_range = False
         for root in self._roots:
             entry = root / det / stem
             frames_path = entry / FRAMES_NAME
@@ -236,10 +237,11 @@ class FrameCache:
                 memmap = np.load(frames_path, mmap_mode="r")
                 self._frames[key] = memmap
             if not 0 <= frame_idx < memmap.shape[0]:
-                raise CacheMissError(
-                    f"frame {frame_idx} out of range for {det}/{stem} "
-                    f"(has {memmap.shape[0]} frames) in {root}"
-                )
+                # This root's copy is truncated/partial; a later root may have
+                # a complete copy of the same entry, so keep searching instead
+                # of failing on the first (possibly stale) match.
+                found_out_of_range = True
+                continue
 
             npz = self._centroids.get(key)
             if npz is None:
@@ -252,9 +254,41 @@ class FrameCache:
             centroids = np.asarray(npz[centroid_key(frame_idx)], dtype=np.float32)
             return frame, self._mask(root, det), centroids
 
+        if found_out_of_range:
+            raise CacheMissError(
+                f"{det}/{stem} frame {frame_idx} out of range in every root that "
+                "has this entry (all copies truncated/partial): "
+                + ", ".join(str(r) for r in self._roots)
+            )
         raise CacheMissError(
             f"{det}/{stem} frame {frame_idx} not found in any of: "
             + ", ".join(str(r) for r in self._roots)
+        )
+
+
+def verify_cache_or_raise(frame_cache: FrameCache | None, cfg: dict) -> None:
+    """Fail fast if the configured frame cache does not match this run's config.
+
+    A tier with no manifest is skipped, not an error: the NVMe tier is staged
+    per fold and may legitimately be empty. But if *no* tier carries a manifest
+    the caller has pointed at a cache that was never built, which is an error.
+    """
+    if frame_cache is None:
+        return
+    verified = 0
+    for root in frame_cache.roots:
+        if (root / MANIFEST_NAME).exists():
+            verify_manifest(root, cfg)
+            verified += 1
+    if verified == 0:
+        roots_desc = ", ".join(str(r) for r in frame_cache.roots)
+        raise CacheStaleError(
+            f"no cache manifest found in any configured root: {roots_desc} — "
+            "each configured root exists as a directory but contains no "
+            f"{MANIFEST_NAME} (e.g. an empty staging directory, or a stray "
+            "leftover dir). Has scripts/build_frame_cache.py (or the NVMe "
+            "staging step) been run for this root? Build the cache with "
+            "scripts/build_frame_cache.py, or pass --no-cache to run without it."
         )
 
 
