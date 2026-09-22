@@ -6,12 +6,14 @@ fixture style as tests/test_asymmetric_dataset.py.
 
 from __future__ import annotations
 
+import random
 import sys
 from pathlib import Path
 
 import h5py
 import numpy as np
 import pytest
+import torch
 
 from src.data.dataset import _compute_gcn_frame, _load_gcn_frame
 from src.hitfinders import MockHitfinder
@@ -571,3 +573,120 @@ class TestStagingPlan:
             ("agipd_20k", "s_train"),
             ("agipd_20k", "s_val"),
         ]
+
+
+# ---------------------------------------------------------------------------
+# Bit-exactness gate against real detector data
+# ---------------------------------------------------------------------------
+
+CACHE_ROOT = Path("/data/bioxfel/user/gihan/Hit_finder_cache")
+PRODUCTION = Path("/data/bioxfel/user/gihan/Resonet/production")
+DETECTOR_DIRS = {
+    "AGIPD": PRODUCTION / "agipd_20k",
+    "JUNGFRAU_4M": PRODUCTION / "jungfrau_20k",
+    "ePix10k": PRODUCTION / "epix10k_20k",
+    "Eiger4M": PRODUCTION / "eiger4m_20k",
+}
+
+requires_real_cache = pytest.mark.skipif(
+    not (CACHE_ROOT / "cache_manifest.json").exists(),
+    reason="built frame cache not present on this machine",
+)
+
+
+def _first_cached_cxi(detector_dir: Path) -> Path | None:
+    """First CXI under detector_dir that has a corresponding cache entry."""
+    if not detector_dir.is_dir():
+        return None
+    for cxi in sorted(detector_dir.glob("compressed*.cxi")):
+        if (CACHE_ROOT / detector_dir.name / cxi.stem / "frames.npy").exists():
+            return cxi
+    return None
+
+
+@requires_real_cache
+class TestBitExactnessAgainstRealData:
+    @pytest.mark.parametrize("detector", sorted(DETECTOR_DIRS))
+    def test_cached_matches_live(self, detector: str) -> None:
+        from src.data.dataset import _compute_gcn_frame, _load_gcn_frame
+        from src.data.frame_cache import FrameCache
+        from src.hitfinders import get_hitfinder
+        from src.utils.config import load_config
+
+        cxi = _first_cached_cxi(DETECTOR_DIRS[detector])
+        if cxi is None:
+            pytest.skip(f"no cache entry built for {detector}")
+
+        cfg = load_config("configs/ssl/mae_finetune.yaml")
+        hitfinder = get_hitfinder(cfg)
+        cache = FrameCache([CACHE_ROOT])
+
+        # Frame 0 and a mid-file frame: catches an off-by-one in frame indexing
+        # that frame 0 alone would hide.
+        with h5py.File(cxi, "r") as f:
+            n_frames = f["entry_1/data_1/data"].shape[0]
+        for frame_idx in (0, n_frames // 2):
+            live_frame, live_mask, live_cent = _compute_gcn_frame(
+                cxi, frame_idx, detector, {}, hitfinder, [None]
+            )
+            cached_frame, cached_mask, cached_cent = _load_gcn_frame(
+                cxi, frame_idx, detector, {}, hitfinder, [None], frame_cache=cache
+            )
+
+            assert cached_frame.shape == live_frame.shape
+            assert cached_frame.dtype == live_frame.dtype
+            np.testing.assert_array_equal(cached_mask, live_mask)
+            np.testing.assert_array_equal(cached_cent, live_cent)
+
+            # fp16 round-trip tolerance, absolute and relative.
+            delta = np.abs(cached_frame - live_frame).max()
+            assert delta < 0.03, f"{detector} frame {frame_idx}: max|Δ|={delta}"
+            scale = np.abs(live_frame).max()
+            assert delta / max(scale, 1e-6) < 1e-3
+
+    @pytest.mark.parametrize("detector", sorted(DETECTOR_DIRS))
+    def test_getitem_equivalent_for_fixed_seed(self, detector: str) -> None:
+        """Whole-__getitem__ equality — catches mask misalignment that a raw
+        frame comparison passes but the crop/LCN stage would amplify."""
+        from src.data.dataset import AsymmetricCXIDataset
+        from src.data.frame_cache import FrameCache
+        from src.hitfinders import get_hitfinder
+        from src.utils.config import load_config
+
+        cxi = _first_cached_cxi(DETECTOR_DIRS[detector])
+        if cxi is None:
+            pytest.skip(f"no cache entry built for {detector}")
+
+        cfg = load_config("configs/ssl/mae_finetune.yaml")
+        hitfinder = get_hitfinder(cfg)
+
+        session_id = cxi.stem
+
+        def build(frame_cache):
+            return AsymmetricCXIDataset(
+                session_ids=[session_id],
+                session_map={session_id: cxi},
+                hitfinder=hitfinder,
+                seed=1234,
+                frame_cache=frame_cache,
+            )
+
+        live_ds = build(None)
+        cached_ds = build(FrameCache([CACHE_ROOT]))
+
+        for idx in (0, 1, 2):
+            torch.manual_seed(1234)
+            np.random.seed(1234)
+            random.seed(1234)
+            live = live_ds[idx]
+            torch.manual_seed(1234)
+            np.random.seed(1234)
+            random.seed(1234)
+            cached = cached_ds[idx]
+
+            if live is None:
+                assert cached is None
+                continue
+            assert cached is not None
+            assert cached[1] == live[1], f"{detector} idx {idx}: label differs"
+            torch.testing.assert_close(cached[0], live[0], atol=0.05, rtol=1e-3)
