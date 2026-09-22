@@ -243,3 +243,66 @@ def test_build_manifest_includes_pipeline_constants() -> None:
     assert params["lcn_eps"] == pytest.approx(1e-2)
     assert params["edge_erosion_px"] == 2
     assert params["cache_dtype"] == "float16"
+
+
+# ---------------------------------------------------------------------------
+# Builder
+# ---------------------------------------------------------------------------
+
+
+def test_builder_writes_readable_entry(synthetic_cxi: Path, tmp_path: Path) -> None:
+    """Building one CXI produces an entry FrameCache.get() can read back."""
+    import sys
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from scripts.build_frame_cache import build_one_cxi
+
+    root = tmp_path / "cache"
+    n = build_one_cxi(synthetic_cxi, root, CFG, backend="mock")
+    assert n == N_FRAMES
+
+    fc = FrameCache([root])
+    frame, mask, cent = fc.get(synthetic_cxi, 0)
+    assert frame.shape == (H, W)
+    assert mask.shape == (H, W)
+    assert cent.ndim == 2 and cent.shape[1] == 2
+
+
+def test_builder_is_atomic_no_tmp_left_behind(
+    synthetic_cxi: Path, tmp_path: Path
+) -> None:
+    """No .tmp directory survives a successful build."""
+    import sys
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from scripts.build_frame_cache import build_one_cxi
+
+    root = tmp_path / "cache"
+    build_one_cxi(synthetic_cxi, root, CFG, backend="mock")
+    assert not list(root.rglob("*.tmp"))
+
+
+def test_builder_matches_live_pipeline(synthetic_cxi: Path, tmp_path: Path) -> None:
+    """Cached frame equals _compute_gcn_frame output within fp16 tolerance.
+
+    This is the bit-exactness gate for the builder: mask and centroids must
+    match exactly; the frame only loses fp16 precision.
+    """
+    import sys
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from scripts.build_frame_cache import build_one_cxi
+
+    root = tmp_path / "cache"
+    build_one_cxi(synthetic_cxi, root, CFG, backend="mock")
+    fc = FrameCache([root])
+
+    for idx in range(N_FRAMES):
+        want_f, want_m, want_c = _compute_gcn_frame(
+            synthetic_cxi, idx, "Jungfrau 4M", {}, MockHitfinder(), [None]
+        )
+        got_f, got_m, got_c = fc.get(synthetic_cxi, idx)
+        np.testing.assert_array_equal(got_m, want_m)
+        np.testing.assert_array_equal(got_c, want_c)
+        scale = max(float(np.abs(want_f).max()), 1e-6)
+        assert np.abs(got_f - want_f).max() / scale < 1e-3
