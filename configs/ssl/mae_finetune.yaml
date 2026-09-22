@@ -47,3 +47,8 @@ benchmark:
 wandb:
   tags: [ssl-finetune]
   run_suffix: -v2
+
+# SSL fine-tuning relies on the frame cache for throughput; override the
+# (now-false) base.yaml default explicitly rather than depending on it.
+cache:
+  enabled: true

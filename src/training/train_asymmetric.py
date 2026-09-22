@@ -19,6 +19,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
+from src.data.frame_cache import frame_cache_from_cfg
 from src.evaluation.benchmark import (
     build_lodo_folds,
     build_session_stratified_split,
@@ -37,6 +38,9 @@ def main(
     intra: bool = False,
     tags: list[str] | None = None,
     resume_training: bool = False,
+    cache_root: str | None = None,
+    cache_nvme: str | None = None,
+    no_cache: bool = False,
 ) -> None:
     cfg = load_config(config_path)
     if tags is not None:
@@ -59,6 +63,18 @@ def main(
         num_workers = 0
 
     hitfinder = get_hitfinder(cfg)
+
+    cache_cfg = cfg.setdefault("cache", {})
+    if cache_root is not None:
+        cache_cfg["root"] = cache_root
+    if cache_nvme is not None:
+        cache_cfg["nvme_root"] = cache_nvme
+    if no_cache:
+        cache_cfg["enabled"] = False
+    frame_cache = frame_cache_from_cfg(cfg)
+    print(
+        f"[cache] {'roots: ' + ', '.join(str(r) for r in frame_cache.roots) if frame_cache else 'disabled — computing live'}"
+    )
 
     sessions, session_map = build_sessions(cfg["lodo"])
     total_frames = sum(s["frame_count"] for s in sessions)
@@ -89,6 +105,7 @@ def main(
             device,
             num_workers_override=num_workers,
             resume_training=resume_training,
+            frame_cache=frame_cache,
         )
         fold_results["fold_0"] = result
     else:
@@ -131,6 +148,7 @@ def main(
                 device,
                 num_workers_override=num_workers,
                 resume_training=resume_training,
+                frame_cache=frame_cache,
             )
             fold_results[f"fold_{fold['fold_id']}"] = result
 
@@ -192,6 +210,9 @@ if __name__ == "__main__":
             "Has no effect when no checkpoint is present."
         ),
     )
+    parser.add_argument("--cache-root", default=None)
+    parser.add_argument("--cache-nvme", default=None)
+    parser.add_argument("--no-cache", action="store_true")
     args = parser.parse_args()
     tags = [t.strip() for t in args.tags.split(",")] if args.tags else None
     main(
@@ -201,4 +222,7 @@ if __name__ == "__main__":
         intra=args.intra,
         tags=tags,
         resume_training=args.resume_training,
+        cache_root=args.cache_root,
+        cache_nvme=args.cache_nvme,
+        no_cache=args.no_cache,
     )

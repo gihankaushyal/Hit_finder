@@ -51,3 +51,8 @@ hitfinder:
 
 wandb:
   tags: [ssl-pretrain]
+
+# SSL pretraining relies on the frame cache for throughput; override the
+# (now-false) base.yaml default explicitly rather than depending on it.
+cache:
+  enabled: true

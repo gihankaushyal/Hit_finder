@@ -14,6 +14,7 @@ from src.data.dataset import (
     SSLPretrainCXIDataset,
     UnlabeledDataset,
 )
+from src.data.frame_cache import FrameCache
 from src.hitfinders.base import Hitfinder
 
 
@@ -68,6 +69,7 @@ def asymmetric_loader(
     num_workers: int = 4,
     shuffle: bool = True,
     label_key: str = "entry_1/labels/hit",
+    frame_cache: "FrameCache | None" = None,
     hit_frac: float = 0.5,
     hard_neg_max_attempts: int = 50,
 ) -> DataLoader:
@@ -87,6 +89,7 @@ def asymmetric_loader(
         num_workers: DataLoader worker processes. Must be 0 for GPU hitfinder.
         shuffle: Shuffle each epoch.
         label_key: HDF5 key for per-frame labels (used only to build the index).
+        frame_cache: Optional FrameCache for the preprocessing prefix.
         hit_frac: Probability of Path A (peak-centred, label=1) vs Path B
             (hard-negative) on the coin toss for metadata-HIT frames with
             centroids found. Default 0.5.
@@ -114,6 +117,7 @@ def asymmetric_loader(
         session_map=session_map,
         hitfinder=hitfinder,
         label_key=label_key,
+        frame_cache=frame_cache,
         hit_frac=hit_frac,
         hard_neg_max_attempts=hard_neg_max_attempts,
     )
@@ -153,6 +157,7 @@ def ssl_crop_loader(
     crops_per_frame: int = 1,
     hitfinder: Hitfinder | None = None,
     min_valid_frac: float = SSL_MIN_VALID_FRAC_DEFAULT,
+    frame_cache: "FrameCache | None" = None,
 ) -> DataLoader:
     """DataLoader for MAE pretraining crops (SSLPretrainCXIDataset).
 
@@ -167,6 +172,9 @@ def ssl_crop_loader(
 
     GPU hitfinder ⇒ num_workers=0 is enforced here (CUDA contexts cannot be
     forked into DataLoader worker processes).
+
+    Args:
+        frame_cache: Optional FrameCache for the preprocessing prefix.
     """
     from src.hitfinders.gpu import GPUHitfinder
 
@@ -188,6 +196,7 @@ def ssl_crop_loader(
         crops_per_frame=crops_per_frame,
         hitfinder=hitfinder,
         min_valid_frac=min_valid_frac,
+        frame_cache=frame_cache,
     )
     if batch_size % crops_per_frame != 0:
         raise ValueError(

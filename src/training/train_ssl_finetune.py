@@ -15,6 +15,7 @@ from pathlib import Path
 import torch
 import torch.nn as nn
 
+from src.data.frame_cache import frame_cache_from_cfg
 from src.evaluation.benchmark import (
     build_lodo_folds,
     build_session_stratified_split,
@@ -52,21 +53,36 @@ def main() -> None:
     p.add_argument("--device", default=None)
     p.add_argument("--resume-training", action="store_true")
     p.add_argument(
-        "--stage-dir",
+        "--cache-root",
         default=None,
-        help="Local NVMe staging root (e.g. /tmp/sfx_stage_shared). "
-        "Overrides lodo.detector_dirs entries whose basename matches a subdir here.",
+        help="Override cache.root — the permanent NFS frame cache directory.",
+    )
+    p.add_argument(
+        "--cache-nvme",
+        default=None,
+        help="Override cache.nvme_root — the local NVMe frame cache tier, "
+        "checked before cache.root.",
+    )
+    p.add_argument(
+        "--no-cache",
+        action="store_true",
+        help="Disable the frame cache and recompute assembly/hitfinder/GCN live.",
     )
     args = p.parse_args()
 
     cfg = load_config(args.config)
 
-    if args.stage_dir:
-        stage = Path(args.stage_dir)
-        for det, nfs_path in cfg["lodo"]["detector_dirs"].items():
-            local = stage / Path(nfs_path).name
-            if local.exists():
-                cfg["lodo"]["detector_dirs"][det] = str(local)
+    cache_cfg = cfg.setdefault("cache", {})
+    if args.cache_root is not None:
+        cache_cfg["root"] = args.cache_root
+    if args.cache_nvme is not None:
+        cache_cfg["nvme_root"] = args.cache_nvme
+    if args.no_cache:
+        cache_cfg["enabled"] = False
+    frame_cache = frame_cache_from_cfg(cfg)
+    print(
+        f"[cache] {'roots: ' + ', '.join(str(r) for r in frame_cache.roots) if frame_cache else 'disabled — computing live'}"
+    )
     device = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
     hitfinder = get_hitfinder(cfg)
     sessions, session_map = build_sessions(cfg["lodo"])
@@ -100,6 +116,7 @@ def main() -> None:
             "probe": probe,
             "pretrain_checkpoint": str(args.pretrain_checkpoint),
         },
+        frame_cache=frame_cache,
     )
     print(result)
 

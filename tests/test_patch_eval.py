@@ -183,3 +183,59 @@ class TestRunPatchAgg:
             device="cpu",
         )
         assert 0.0 <= result["threshold"] <= 1.0
+
+
+def test_preprocess_eval_patches_from_gcn_matches_full_path() -> None:
+    """Splitting GCN out of preprocess_eval_patches changes nothing.
+
+    preprocess_eval_patches(x) must equal
+    preprocess_eval_patches_from_gcn(fill_gaps(gcn(x))).
+    """
+    import numpy as np
+
+    from src.preprocessing.normalize import gcn
+    from src.preprocessing.pipeline import (
+        fill_gaps_after_gcn,
+        preprocess_eval_patches,
+        preprocess_eval_patches_from_gcn,
+    )
+
+    rng = np.random.default_rng(0)
+    frame = rng.random((448, 448)).astype(np.float32)
+
+    want = preprocess_eval_patches(frame, patch_size=224, stride=224)
+
+    gcn_frame = gcn(frame.astype(np.float32))
+    gcn_frame = fill_gaps_after_gcn(gcn_frame, None, mask=None)
+    got = preprocess_eval_patches_from_gcn(
+        gcn_frame, mask=None, patch_size=224, stride=224
+    )
+
+    assert got.shape == want.shape == (4, 224, 224)
+    np.testing.assert_allclose(got, want, rtol=1e-6, atol=1e-6)
+
+
+def test_preprocess_eval_patches_from_gcn_honours_mask() -> None:
+    """Invalid pixels are zeroed in the output, as in the masked NumPy LCN."""
+    import numpy as np
+
+    from src.preprocessing.pipeline import preprocess_eval_patches_from_gcn
+
+    rng = np.random.default_rng(1)
+    gcn_frame = rng.standard_normal((224, 224)).astype(np.float32)
+    mask = np.ones((224, 224), dtype=bool)
+    mask[:10, :] = False
+
+    out = preprocess_eval_patches_from_gcn(gcn_frame, mask=mask)
+    assert out.shape == (1, 224, 224)
+    assert np.all(out[0][:10, :] == 0.0)
+
+
+def test_preprocess_eval_patches_from_gcn_raises_when_no_patch_fits() -> None:
+    import numpy as np
+    import pytest
+
+    from src.preprocessing.pipeline import preprocess_eval_patches_from_gcn
+
+    with pytest.raises(ValueError, match="no complete"):
+        preprocess_eval_patches_from_gcn(np.zeros((100, 100), np.float32))

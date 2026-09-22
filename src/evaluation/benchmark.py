@@ -5,13 +5,16 @@ from __future__ import annotations
 import json
 import warnings
 from pathlib import Path
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
 
 import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
 from src.evaluation.metrics import average_precision, auc_roc, f1_at_optimal_threshold
+
+if TYPE_CHECKING:
+    from src.data.frame_cache import FrameCache
 
 __all__ = [
     "DETECTORS",
@@ -196,6 +199,7 @@ def run_patch_agg(
     device: str = "cpu",
     inference_batch_size: int = 64,
     aggregation: str = "vote",
+    frame_cache: "FrameCache | None" = None,
 ) -> dict[str, float]:
     """Evaluate a model on full frames using patch-grid aggregation.
 
@@ -221,10 +225,14 @@ def run_patch_agg(
         aggregation: Frame-score reduction over patches. "vote" (default):
             hit_count/n_patches where hit_count = patches with softmax[:,1] > 0.5.
             "max": max softmax across patches (kept for backward compat).
+        frame_cache: Optional FrameCache. On a hit, the read/assembly/GCN prefix
+            is skipped and the cached GCN'd frame is tiled directly. A miss
+            falls back to the live path, so a partially built cache is safe.
 
     Returns:
         dict with keys: ap, auc_roc, f1, threshold.
     """
+    from src.data.frame_cache import CacheMissError
     from src.preprocessing.geometry import get_assembler, get_geometry
     from src.preprocessing.io import (
         read_detector_description,
@@ -268,37 +276,85 @@ def run_patch_agg(
             desc = None
 
         for frame_idx in range(len(labels_arr)):
-            frame = read_frame(path, frame_idx)
-            # Assemble to native resolution exactly as AsymmetricCXIDataset does,
-            # so train and eval see identically-assembled images. Detectors with no
-            # description (or pre-assembled canvases like Jungfrau 4M) fall back to
-            # _to_2d, matching the dataset's own fallback.
-            if desc is not None and "JUNGFRAU" not in desc.upper():
+            patches_np = None
+            patch_tensors = None
+            if frame_cache is not None:
                 try:
-                    pads = get_geometry(desc)
-                    assembler = get_assembler(desc)
-                    assembled = assemble_only(frame, pads, desc, assembler=assembler)
-                except (ValueError, KeyError, OSError):
-                    assembled = _to_2d(frame)
-            else:
-                assembled = _to_2d(frame)
-            try:
-                patches_np = preprocess_eval_patches(
-                    assembled,
-                    patch_size=patch_size,
-                    stride=patch_stride,
-                    detector_desc=desc,
-                )
-            except ValueError:
-                warnings.warn(
-                    f"preprocess_eval_patches: no complete patch fits in frame "
-                    f"{frame_idx} of {path} (shape {assembled.shape}); "
-                    "frame excluded from eval metrics.",
-                    stacklevel=2,
-                )
-                continue
+                    gcn_frame, valid_mask, _ = frame_cache.get(path, frame_idx)
+                except CacheMissError:
+                    pass
+                else:
+                    # NOTE: on a cache hit, assembly is precomputed, so the
+                    # desc-based assembler-selection branch below (JUNGFRAU ->
+                    # _to_2d vs. Reborn PADAssembler for everything else) is
+                    # entirely bypassed here. The cache manifest's staleness
+                    # keys (src/data/frame_cache.py::_HITFINDER_KEYS + GCN/LCN
+                    # constants + geometry file hashes) do NOT cover this
+                    # selection logic itself — only its numeric inputs. A
+                    # future change to *how* a detector's assembler is chosen
+                    # (e.g. adding a new pre-assembled-canvas detector, or
+                    # changing the "JUNGFRAU" string match) will silently keep
+                    # serving frames built under the old selection logic unless
+                    # the cache is rebuilt from scratch. Any such change must
+                    # be paired with a full `scripts/build_frame_cache.py`
+                    # rebuild, not just a manifest/config param bump.
+                    from src.preprocessing.augment import patch_grid
+                    from src.preprocessing.normalize import lcn_torch
 
-            patch_tensors = torch.from_numpy(patches_np).unsqueeze(1).to(device)
+                    tiles = patch_grid(gcn_frame, patch_size, patch_stride)
+                    if not tiles:
+                        warnings.warn(
+                            f"patch_grid: no complete patch fits in frame "
+                            f"{frame_idx} of {path} (shape {gcn_frame.shape}); "
+                            "frame excluded from eval metrics.",
+                            stacklevel=2,
+                        )
+                        continue
+                    mask_tiles = patch_grid(valid_mask, patch_size, patch_stride)
+                    # Safe only here: valid_mask from frame_cache.get() is always a real
+                    # array (never None), so lcn_torch's zero-pad-only masked branch is
+                    # the correct semantics. The live path below keeps preprocess_eval_patches
+                    # (NumPy lcn) because its mask can be None, which needs reflect-pad.
+                    patch_tensors = lcn_torch(
+                        torch.from_numpy(np.stack(tiles, axis=0)).to(device),
+                        masks=torch.from_numpy(np.stack(mask_tiles, axis=0)).to(device),
+                    ).unsqueeze(1)
+
+            if patches_np is None and patch_tensors is None:
+                frame = read_frame(path, frame_idx)
+                # Assemble to native resolution exactly as AsymmetricCXIDataset does,
+                # so train and eval see identically-assembled images. Detectors with no
+                # description (or pre-assembled canvases like Jungfrau 4M) fall back to
+                # _to_2d, matching the dataset's own fallback.
+                if desc is not None and "JUNGFRAU" not in desc.upper():
+                    try:
+                        pads = get_geometry(desc)
+                        assembler = get_assembler(desc)
+                        assembled = assemble_only(
+                            frame, pads, desc, assembler=assembler
+                        )
+                    except (ValueError, KeyError, OSError):
+                        assembled = _to_2d(frame)
+                else:
+                    assembled = _to_2d(frame)
+                try:
+                    patches_np = preprocess_eval_patches(
+                        assembled,
+                        patch_size=patch_size,
+                        stride=patch_stride,
+                        detector_desc=desc,
+                    )
+                except ValueError:
+                    warnings.warn(
+                        f"preprocess_eval_patches: no complete patch fits in frame "
+                        f"{frame_idx} of {path} (shape {assembled.shape}); "
+                        "frame excluded from eval metrics.",
+                        stacklevel=2,
+                    )
+                    continue
+
+            if patches_np is not None:
+                patch_tensors = torch.from_numpy(patches_np).unsqueeze(1).to(device)
             patch_scores_list: list[np.ndarray] = []
             with torch.no_grad():
                 for i in range(0, len(patch_tensors), inference_batch_size):

@@ -17,6 +17,7 @@ import torch
 import torch.nn as nn
 
 from src.data.dataloader import asymmetric_loader
+from src.data.frame_cache import FrameCache, verify_cache_or_raise
 from src.evaluation.benchmark import (
     SPLIT_CROSS_DETECTOR,
     SPLIT_IN_DOMAIN_TEST,
@@ -91,6 +92,7 @@ def _train_fold(
     model_builder: Callable[[], nn.Module] | None = None,
     run_name_prefix: str | None = None,
     extra_results: dict | None = None,
+    frame_cache: FrameCache | None = None,
 ) -> dict:
     """Train one LODO fold and return metrics.
 
@@ -100,8 +102,13 @@ def _train_fold(
     `run_name_prefix`: overrides the default `{backbone}-asymmetric` prefix in
       the wandb run name and checkpoint directory.
     `extra_results`: extra keys merged into the per-fold results.json.
+    `frame_cache`: optional two-tier FrameCache. When supplied, its manifest is
+      verified against `cfg` before any training starts, and it is forwarded to
+      the training loader and to every run_patch_agg call.
     """
     import wandb
+
+    verify_cache_or_raise(frame_cache, cfg)
 
     backbone = cfg["model"].get("backbone", "vit_small_mae")
     seed = cfg["seed"]
@@ -133,6 +140,7 @@ def _train_fold(
         num_workers=num_workers,
         shuffle=True,
         label_key=label_key,
+        frame_cache=frame_cache,
         hit_frac=hit_frac,
         hard_neg_max_attempts=hard_neg_max_attempts,
     )
@@ -245,6 +253,7 @@ def _train_fold(
                 min_hit_patches=min_hit_patches,
                 device=device,
                 aggregation=aggregation,
+                frame_cache=frame_cache,
             )
 
             print(
@@ -349,6 +358,7 @@ def _train_fold(
         min_hit_patches=min_hit_patches,
         device=device,
         aggregation=aggregation,
+        frame_cache=frame_cache,
     )
     cross_m = run_patch_agg(
         model,
@@ -359,6 +369,7 @@ def _train_fold(
         min_hit_patches=min_hit_patches,
         device=device,
         aggregation=aggregation,
+        frame_cache=frame_cache,
     )
 
     print(
