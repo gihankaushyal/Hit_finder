@@ -58,7 +58,9 @@ def main() -> None:
 
     cfg = load_config(args.config)
     sessions, session_map = build_sessions(cfg["lodo"])
-    fold = next(f for f in build_lodo_folds() if f["fold_id"] == args.fold)
+    fold = next((f for f in build_lodo_folds() if f["fold_id"] == args.fold), None)
+    if fold is None:
+        raise ValueError(f"no such fold: {args.fold}")
     split_artifact = build_session_stratified_split(
         sessions,
         test_detector=fold["test_detector"],

@@ -66,6 +66,14 @@ fi
 # unverifiable tier and FrameCache resolves entries against an unlabelled root.
 cp "${CACHE_NFS}/cache_manifest.json" "${CACHE_NVME}/"
 
+PLAN_FILE=$(mktemp)
+trap 'rm -f "${PLAN_FILE}"' EXIT
+
+if ! python scripts/plan_cache_staging.py --config "${CONFIG}" --fold "${FOLD}" > "${PLAN_FILE}"; then
+    echo "[stage] ABORT: plan_cache_staging.py failed for fold ${FOLD}" >&2
+    exit 1
+fi
+
 STAGED=0
 SKIPPED=0
 while read -r entry; do
@@ -85,7 +93,7 @@ while read -r entry; do
     cp -r "${src}" "${dst}.tmp"
     mv "${dst}.tmp" "${dst}"
     STAGED=$(( STAGED + 1 ))
-done < <(python scripts/plan_cache_staging.py --config "${CONFIG}" --fold "${FOLD}")
+done < "${PLAN_FILE}"
 
 # Per-detector valid masks are tiny and shared by every entry — always copy them.
 for det_dir in "${CACHE_NFS}"/*/; do
