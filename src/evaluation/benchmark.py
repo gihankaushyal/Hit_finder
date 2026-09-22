@@ -297,6 +297,10 @@ def run_patch_agg(
                         )
                         continue
                     mask_tiles = patch_grid(valid_mask, patch_size, patch_stride)
+                    # Safe only here: valid_mask from frame_cache.get() is always a real
+                    # array (never None), so lcn_torch's zero-pad-only masked branch is
+                    # the correct semantics. The live path below keeps preprocess_eval_patches
+                    # (NumPy lcn) because its mask can be None, which needs reflect-pad.
                     patch_tensors = lcn_torch(
                         torch.from_numpy(np.stack(tiles, axis=0)).to(device),
                         masks=torch.from_numpy(np.stack(mask_tiles, axis=0)).to(device),
