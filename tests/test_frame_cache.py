@@ -405,3 +405,80 @@ def test_asymmetric_dataset_getitem_equivalent_with_cache(
             continue
         assert a[1] == b[1], f"label differs at idx {idx}"
         assert torch.allclose(a[0], b[0], atol=0.05), f"crop differs at idx {idx}"
+
+
+# ---------------------------------------------------------------------------
+# LODO wiring
+# ---------------------------------------------------------------------------
+
+
+class TestLodoWiring:
+    def test_verify_cache_or_raise_accepts_none(self) -> None:
+        from src.training.lodo import _verify_cache_or_raise
+
+        # No cache configured — must be a silent no-op, not an error.
+        _verify_cache_or_raise(None, {})
+
+    def test_verify_cache_or_raise_passes_on_matching_manifest(
+        self, tmp_path: Path
+    ) -> None:
+        from src.data.frame_cache import FrameCache, write_manifest
+        from src.training.lodo import _verify_cache_or_raise
+
+        root = tmp_path / "nfs"
+        root.mkdir()
+        write_manifest(root, CFG)
+        _verify_cache_or_raise(FrameCache([root]), CFG)
+
+    def test_verify_cache_or_raise_rejects_stale_manifest(self, tmp_path: Path) -> None:
+        from src.data.frame_cache import CacheStaleError, FrameCache, write_manifest
+        from src.training.lodo import _verify_cache_or_raise
+
+        root = tmp_path / "nfs"
+        root.mkdir()
+        write_manifest(root, CFG)
+
+        changed = {"hitfinder": dict(CFG["hitfinder"], pf8_min_snr=9.0)}
+        with pytest.raises(CacheStaleError, match="pf8_min_snr"):
+            _verify_cache_or_raise(FrameCache([root]), changed)
+
+    def test_verify_cache_or_raise_rejects_root_without_manifest(
+        self, tmp_path: Path
+    ) -> None:
+        from src.data.frame_cache import CacheStaleError, FrameCache
+        from src.training.lodo import _verify_cache_or_raise
+
+        empty = tmp_path / "never_built"
+        empty.mkdir()
+        with pytest.raises(CacheStaleError, match="no cache manifest"):
+            _verify_cache_or_raise(FrameCache([empty]), CFG)
+
+    def test_verify_cache_or_raise_tolerates_unbuilt_nvme_tier(
+        self, tmp_path: Path
+    ) -> None:
+        """A partially staged NVMe tier is normal: it may hold no manifest yet."""
+        from src.data.frame_cache import FrameCache, write_manifest
+        from src.training.lodo import _verify_cache_or_raise
+
+        nvme = tmp_path / "nvme"
+        nvme.mkdir()
+        nfs = tmp_path / "nfs"
+        nfs.mkdir()
+        write_manifest(nfs, CFG)
+        _verify_cache_or_raise(FrameCache([nvme, nfs]), CFG)
+
+    def test_train_fold_forwards_cache_to_every_call_site(self) -> None:
+        """One loader + three run_patch_agg calls must all receive the cache.
+
+        Structural rather than behavioural: exercising _train_fold needs wandb,
+        a GPU and real CXI files, but 'somebody added a fifth call site and
+        forgot the cache' is exactly the regression worth catching cheaply.
+        """
+        import inspect
+
+        from src.training import lodo
+
+        src = inspect.getsource(lodo._train_fold)
+        assert src.count("frame_cache=frame_cache") == 4
+        assert "_verify_cache_or_raise(frame_cache, cfg)" in src
+        assert "frame_cache" in inspect.signature(lodo._train_fold).parameters

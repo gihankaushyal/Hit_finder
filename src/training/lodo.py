@@ -17,6 +17,12 @@ import torch
 import torch.nn as nn
 
 from src.data.dataloader import asymmetric_loader
+from src.data.frame_cache import (
+    MANIFEST_NAME,
+    CacheStaleError,
+    FrameCache,
+    verify_manifest,
+)
 from src.evaluation.benchmark import (
     SPLIT_CROSS_DETECTOR,
     SPLIT_IN_DOMAIN_TEST,
@@ -79,6 +85,29 @@ def build_sessions(
     return sessions, session_map
 
 
+def _verify_cache_or_raise(frame_cache: FrameCache | None, cfg: dict) -> None:
+    """Fail fast if the configured frame cache does not match this run's config.
+
+    A tier with no manifest is skipped, not an error: the NVMe tier is staged
+    per fold and may legitimately be empty. But if *no* tier carries a manifest
+    the caller has pointed at a cache that was never built, which is an error.
+    """
+    if frame_cache is None:
+        return
+    verified = 0
+    for root in frame_cache.roots:
+        if (root / MANIFEST_NAME).exists():
+            verify_manifest(root, cfg)
+            verified += 1
+    if verified == 0:
+        raise CacheStaleError(
+            "no cache manifest found in any configured root: "
+            + ", ".join(str(r) for r in frame_cache.roots)
+            + " — build the cache with scripts/build_frame_cache.py, "
+            "or pass --no-cache to run without it."
+        )
+
+
 def _train_fold(
     fold: dict,
     split_artifact: dict,
@@ -91,6 +120,7 @@ def _train_fold(
     model_builder: Callable[[], nn.Module] | None = None,
     run_name_prefix: str | None = None,
     extra_results: dict | None = None,
+    frame_cache: FrameCache | None = None,
 ) -> dict:
     """Train one LODO fold and return metrics.
 
@@ -100,8 +130,13 @@ def _train_fold(
     `run_name_prefix`: overrides the default `{backbone}-asymmetric` prefix in
       the wandb run name and checkpoint directory.
     `extra_results`: extra keys merged into the per-fold results.json.
+    `frame_cache`: optional two-tier FrameCache. When supplied, its manifest is
+      verified against `cfg` before any training starts, and it is forwarded to
+      the training loader and to every run_patch_agg call.
     """
     import wandb
+
+    _verify_cache_or_raise(frame_cache, cfg)
 
     backbone = cfg["model"].get("backbone", "vit_small_mae")
     seed = cfg["seed"]
@@ -131,6 +166,7 @@ def _train_fold(
         num_workers=num_workers,
         shuffle=True,
         label_key=label_key,
+        frame_cache=frame_cache,
     )
 
     bench_cfg = cfg.get("benchmark", {})
@@ -241,6 +277,7 @@ def _train_fold(
                 min_hit_patches=min_hit_patches,
                 device=device,
                 aggregation=aggregation,
+                frame_cache=frame_cache,
             )
 
             print(
@@ -344,6 +381,7 @@ def _train_fold(
         min_hit_patches=min_hit_patches,
         device=device,
         aggregation=aggregation,
+        frame_cache=frame_cache,
     )
     cross_m = run_patch_agg(
         model,
@@ -354,6 +392,7 @@ def _train_fold(
         min_hit_patches=min_hit_patches,
         device=device,
         aggregation=aggregation,
+        frame_cache=frame_cache,
     )
 
     print(
