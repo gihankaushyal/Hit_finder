@@ -100,11 +100,14 @@ def _verify_cache_or_raise(frame_cache: FrameCache | None, cfg: dict) -> None:
             verify_manifest(root, cfg)
             verified += 1
     if verified == 0:
+        roots_desc = ", ".join(str(r) for r in frame_cache.roots)
         raise CacheStaleError(
-            "no cache manifest found in any configured root: "
-            + ", ".join(str(r) for r in frame_cache.roots)
-            + " — build the cache with scripts/build_frame_cache.py, "
-            "or pass --no-cache to run without it."
+            f"no cache manifest found in any configured root: {roots_desc} — "
+            "each configured root exists as a directory but contains no "
+            f"{MANIFEST_NAME} (e.g. an empty staging directory, or a stray "
+            "leftover dir). Has scripts/build_frame_cache.py (or the NVMe "
+            "staging step) been run for this root? Build the cache with "
+            "scripts/build_frame_cache.py, or pass --no-cache to run without it."
         )
 
 

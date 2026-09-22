@@ -129,7 +129,7 @@ def main() -> None:
     p.add_argument(
         "--cache-root",
         default=None,
-        help="Override cache.nfs_root from the config.",
+        help="Override cache.root from the config.",
     )
     p.add_argument(
         "--detectors",
@@ -144,7 +144,7 @@ def main() -> None:
     args = p.parse_args()
 
     cfg = load_config(args.config)
-    cache_root = Path(args.cache_root or cfg["cache"]["nfs_root"])
+    cache_root = Path(args.cache_root or cfg["cache"]["root"])
     cache_root.mkdir(parents=True, exist_ok=True)
 
     pattern = cfg["lodo"].get("cxi_pattern", "compressed*.cxi")
