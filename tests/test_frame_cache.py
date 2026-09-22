@@ -306,3 +306,102 @@ def test_builder_matches_live_pipeline(synthetic_cxi: Path, tmp_path: Path) -> N
         np.testing.assert_array_equal(got_c, want_c)
         scale = max(float(np.abs(want_f).max()), 1e-6)
         assert np.abs(got_f - want_f).max() / scale < 1e-3
+
+
+# ---------------------------------------------------------------------------
+# Dataset integration
+# ---------------------------------------------------------------------------
+
+
+def test_load_gcn_frame_uses_cache_when_present(
+    synthetic_cxi: Path, tmp_path: Path
+) -> None:
+    """A cache hit returns the cached bytes, not a recomputed frame."""
+    root = tmp_path / "cache"
+    sentinel = np.full((H, W), 3.5, dtype=np.float32)
+    det, stem = cache_key(synthetic_cxi)
+    _write_cache_entry(
+        root,
+        det,
+        stem,
+        np.repeat(sentinel[None], N_FRAMES, axis=0),
+        [np.array([[7.0, 8.0]], np.float32)] * N_FRAMES,
+    )
+
+    fc = FrameCache([root])
+    frame, _, cent = _load_gcn_frame(
+        synthetic_cxi, 0, "Jungfrau 4M", {}, MockHitfinder(), [None], frame_cache=fc
+    )
+    assert frame[0, 0] == pytest.approx(3.5)
+    np.testing.assert_array_equal(cent, np.array([[7.0, 8.0]], np.float32))
+
+
+def test_load_gcn_frame_falls_back_on_miss(synthetic_cxi: Path, tmp_path: Path) -> None:
+    """An empty cache must not raise — it recomputes."""
+    fc = FrameCache([tmp_path / "empty"])
+    cached = _load_gcn_frame(
+        synthetic_cxi, 0, "Jungfrau 4M", {}, MockHitfinder(), [None], frame_cache=fc
+    )
+    live = _compute_gcn_frame(
+        synthetic_cxi, 0, "Jungfrau 4M", {}, MockHitfinder(), [None]
+    )
+    np.testing.assert_array_equal(cached[0], live[0])
+
+
+def test_cache_centroids_discarded_when_hitfinder_is_none(
+    synthetic_cxi: Path, tmp_path: Path
+) -> None:
+    """MAE pretraining passes hitfinder=None and must still see zero centroids.
+
+    The cache always stores real centroids; returning them here would silently
+    change pretraining behaviour.
+    """
+    root = tmp_path / "cache"
+    det, stem = cache_key(synthetic_cxi)
+    _write_cache_entry(
+        root,
+        det,
+        stem,
+        np.zeros((N_FRAMES, H, W), np.float32),
+        [np.array([[1.0, 2.0], [3.0, 4.0]], np.float32)] * N_FRAMES,
+    )
+    fc = FrameCache([root])
+    _, _, cent = _load_gcn_frame(
+        synthetic_cxi, 0, "Jungfrau 4M", {}, None, [None], frame_cache=fc
+    )
+    assert cent.shape == (0, 2)
+
+
+def test_asymmetric_dataset_getitem_equivalent_with_cache(
+    synthetic_cxi: Path, tmp_path: Path
+) -> None:
+    """Full __getitem__ output is identical cached vs uncached for a fixed seed.
+
+    This is the gate that catches centroid indexing or mask alignment errors
+    that a frame-level comparison would miss.
+    """
+    import sys
+
+    import torch
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from scripts.build_frame_cache import build_one_cxi
+
+    from src.data.dataset import AsymmetricCXIDataset
+
+    root = tmp_path / "cache"
+    build_one_cxi(synthetic_cxi, root, CFG, backend="mock")
+
+    session_map = {"s0": synthetic_cxi}
+    plain = AsymmetricCXIDataset(["s0"], session_map, MockHitfinder(), seed=7)
+    cached = AsymmetricCXIDataset(
+        ["s0"], session_map, MockHitfinder(), seed=7, frame_cache=FrameCache([root])
+    )
+
+    for idx in range(len(plain)):
+        a, b = plain[idx], cached[idx]
+        assert (a is None) == (b is None)
+        if a is None:
+            continue
+        assert a[1] == b[1], f"label differs at idx {idx}"
+        assert torch.allclose(a[0], b[0], atol=0.05), f"crop differs at idx {idx}"

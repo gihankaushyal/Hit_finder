@@ -20,6 +20,7 @@ from src.preprocessing.io import (
     read_frame,
     read_image,
 )
+from src.data.frame_cache import CacheMissError, FrameCache
 from src.hitfinders.base import Hitfinder
 from src.preprocessing.augment import (
     PAD_BORDER_DEFAULT,
@@ -271,16 +272,30 @@ def _load_gcn_frame(
     geom_cache: dict[Path, dict[str, float]],
     hitfinder: Hitfinder | None,
     last_geom_path_holder: list,
+    frame_cache: "FrameCache | None" = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Thin wrapper around ``_compute_gcn_frame`` (no caching logic yet).
+    """Return (gcn_frame, valid_mask, centroids), from cache when available.
 
-    Kept as a stable call site for existing callers (AsymmetricCXIDataset,
-    SSLPretrainCXIDataset); a future task adds cache-or-compute behavior here
-    without touching those callers.
+    A cache miss is a normal operating state (partially staged NVMe tier, a file
+    added after the last build), so it falls back to _compute_gcn_frame rather
+    than raising. Both paths run the same code, so the results agree up to fp16
+    rounding of the cached frame.
 
-    Returns:
-        (gcn_frame, valid_mask, centroids) — see ``_compute_gcn_frame``.
+    When hitfinder is None the cached centroids are discarded and an empty
+    (0, 2) array is returned, matching the uncached contract — MAE pretraining
+    relies on this.
     """
+    if frame_cache is not None:
+        try:
+            cached_frame, cached_mask, cached_centroids = frame_cache.get(
+                path, frame_idx
+            )
+        except CacheMissError:
+            pass
+        else:
+            if hitfinder is None:
+                cached_centroids = np.zeros((0, 2), dtype=np.float32)
+            return cached_frame, cached_mask, cached_centroids
     return _compute_gcn_frame(
         path, frame_idx, desc, geom_cache, hitfinder, last_geom_path_holder
     )
@@ -315,6 +330,8 @@ class AsymmetricCXIDataset(Dataset):
         hitfinder: Hitfinder Protocol instance (find_peaks method).
         label_key: HDF5 key for per-frame labels (used only to build the flat index).
         seed: Base RNG seed; per-sample seed is seed+idx for reproducibility.
+        frame_cache: Optional FrameCache serving the read/assemble/hitfinder/GCN
+            prefix from disk. A miss falls back to live computation.
     """
 
     def __init__(
@@ -324,10 +341,12 @@ class AsymmetricCXIDataset(Dataset):
         hitfinder: Hitfinder,
         label_key: str = "entry_1/labels/hit",
         seed: int = 42,
+        frame_cache: FrameCache | None = None,
     ) -> None:
         self._hitfinder = hitfinder
         self._label_key = label_key
         self._seed = seed
+        self._frame_cache = frame_cache
         self._last_geom_path_holder: list = [None]
 
         # Resolve session_map to Path objects for requested session_ids only.
@@ -379,6 +398,7 @@ class AsymmetricCXIDataset(Dataset):
             self._path_to_geom,
             self._hitfinder,
             self._last_geom_path_holder,
+            frame_cache=self._frame_cache,
         )
 
         # --- Pad and shift centroids into padded coordinate frame ---
@@ -505,6 +525,8 @@ class SSLPretrainCXIDataset(Dataset):
         hitfinder: Optional Hitfinder for peak-aware masking centroids.
         min_valid_frac: Minimum fraction of valid pixels a crop must contain;
             after SSL_CROP_MAX_TRIES rejected draws the best candidate is used.
+        frame_cache: Optional FrameCache serving the read/assemble/GCN prefix
+            from disk. Cached centroids are discarded when hitfinder is None.
     """
 
     def __init__(
@@ -515,12 +537,14 @@ class SSLPretrainCXIDataset(Dataset):
         crops_per_frame: int = 1,
         hitfinder: Hitfinder | None = None,
         min_valid_frac: float = SSL_MIN_VALID_FRAC_DEFAULT,
+        frame_cache: FrameCache | None = None,
     ) -> None:
         self._hitfinder = hitfinder
         self._seed = seed
         self._epoch: int = 0
         self._min_valid_frac = min_valid_frac
         self._crops_per_frame = crops_per_frame
+        self._frame_cache = frame_cache
         self._last_geom_path_holder: list = [None]
 
         cxi_paths = [Path(session_map[sid]) for sid in session_ids]
@@ -581,6 +605,7 @@ class SSLPretrainCXIDataset(Dataset):
                 self._path_to_geom,
                 self._hitfinder,
                 self._last_geom_path_holder,
+                frame_cache=self._frame_cache,
             )
         except (OSError, KeyError, ValueError, RuntimeError) as exc:
             warnings.warn(
