@@ -16,6 +16,7 @@ import torch
 import wandb
 
 from src.data.dataloader import ssl_crop_loader
+from src.data.frame_cache import FrameCache, frame_cache_from_cfg
 from src.hitfinders import get_hitfinder
 from src.models.ssl import MASKING_PEAK_AWARE, build_mae_model
 from src.training.lodo import build_sessions
@@ -39,6 +40,7 @@ def run_pretrain(
     run_name: str,
     device: str,
     resume: bool = False,
+    frame_cache: "FrameCache | None" = None,
 ) -> dict:
     _set_seeds(cfg["seed"])
     ssl_cfg = cfg["ssl"]
@@ -56,6 +58,7 @@ def run_pretrain(
         crops_per_frame=ssl_cfg.get("crops_per_frame", 1),
         hitfinder=hitfinder,
         min_valid_frac=ssl_cfg.get("min_valid_frac", 0.5),
+        frame_cache=frame_cache,
     )
     model = build_mae_model(cfg).to(device)
     opt = torch.optim.AdamW(
@@ -172,6 +175,22 @@ def main() -> None:
             "instead of NFS."
         ),
     )
+    p.add_argument(
+        "--cache-root",
+        default=None,
+        help="Override cache.root — the permanent NFS frame cache directory.",
+    )
+    p.add_argument(
+        "--cache-nvme",
+        default=None,
+        help="Override cache.nvme_root — the local NVMe frame cache tier, "
+        "checked before cache.root.",
+    )
+    p.add_argument(
+        "--no-cache",
+        action="store_true",
+        help="Disable the frame cache and recompute assembly/hitfinder/GCN live.",
+    )
     args = p.parse_args()
 
     cfg = load_config(args.config)
@@ -188,6 +207,17 @@ def main() -> None:
                 cfg["lodo"]["detector_dirs"][det] = str(staged)
                 remapped.append(det)
         print(f"[stage] detector_dirs remapped to {args.stage_dir}: {remapped}")
+    cache_cfg = cfg.setdefault("cache", {})
+    if args.cache_root is not None:
+        cache_cfg["root"] = args.cache_root
+    if args.cache_nvme is not None:
+        cache_cfg["nvme_root"] = args.cache_nvme
+    if args.no_cache:
+        cache_cfg["enabled"] = False
+    frame_cache = frame_cache_from_cfg(cfg)
+    print(
+        f"[cache] {'roots: ' + ', '.join(str(r) for r in frame_cache.roots) if frame_cache else 'disabled — computing live'}"
+    )
     device = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
     sessions, session_map = build_sessions(cfg["lodo"])
 
@@ -199,7 +229,13 @@ def main() -> None:
     run_name = f"mae-vits16-fold{args.fold}-seed{cfg['seed']}"
     print(f"Fold {args.fold}: excluding {held_out}; {len(pretrain_ids)} sessions")
     summary = run_pretrain(
-        cfg, session_map, pretrain_ids, run_name, device, resume=args.resume
+        cfg,
+        session_map,
+        pretrain_ids,
+        run_name,
+        device,
+        resume=args.resume,
+        frame_cache=frame_cache,
     )
     print(summary)
 

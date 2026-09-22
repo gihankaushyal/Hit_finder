@@ -256,3 +256,25 @@ class FrameCache:
             f"{det}/{stem} frame {frame_idx} not found in any of: "
             + ", ".join(str(r) for r in self._roots)
         )
+
+
+def frame_cache_from_cfg(cfg: dict) -> FrameCache | None:
+    """Build a two-tier FrameCache from the `cache:` block of a run config.
+
+    Returns None when caching is disabled or no configured root exists on this
+    node — callers treat None as "compute everything live", which is exactly the
+    behaviour the pipeline had before the cache existed.
+    """
+    cache_cfg = cfg.get("cache") or {}
+    if not cache_cfg.get("enabled", False):
+        return None
+    roots: list[Path] = []
+    for key in ("nvme_root", "root"):
+        value = cache_cfg.get(key)
+        if value:
+            path = Path(value)
+            if path.is_dir():
+                roots.append(path)
+    if not roots:
+        return None
+    return FrameCache(roots)

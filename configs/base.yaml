@@ -41,3 +41,13 @@ benchmark:
   variants: [strict_lodo, semi_supervised_lodo]
   detector_agnostic_max_relative_degradation: null  # set after Phase 4
   detector_agnostic_min_absolute_ap: null           # set after Phase 4
+
+# Persistent preprocessing frame cache (assembled + GCN'd frames, fp16, plus PF8
+# centroids). `root` is the permanent NFS copy; `nvme_root` is the per-fold local
+# staging tier checked first. A root that does not exist on the current node is
+# silently skipped, so an unstaged node still runs, just slower. Set
+# enabled: false (or pass --no-cache) to recompute everything live.
+cache:
+  enabled: true
+  root: /data/bioxfel/user/gihan/Hit_finder_cache
+  nvme_root: /tmp/sfx_frame_cache

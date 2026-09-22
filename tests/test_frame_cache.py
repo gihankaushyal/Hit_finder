@@ -482,3 +482,58 @@ class TestLodoWiring:
         assert src.count("frame_cache=frame_cache") == 4
         assert "_verify_cache_or_raise(frame_cache, cfg)" in src
         assert "frame_cache" in inspect.signature(lodo._train_fold).parameters
+
+
+# ---------------------------------------------------------------------------
+# Cache construction from config
+# ---------------------------------------------------------------------------
+
+
+class TestCacheFromConfig:
+    def test_disabled_returns_none(self, tmp_path: Path) -> None:
+        from src.data.frame_cache import frame_cache_from_cfg
+
+        cfg = {"cache": {"enabled": False, "root": str(tmp_path)}}
+        assert frame_cache_from_cfg(cfg) is None
+
+    def test_missing_cache_block_returns_none(self) -> None:
+        from src.data.frame_cache import frame_cache_from_cfg
+
+        assert frame_cache_from_cfg({}) is None
+
+    def test_nvme_root_comes_first(self, tmp_path: Path) -> None:
+        from src.data.frame_cache import frame_cache_from_cfg
+
+        nvme = tmp_path / "nvme"
+        nvme.mkdir()
+        nfs = tmp_path / "nfs"
+        nfs.mkdir()
+        cfg = {"cache": {"enabled": True, "root": str(nfs), "nvme_root": str(nvme)}}
+        cache = frame_cache_from_cfg(cfg)
+        assert cache is not None
+        assert cache.roots == [nvme, nfs]
+
+    def test_absent_nvme_root_is_dropped(self, tmp_path: Path) -> None:
+        """Staging may not have run on this node — that is not an error."""
+        from src.data.frame_cache import frame_cache_from_cfg
+
+        nfs = tmp_path / "nfs"
+        nfs.mkdir()
+        cfg = {
+            "cache": {
+                "enabled": True,
+                "root": str(nfs),
+                "nvme_root": str(tmp_path / "does_not_exist"),
+            }
+        }
+        cache = frame_cache_from_cfg(cfg)
+        assert cache is not None
+        assert cache.roots == [nfs]
+
+    def test_no_usable_root_returns_none(self, tmp_path: Path) -> None:
+        from src.data.frame_cache import frame_cache_from_cfg
+
+        cfg = {
+            "cache": {"enabled": True, "root": str(tmp_path / "nope")},
+        }
+        assert frame_cache_from_cfg(cfg) is None
