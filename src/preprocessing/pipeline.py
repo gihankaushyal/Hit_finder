@@ -240,6 +240,53 @@ def fill_gaps_after_gcn(
     return gcn_frame
 
 
+def preprocess_eval_patches_from_gcn(
+    gcn_frame: np.ndarray,
+    mask: np.ndarray | None = None,
+    patch_size: int = TARGET_SIZE[0],
+    stride: int | None = None,
+    lcn_window: int = LCN_WINDOW_DEFAULT,
+) -> np.ndarray:
+    """Tile an already-GCN'd, gap-filled frame into patches and LCN each one.
+
+    The second half of preprocess_eval_patches, callable on its own so the frame
+    cache can supply the GCN'd frame instead of recomputing it. Applies neither
+    GCN nor gap fill — the caller must have done both.
+
+    Args:
+        gcn_frame: float32 (H, W) frame that has already been GCN'd and had its
+            gap/padding pixels zeroed.
+        mask: Optional boolean (H, W); True = valid detector pixel. When given,
+            invalid pixels are excluded from LCN local statistics and zeroed in
+            the output.
+        patch_size: Patch side length in pixels (default 224).
+        stride: Step between patch origins (default = patch_size).
+        lcn_window: LCN neighbourhood size (default 9).
+
+    Returns:
+        float32 array of shape (N, patch_size, patch_size) where N >= 1.
+
+    Raises:
+        ValueError: If the frame produces zero complete patches.
+    """
+    from src.preprocessing.augment import patch_grid
+
+    patches = patch_grid(gcn_frame, patch_size, stride)
+    if not patches:
+        raise ValueError(
+            f"preprocess_eval_patches_from_gcn: no complete {patch_size}×{patch_size} "
+            f"patch fits in image of shape {gcn_frame.shape}."
+        )
+    if mask is not None:
+        mask_patches = patch_grid(mask, patch_size, stride)
+        normed = [
+            lcn(p, window=lcn_window, mask=mp) for p, mp in zip(patches, mask_patches)
+        ]
+    else:
+        normed = [lcn(p, window=lcn_window) for p in patches]
+    return np.stack(normed, axis=0).astype(np.float32)
+
+
 def preprocess_eval_patches(
     assembled: np.ndarray,
     patch_size: int = TARGET_SIZE[0],
@@ -270,22 +317,21 @@ def preprocess_eval_patches(
     Raises:
         ValueError: If the image produces zero complete patches.
     """
-    from src.preprocessing.augment import patch_grid
-
     mask = get_valid_mask_for_frame(detector_desc, assembled.shape)
     gcn_frame = gcn(assembled.astype(np.float32))
     gcn_frame = fill_gaps_after_gcn(gcn_frame, detector_desc, mask=mask)
-    patches = patch_grid(gcn_frame, patch_size, stride)
-    if not patches:
+    try:
+        return preprocess_eval_patches_from_gcn(
+            gcn_frame,
+            mask=mask,
+            patch_size=patch_size,
+            stride=stride,
+            lcn_window=lcn_window,
+        )
+    except ValueError as exc:
+        # Preserve the original error text so existing callers' `except ValueError`
+        # handlers and their warning messages stay accurate.
         raise ValueError(
             f"preprocess_eval_patches: no complete {patch_size}×{patch_size} "
             f"patch fits in image of shape {assembled.shape}."
-        )
-    if mask is not None:
-        mask_patches = patch_grid(mask, patch_size, stride)
-        normed = [
-            lcn(p, window=lcn_window, mask=mp) for p, mp in zip(patches, mask_patches)
-        ]
-    else:
-        normed = [lcn(p, window=lcn_window) for p in patches]
-    return np.stack(normed, axis=0).astype(np.float32)
+        ) from exc
