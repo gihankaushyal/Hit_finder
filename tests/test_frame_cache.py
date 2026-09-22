@@ -6,6 +6,7 @@ fixture style as tests/test_asymmetric_dataset.py.
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import h5py
@@ -537,3 +538,36 @@ class TestCacheFromConfig:
             "cache": {"enabled": True, "root": str(tmp_path / "nope")},
         }
         assert frame_cache_from_cfg(cfg) is None
+
+
+class TestStagingPlan:
+    def test_orders_train_before_val_and_drops_test_splits(
+        self, tmp_path: Path
+    ) -> None:
+        from src.evaluation.benchmark import (
+            SPLIT_CROSS_DETECTOR,
+            SPLIT_IN_DOMAIN_TEST,
+            SPLIT_TRAIN,
+            SPLIT_VAL,
+        )
+
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+        from plan_cache_staging import staging_order
+
+        split_artifact = {
+            "splits": {
+                "s_cross": SPLIT_CROSS_DETECTOR,
+                "s_val": SPLIT_VAL,
+                "s_test": SPLIT_IN_DOMAIN_TEST,
+                "s_train": SPLIT_TRAIN,
+            }
+        }
+        session_map = {
+            sid: tmp_path / "agipd_20k" / f"{sid}.cxi"
+            for sid in split_artifact["splits"]
+        }
+        order = staging_order(split_artifact, session_map)
+        assert order == [
+            ("agipd_20k", "s_train"),
+            ("agipd_20k", "s_val"),
+        ]

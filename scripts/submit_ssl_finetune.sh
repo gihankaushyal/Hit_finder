@@ -17,8 +17,6 @@ FOLD="${1:?fold id required (1-4)}"
 shift
 EXTRA=("$@")
 
-STAGE_DIR="${SHARED_STAGE:-/tmp/sfx_stage_shared}"
-
 module load mamba/latest
 source activate sfx-hitfinder
 source .secrets/wandb.env
@@ -28,5 +26,5 @@ python -m src.training.train_ssl_finetune \
     --config configs/ssl/mae_finetune.yaml \
     --fold "${FOLD}" \
     --pretrain-checkpoint "checkpoints/mae-vits16-fold${FOLD}-seed42/last.pt" \
-    --stage-dir "${STAGE_DIR}" \
+    --cache-nvme "${CACHE_NVME:-/tmp/sfx_frame_cache}" \
     "${EXTRA[@]}"

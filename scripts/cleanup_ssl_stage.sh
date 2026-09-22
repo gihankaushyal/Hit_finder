@@ -1,9 +1,11 @@
 #!/bin/bash
-# cleanup_ssl_stage.sh — SLURM job: remove the shared SSL NVMe staging directory.
+# cleanup_ssl_stage.sh — SLURM job: remove the SSL NVMe staging directories.
 #
-# Deletes /tmp/sfx_stage_shared from scg020's local NVMe after all SSL pretrain
-# fold jobs have finished (submitted with afterany dependency by
-# submit_ssl_pretrain_all.sh so it runs regardless of fold job exit status).
+# Deletes both the legacy raw-CXI staging directory (/tmp/sfx_stage_shared) and
+# the frame-cache NVMe tier (/tmp/sfx_frame_cache) from scg020's local NVMe
+# after all SSL pretrain/fine-tune fold jobs have finished (submitted with
+# afterany dependency by submit_ssl_pretrain_all.sh / submit_ssl_finetune_all.sh
+# so it runs regardless of fold job exit status).
 #
 # This script is called automatically by submit_ssl_pretrain_all.sh.
 # Running it directly is supported for manual cleanup if needed.
@@ -40,13 +42,14 @@ if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
     exit 0
 fi
 
-STAGE="/tmp/sfx_stage_shared"
 mkdir -p logs
 
-if [ -d "${STAGE}" ]; then
-    echo "[cleanup] removing ${STAGE} ($(du -sh ${STAGE} | cut -f1))"
-    rm -rf "${STAGE}"
-    echo "[cleanup] done"
-else
-    echo "[cleanup] ${STAGE} already gone — nothing to do"
-fi
+for STAGE in /tmp/sfx_stage_shared /tmp/sfx_frame_cache; do
+    if [ -d "${STAGE}" ]; then
+        echo "[cleanup] removing ${STAGE} ($(du -sh ${STAGE} | cut -f1))"
+        rm -rf "${STAGE}"
+    else
+        echo "[cleanup] ${STAGE} already gone — nothing to do"
+    fi
+done
+echo "[cleanup] done"
