@@ -51,6 +51,9 @@ CACHE_NVME="${CACHE_NVME:-/tmp/sfx_frame_cache}"
 CONFIG="${CONFIG:-configs/ssl/mae_finetune.yaml}"
 # Leave 20 GB free so the node's /tmp does not fill completely.
 RESERVE_KB=$(( 20 * 1024 * 1024 ))
+# Bounded parallelism for the per-entry copy below — high enough to overlap
+# NFS read latency, low enough to not starve other jobs of NFS/NVMe bandwidth.
+STAGE_JOBS="${STAGE_JOBS:-8}"
 
 module load mamba/latest
 source activate sfx-hitfinder
@@ -62,38 +65,63 @@ if [ ! -f "${CACHE_NFS}/cache_manifest.json" ]; then
     exit 1
 fi
 
-# The manifest must land on NVMe too, or _verify_cache_or_raise sees an
+# The manifest must land on NVMe too, or verify_cache_or_raise sees an
 # unverifiable tier and FrameCache resolves entries against an unlabelled root.
 cp "${CACHE_NFS}/cache_manifest.json" "${CACHE_NVME}/"
 
 PLAN_FILE=$(mktemp)
-trap 'rm -f "${PLAN_FILE}"' EXIT
+RESULTS_FILE=$(mktemp)
+trap 'rm -f "${PLAN_FILE}" "${RESULTS_FILE}"' EXIT
 
 if ! python scripts/plan_cache_staging.py --config "${CONFIG}" --fold "${FOLD}" > "${PLAN_FILE}"; then
     echo "[stage] ABORT: plan_cache_staging.py failed for fold ${FOLD}" >&2
     exit 1
 fi
 
-STAGED=0
-SKIPPED=0
-while read -r entry; do
-    src="${CACHE_NFS}/${entry}"
-    dst="${CACHE_NVME}/${entry}"
-    [ -d "${src}" ] || { echo "[stage] missing in NFS cache: ${entry}" >&2; continue; }
-    [ -d "${dst}" ] && continue
+# Per-entry copy, invoked once per line of PLAN_FILE via `xargs -P`. Emits
+# exactly one status line to stdout ("staged"/"skipped"/"missing") so the
+# driver can tally STAGED/SKIPPED after the parallel copies finish, and exits
+# non-zero on a failed copy so `xargs -P` (and therefore the whole script,
+# under set -euo pipefail) aborts loudly instead of silently dropping entries.
+stage_one_entry() {
+    local entry="$1"
+    local src="${CACHE_NFS}/${entry}"
+    local dst="${CACHE_NVME}/${entry}"
 
+    if [ ! -d "${src}" ]; then
+        echo "[stage] missing in NFS cache: ${entry}" >&2
+        echo "missing"
+        return 0
+    fi
+    if [ -d "${dst}" ]; then
+        echo "skipped"
+        return 0
+    fi
+
+    local need_kb avail_kb
     need_kb=$(du -sk "${src}" | cut -f1)
     avail_kb=$(df -k "${CACHE_NVME}" | awk 'NR==2 {print $4}')
     if [ $(( avail_kb - need_kb )) -lt "${RESERVE_KB}" ]; then
-        SKIPPED=$(( SKIPPED + 1 ))
-        continue
+        echo "skipped"
+        return 0
     fi
 
     mkdir -p "$(dirname "${dst}")"
     cp -r "${src}" "${dst}.tmp"
     mv "${dst}.tmp" "${dst}"
-    STAGED=$(( STAGED + 1 ))
-done < "${PLAN_FILE}"
+    echo "staged"
+}
+export -f stage_one_entry
+export CACHE_NFS CACHE_NVME RESERVE_KB
+
+# `xargs -P` propagates a non-zero exit from any worker as its own non-zero
+# exit, which — combined with `set -e` — aborts the whole script on a single
+# failed copy, matching the original serial loop's fail-loud semantics.
+xargs -P "${STAGE_JOBS}" -I {} bash -c 'stage_one_entry "$@"' _ {} \
+    < "${PLAN_FILE}" > "${RESULTS_FILE}"
+
+STAGED=$(grep -c '^staged$' "${RESULTS_FILE}" || true)
+SKIPPED=$(grep -c '^skipped$' "${RESULTS_FILE}" || true)
 
 # Per-detector valid masks are tiny and shared by every entry — always copy them.
 for det_dir in "${CACHE_NFS}"/*/; do
