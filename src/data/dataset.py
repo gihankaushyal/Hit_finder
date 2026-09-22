@@ -293,6 +293,17 @@ def _load_gcn_frame(
         except CacheMissError:
             pass
         else:
+            # NOTE: on a cache hit, assembly is precomputed, so the desc-based
+            # assembler-selection branch above in _compute_gcn_frame ("JUNGFRAU"
+            # string match -> _to_2d vs. Reborn PADAssembler for everything
+            # else) is entirely bypassed here. The cache manifest's staleness
+            # keys (src/data/frame_cache.py::_HITFINDER_KEYS + GCN/LCN
+            # constants + geometry file hashes) do NOT cover this selection
+            # logic itself — only its numeric inputs. A future change to *how*
+            # a detector's assembler is chosen must be paired with a full
+            # scripts/build_frame_cache.py rebuild, not just a manifest/config
+            # param bump. (Mirrored at the same bypass point in
+            # src/evaluation/benchmark.py::run_patch_agg.)
             if hitfinder is None:
                 cached_centroids = np.zeros((0, 2), dtype=np.float32)
             return cached_frame, cached_mask, cached_centroids

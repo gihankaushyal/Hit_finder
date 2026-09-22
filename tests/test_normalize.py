@@ -214,7 +214,36 @@ class TestLCNTorch:
         assert torch.isfinite(out).all()
         assert torch.all(out == 0.0)
 
-    def test_masks_none_defaults_to_all_valid(self) -> None:
+    def test_masks_none_matches_numpy_lcn_reflect_padding(self) -> None:
+        """masks=None must match lcn()'s scipy reflect-padding, not zero-padding.
+
+        masks=None (no gap pixels to exclude) and masks=all-ones (a normalized
+        convolution with zero-padding at the border) are NOT the same: the
+        unmasked path uses reflect padding to agree with lcn()'s NumPy
+        behaviour at the frame border, while masks=all-ones still goes through
+        the zero-padded normalized-convolution branch.
+        """
+        import numpy as np
+        import torch
+
+        from src.preprocessing.normalize import lcn, lcn_torch
+
+        rng = np.random.default_rng(2)
+        patches = rng.standard_normal((2, 48, 48)).astype(np.float32)
+
+        out_torch = lcn_torch(torch.from_numpy(patches))
+        out_np = np.stack([lcn(p.astype(np.float64)) for p in patches])
+        torch.testing.assert_close(
+            out_torch, torch.from_numpy(out_np).to(torch.float32), atol=1e-4, rtol=1e-4
+        )
+
+    def test_masks_none_diverges_from_all_valid_mask(self) -> None:
+        """Documents the intentional masks=None vs. masks=all-ones divergence.
+
+        masks=None uses reflect padding (matches lcn()); an explicit all-ones
+        mask still goes through the zero-padded normalized-convolution branch.
+        The two are not required to agree, especially near the border.
+        """
         import numpy as np
         import torch
 
@@ -227,7 +256,8 @@ class TestLCNTorch:
             torch.from_numpy(patches),
             masks=torch.ones(2, 48, 48, dtype=torch.bool),
         )
-        torch.testing.assert_close(a, b)
+        # Interior pixels (unaffected by border padding choice) still agree.
+        torch.testing.assert_close(a[:, 10:-10, 10:-10], b[:, 10:-10, 10:-10])
 
     def test_preserves_shape_and_dtype(self) -> None:
         import torch

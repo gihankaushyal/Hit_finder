@@ -53,12 +53,6 @@ def main() -> None:
     p.add_argument("--device", default=None)
     p.add_argument("--resume-training", action="store_true")
     p.add_argument(
-        "--stage-dir",
-        default=None,
-        help="Local NVMe staging root (e.g. /tmp/sfx_stage_shared). "
-        "Overrides lodo.detector_dirs entries whose basename matches a subdir here.",
-    )
-    p.add_argument(
         "--cache-root",
         default=None,
         help="Override cache.root — the permanent NFS frame cache directory.",
@@ -78,12 +72,6 @@ def main() -> None:
 
     cfg = load_config(args.config)
 
-    if args.stage_dir:
-        stage = Path(args.stage_dir)
-        for det, nfs_path in cfg["lodo"]["detector_dirs"].items():
-            local = stage / Path(nfs_path).name
-            if local.exists():
-                cfg["lodo"]["detector_dirs"][det] = str(local)
     cache_cfg = cfg.setdefault("cache", {})
     if args.cache_root is not None:
         cache_cfg["root"] = args.cache_root

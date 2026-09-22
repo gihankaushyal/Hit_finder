@@ -284,6 +284,20 @@ def run_patch_agg(
                 except CacheMissError:
                     pass
                 else:
+                    # NOTE: on a cache hit, assembly is precomputed, so the
+                    # desc-based assembler-selection branch below (JUNGFRAU ->
+                    # _to_2d vs. Reborn PADAssembler for everything else) is
+                    # entirely bypassed here. The cache manifest's staleness
+                    # keys (src/data/frame_cache.py::_HITFINDER_KEYS + GCN/LCN
+                    # constants + geometry file hashes) do NOT cover this
+                    # selection logic itself — only its numeric inputs. A
+                    # future change to *how* a detector's assembler is chosen
+                    # (e.g. adding a new pre-assembled-canvas detector, or
+                    # changing the "JUNGFRAU" string match) will silently keep
+                    # serving frames built under the old selection logic unless
+                    # the cache is rebuilt from scratch. Any such change must
+                    # be paired with a full `scripts/build_frame_cache.py`
+                    # rebuild, not just a manifest/config param bump.
                     from src.preprocessing.augment import patch_grid
                     from src.preprocessing.normalize import lcn_torch
 
