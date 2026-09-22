@@ -16,10 +16,10 @@ import torch
 import wandb
 
 from src.data.dataloader import ssl_crop_loader
-from src.data.frame_cache import FrameCache, frame_cache_from_cfg
+from src.data.frame_cache import FrameCache, frame_cache_from_cfg, verify_cache_or_raise
 from src.hitfinders import get_hitfinder
 from src.models.ssl import MASKING_PEAK_AWARE, build_mae_model
-from src.training.lodo import _verify_cache_or_raise, build_sessions
+from src.training.lodo import build_sessions
 from src.training.train_supervised import _set_seeds
 from src.utils.config import load_config
 
@@ -42,7 +42,7 @@ def run_pretrain(
     resume: bool = False,
     frame_cache: "FrameCache | None" = None,
 ) -> dict:
-    _verify_cache_or_raise(frame_cache, cfg)
+    verify_cache_or_raise(frame_cache, cfg)
 
     _set_seeds(cfg["seed"])
     ssl_cfg = cfg["ssl"]

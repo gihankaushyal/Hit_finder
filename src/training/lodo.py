@@ -17,12 +17,7 @@ import torch
 import torch.nn as nn
 
 from src.data.dataloader import asymmetric_loader
-from src.data.frame_cache import (
-    MANIFEST_NAME,
-    CacheStaleError,
-    FrameCache,
-    verify_manifest,
-)
+from src.data.frame_cache import FrameCache, verify_cache_or_raise
 from src.evaluation.benchmark import (
     SPLIT_CROSS_DETECTOR,
     SPLIT_IN_DOMAIN_TEST,
@@ -85,32 +80,6 @@ def build_sessions(
     return sessions, session_map
 
 
-def _verify_cache_or_raise(frame_cache: FrameCache | None, cfg: dict) -> None:
-    """Fail fast if the configured frame cache does not match this run's config.
-
-    A tier with no manifest is skipped, not an error: the NVMe tier is staged
-    per fold and may legitimately be empty. But if *no* tier carries a manifest
-    the caller has pointed at a cache that was never built, which is an error.
-    """
-    if frame_cache is None:
-        return
-    verified = 0
-    for root in frame_cache.roots:
-        if (root / MANIFEST_NAME).exists():
-            verify_manifest(root, cfg)
-            verified += 1
-    if verified == 0:
-        roots_desc = ", ".join(str(r) for r in frame_cache.roots)
-        raise CacheStaleError(
-            f"no cache manifest found in any configured root: {roots_desc} — "
-            "each configured root exists as a directory but contains no "
-            f"{MANIFEST_NAME} (e.g. an empty staging directory, or a stray "
-            "leftover dir). Has scripts/build_frame_cache.py (or the NVMe "
-            "staging step) been run for this root? Build the cache with "
-            "scripts/build_frame_cache.py, or pass --no-cache to run without it."
-        )
-
-
 def _train_fold(
     fold: dict,
     split_artifact: dict,
@@ -139,7 +108,7 @@ def _train_fold(
     """
     import wandb
 
-    _verify_cache_or_raise(frame_cache, cfg)
+    verify_cache_or_raise(frame_cache, cfg)
 
     backbone = cfg["model"].get("backbone", "vit_small_mae")
     seed = cfg["seed"]
