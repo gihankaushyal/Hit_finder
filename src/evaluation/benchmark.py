@@ -243,7 +243,6 @@ def run_patch_agg(
         _to_2d,
         assemble_only,
         preprocess_eval_patches,
-        preprocess_eval_patches_from_gcn,
     )
 
     model.to(device)
@@ -278,29 +277,32 @@ def run_patch_agg(
 
         for frame_idx in range(len(labels_arr)):
             patches_np = None
+            patch_tensors = None
             if frame_cache is not None:
                 try:
                     gcn_frame, valid_mask, _ = frame_cache.get(path, frame_idx)
                 except CacheMissError:
                     pass
                 else:
-                    try:
-                        patches_np = preprocess_eval_patches_from_gcn(
-                            gcn_frame,
-                            mask=valid_mask,
-                            patch_size=patch_size,
-                            stride=patch_stride,
-                        )
-                    except ValueError:
+                    from src.preprocessing.augment import patch_grid
+                    from src.preprocessing.normalize import lcn_torch
+
+                    tiles = patch_grid(gcn_frame, patch_size, patch_stride)
+                    if not tiles:
                         warnings.warn(
-                            f"preprocess_eval_patches_from_gcn: no complete patch "
-                            f"fits in frame {frame_idx} of {path} "
-                            f"(shape {gcn_frame.shape}); frame excluded from eval.",
+                            f"patch_grid: no complete patch fits in frame "
+                            f"{frame_idx} of {path} (shape {gcn_frame.shape}); "
+                            "frame excluded from eval metrics.",
                             stacklevel=2,
                         )
                         continue
+                    mask_tiles = patch_grid(valid_mask, patch_size, patch_stride)
+                    patch_tensors = lcn_torch(
+                        torch.from_numpy(np.stack(tiles, axis=0)).to(device),
+                        masks=torch.from_numpy(np.stack(mask_tiles, axis=0)).to(device),
+                    ).unsqueeze(1)
 
-            if patches_np is None:
+            if patches_np is None and patch_tensors is None:
                 frame = read_frame(path, frame_idx)
                 # Assemble to native resolution exactly as AsymmetricCXIDataset does,
                 # so train and eval see identically-assembled images. Detectors with no
@@ -333,7 +335,8 @@ def run_patch_agg(
                     )
                     continue
 
-            patch_tensors = torch.from_numpy(patches_np).unsqueeze(1).to(device)
+            if patches_np is not None:
+                patch_tensors = torch.from_numpy(patches_np).unsqueeze(1).to(device)
             patch_scores_list: list[np.ndarray] = []
             with torch.no_grad():
                 for i in range(0, len(patch_tensors), inference_batch_size):

@@ -139,3 +139,101 @@ class TestNormalizationOrder:
         reversed_order = gcn(lcn(img))
         # The outputs should not be identical (order matters)
         assert not np.allclose(correct, reversed_order, atol=1e-6)
+
+
+class TestLCNTorch:
+    """lcn_torch must reproduce the masked NumPy lcn within float32 tolerance."""
+
+    @staticmethod
+    def _numpy_reference(patches, masks, window=9):
+        import numpy as np
+
+        from src.preprocessing.normalize import lcn
+
+        return np.stack(
+            [lcn(p, window=window, mask=m) for p, m in zip(patches, masks)], axis=0
+        )
+
+    def test_matches_numpy_all_valid(self) -> None:
+        import numpy as np
+        import torch
+
+        from src.preprocessing.normalize import lcn_torch
+
+        rng = np.random.default_rng(0)
+        patches = rng.standard_normal((4, 64, 64)).astype(np.float32)
+        masks = np.ones((4, 64, 64), dtype=bool)
+
+        want = self._numpy_reference(patches, masks)
+        got = lcn_torch(
+            torch.from_numpy(patches),
+            masks=torch.from_numpy(masks),
+        ).numpy()
+        np.testing.assert_allclose(got, want, rtol=1e-4, atol=1e-4)
+
+    def test_matches_numpy_with_invalid_region(self) -> None:
+        import numpy as np
+        import torch
+
+        from src.preprocessing.normalize import lcn_torch
+
+        rng = np.random.default_rng(1)
+        patches = rng.standard_normal((3, 64, 64)).astype(np.float32)
+        masks = np.ones((3, 64, 64), dtype=bool)
+        masks[:, 20:30, :] = False  # simulate a panel gap
+        masks[:, :, 0:4] = False  # simulate a padded edge
+
+        want = self._numpy_reference(patches, masks)
+        got = lcn_torch(
+            torch.from_numpy(patches),
+            masks=torch.from_numpy(masks),
+        ).numpy()
+        np.testing.assert_allclose(got, want, rtol=1e-4, atol=1e-4)
+
+    def test_invalid_pixels_are_zeroed(self) -> None:
+        import numpy as np
+        import torch
+
+        from src.preprocessing.normalize import lcn_torch
+
+        patches = torch.randn(2, 32, 32)
+        masks = torch.ones(2, 32, 32, dtype=torch.bool)
+        masks[:, :8, :] = False
+        out = lcn_torch(patches, masks=masks)
+        assert torch.all(out[:, :8, :] == 0.0)
+
+    def test_fully_invalid_patch_is_all_zero_and_finite(self) -> None:
+        """A patch with no valid pixels must not produce NaN or inf."""
+        import torch
+
+        from src.preprocessing.normalize import lcn_torch
+
+        patches = torch.randn(1, 32, 32)
+        masks = torch.zeros(1, 32, 32, dtype=torch.bool)
+        out = lcn_torch(patches, masks=masks)
+        assert torch.isfinite(out).all()
+        assert torch.all(out == 0.0)
+
+    def test_masks_none_defaults_to_all_valid(self) -> None:
+        import numpy as np
+        import torch
+
+        from src.preprocessing.normalize import lcn_torch
+
+        rng = np.random.default_rng(2)
+        patches = rng.standard_normal((2, 48, 48)).astype(np.float32)
+        a = lcn_torch(torch.from_numpy(patches))
+        b = lcn_torch(
+            torch.from_numpy(patches),
+            masks=torch.ones(2, 48, 48, dtype=torch.bool),
+        )
+        torch.testing.assert_close(a, b)
+
+    def test_preserves_shape_and_dtype(self) -> None:
+        import torch
+
+        from src.preprocessing.normalize import lcn_torch
+
+        out = lcn_torch(torch.randn(5, 224, 224))
+        assert out.shape == (5, 224, 224)
+        assert out.dtype == torch.float32
