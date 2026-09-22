@@ -20,6 +20,7 @@ import argparse
 import os
 import shutil
 import sys
+import uuid
 from multiprocessing import Pool
 from pathlib import Path
 
@@ -103,7 +104,9 @@ def build_one_cxi(
     mask_path = final.parent / VALID_MASK_NAME
     mask_path.parent.mkdir(parents=True, exist_ok=True)
     if not mask_path.is_file():
-        mask_tmp = mask_path.with_name(mask_path.name + ".tmp.npy")
+        mask_tmp = mask_path.with_name(
+            f"{mask_path.name}.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp.npy"
+        )
         np.save(mask_tmp, np.asarray(mask_out, dtype=bool))
         os.replace(mask_tmp, mask_path)
 
