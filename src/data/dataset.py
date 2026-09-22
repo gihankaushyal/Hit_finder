@@ -170,7 +170,7 @@ def _crop_within_margin(
     return bool(near.any())
 
 
-def _load_gcn_frame(
+def _compute_gcn_frame(
     path: Path,
     frame_idx: int,
     desc: str | None,
@@ -178,7 +178,12 @@ def _load_gcn_frame(
     hitfinder: Hitfinder | None,
     last_geom_path_holder: list,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """read → assemble (with _to_2d fallback) → hitfinder on raw → GCN → fill gaps.
+    """Pure compute path: read → assemble (with _to_2d fallback) → hitfinder on raw → GCN → fill gaps.
+
+    This is the actual read+assemble+hitfinder+GCN compute, with no caching
+    logic — every call recomputes from scratch. ``_load_gcn_frame`` is a thin
+    wrapper around this function (a future cache-or-compute wrapper can call
+    this directly to bypass any cache).
 
     Shared by AsymmetricCXIDataset and SSLPretrainCXIDataset so both pipelines
     stay bit-identical up to the crop step. When ``hitfinder`` is None the
@@ -257,6 +262,28 @@ def _load_gcn_frame(
     assembled = gcn(assembled)
     assembled = fill_gaps_after_gcn(assembled, desc, mask=valid_mask)
     return assembled, valid_mask, centroids
+
+
+def _load_gcn_frame(
+    path: Path,
+    frame_idx: int,
+    desc: str | None,
+    geom_cache: dict[Path, dict[str, float]],
+    hitfinder: Hitfinder | None,
+    last_geom_path_holder: list,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Thin wrapper around ``_compute_gcn_frame`` (no caching logic yet).
+
+    Kept as a stable call site for existing callers (AsymmetricCXIDataset,
+    SSLPretrainCXIDataset); a future task adds cache-or-compute behavior here
+    without touching those callers.
+
+    Returns:
+        (gcn_frame, valid_mask, centroids) — see ``_compute_gcn_frame``.
+    """
+    return _compute_gcn_frame(
+        path, frame_idx, desc, geom_cache, hitfinder, last_geom_path_holder
+    )
 
 
 # ---------------------------------------------------------------------------
