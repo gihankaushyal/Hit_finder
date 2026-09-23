@@ -20,6 +20,7 @@ wandb/
 
 # Logs
 logs/
+slurm-*.out
 
 # Checkpoints and run artefacts (large binaries — not committed)
 checkpoints/
@@ -46,6 +47,8 @@ reflection-notes-*.md
 PLANNING.md
 CLAUDE.md
 MEMORY.md
+session-tail.md
+.session-next
 docs/figures/
 docs/archive/
 docs/superpowers/
