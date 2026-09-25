@@ -36,6 +36,15 @@ from src.preprocessing.pipeline import EDGE_EROSION_PX
 
 CACHE_DTYPE = np.float16
 MANIFEST_NAME = "cache_manifest.json"
+
+# Bump whenever assembly *selection* logic changes (e.g. which detector uses
+# which assembler) without changing any of the numeric params tracked below.
+# The staleness keys hash geometry files and hitfinder/GCN/LCN constants, but
+# not the code path that picks an assembler for a given detector_desc — a
+# change there (like Jungfrau's _to_2d -> PADAssembler switch) would
+# otherwise go undetected and old caches would keep serving frames built
+# under the old selection logic.
+PIPELINE_VERSION = 1
 FRAMES_NAME = "frames.npy"
 CENTROIDS_NAME = "centroids.npz"
 VALID_MASK_NAME = "valid_mask.npy"
@@ -128,6 +137,7 @@ def build_manifest(cfg: dict) -> dict:
         "edge_erosion_px": EDGE_EROSION_PX,
         "cache_dtype": np.dtype(CACHE_DTYPE).name,
         "geometry": _geometry_digest(),
+        "pipeline_version": PIPELINE_VERSION,
     }
     return {
         "params": params,
