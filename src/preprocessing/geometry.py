@@ -63,7 +63,7 @@ def eiger_resonet_pad_geometry_list() -> detector.PADGeometryList:
     return geometry_file_to_pad_geometry_list(str(_EIGER_RESONET_GEOM))
 
 
-_KNOWN_DESCS = {"AGIPD 1M", "ePix10k 2.2M", "EIGER 4M"}
+_KNOWN_DESCS = {"AGIPD 1M", "ePix10k 2.2M", "EIGER 4M", "Jungfrau 4M"}
 
 
 def get_geometry(detector_desc: str) -> detector.PADGeometryList:
@@ -71,36 +71,37 @@ def get_geometry(detector_desc: str) -> detector.PADGeometryList:
 
     AGIPD 1M and ePix10k 2.2M use Reborn's built-in standard geometry loaders.
     EIGER 4M uses the CrystFEL .geom file in src/preprocessing/data/eiger4m.geom.
+    Jungfrau 4M uses Reborn's bundled jungfrau_8_pad_geometry_list() (via
+    jungfrau4m_crystfel_pad_geometry_list()) — the CXI frame arrives as a
+    pre-assembled canvas with gap pixels, so its geometry (like Eiger4M's)
+    carries parent_data_slice for extract_panels_from_canvas().
 
     Args:
         detector_desc: Value of entry_1/instrument_1/detector_1/description,
-            e.g. 'AGIPD 1M', 'ePix10k 2.2M', 'EIGER 4M'.
+            e.g. 'AGIPD 1M', 'ePix10k 2.2M', 'EIGER 4M', 'Jungfrau 4M'.
 
     Returns:
         PADGeometryList, cached in _GEOM_CACHE so it is loaded only once per process.
 
     Raises:
-        ValueError: If detector_desc is 'Jungfrau 4M' (pre-assembled — call
-            _to_2d() then pad_border() directly) or an unrecognised string.
+        ValueError: If detector_desc is not a recognised string.
     """
-    if detector_desc == "Jungfrau 4M":
-        raise ValueError(
-            "Jungfrau 4M arrives pre-assembled. Call _to_2d() then pad_border() directly."
-        )
     if detector_desc not in _KNOWN_DESCS:
         raise ValueError(
             f"Unknown detector description '{detector_desc}'. "
-            f"Known: {sorted(_KNOWN_DESCS)} (plus 'Jungfrau 4M' which is pre-assembled)."
+            f"Known: {sorted(_KNOWN_DESCS)}."
         )
     if detector_desc not in _GEOM_CACHE:
         if detector_desc == "AGIPD 1M":
             _GEOM_CACHE[detector_desc] = detector.agipd_pad_geometry_list()
         elif detector_desc == "ePix10k 2.2M":
             _GEOM_CACHE[detector_desc] = detector.epix10k_pad_geometry_list()
-        else:  # EIGER 4M — stacked LCLS canvas (5632×384), 64 panels via CrystFEL geom
+        elif detector_desc == "EIGER 4M":
             _GEOM_CACHE[detector_desc] = geometry_file_to_pad_geometry_list(
                 str(_EIGER4M_GEOM)
             )
+        else:  # Jungfrau 4M — stacked canvas (2164x2068), 8 panels via Reborn
+            _GEOM_CACHE[detector_desc] = jungfrau4m_crystfel_pad_geometry_list()
     return _GEOM_CACHE[detector_desc]
 
 

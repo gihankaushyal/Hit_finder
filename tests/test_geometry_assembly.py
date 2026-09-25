@@ -53,10 +53,6 @@ class TestReadDetectorDescription:
 
 
 class TestGetGeometry:
-    def test_raises_for_jungfrau(self):
-        with pytest.raises(ValueError, match="pre-assembled"):
-            get_geometry("Jungfrau 4M")
-
     def test_raises_for_unknown(self):
         with pytest.raises(ValueError, match="Unknown detector"):
             get_geometry("MYSTERY DETECTOR")
@@ -66,13 +62,22 @@ class TestGetGeometry:
         # Only Eiger4M requires a CrystFEL .geom file.
         assert _EIGER4M_GEOM.exists(), f"Missing Eiger4M geom file: {_EIGER4M_GEOM}"
 
-    @pytest.mark.parametrize("desc", ["AGIPD 1M", "ePix10k 2.2M", "EIGER 4M"])
+    @pytest.mark.parametrize(
+        "desc", ["AGIPD 1M", "ePix10k 2.2M", "EIGER 4M", "Jungfrau 4M"]
+    )
     def test_returns_pad_geometry_list(self, desc):
         from reborn.detector import PADGeometryList
 
         pads = get_geometry(desc)
         assert isinstance(pads, PADGeometryList)
         assert len(pads) > 0
+
+    def test_jungfrau_geometry_defines_slicing(self):
+        # JUNGFRAU_4M arrives as a pre-assembled canvas — its geometry must
+        # carry parent_data_slice so extract_panels_from_canvas() works,
+        # exactly like Eiger4M.
+        pads = get_geometry("Jungfrau 4M")
+        assert pads.defines_slicing()
 
     def test_caches_geometry(self):
         from src.preprocessing.geometry import _GEOM_CACHE
