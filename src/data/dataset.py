@@ -31,7 +31,6 @@ from src.preprocessing.augment import (
 )
 from src.preprocessing.normalize import gcn, lcn
 from src.preprocessing.pipeline import (
-    _to_2d,
     assemble_only,
     fill_gaps_after_gcn,
     get_valid_mask_for_frame,
@@ -244,7 +243,7 @@ def _compute_gcn_frame(
     hitfinder: Hitfinder | None,
     last_geom_path_holder: list,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Pure compute path: read → assemble (with _to_2d fallback) → hitfinder on raw → GCN → fill gaps.
+    """Pure compute path: read → assemble → hitfinder on raw → GCN → fill gaps.
 
     This is the actual read+assemble+hitfinder+GCN compute, with no caching
     logic — every call recomputes from scratch. ``_load_gcn_frame`` is a thin
@@ -265,17 +264,9 @@ def _compute_gcn_frame(
     frame = read_frame(path, frame_idx)
 
     # --- Assemble to native resolution ---
-    if desc is not None and "JUNGFRAU" not in desc.upper():
-        try:
-            pads = get_geometry(desc)
-            assembler = get_assembler(desc)
-            assembled = assemble_only(frame, pads, desc, assembler=assembler)
-        except (ValueError, KeyError, OSError):
-            # ValueError: unrecognised descriptor that slipped past the
-            # JUNGFRAU guard (e.g. novel variant); fall back to _to_2d.
-            assembled = _to_2d(frame)
-    else:
-        assembled = _to_2d(frame)
+    pads = get_geometry(desc)
+    assembler = get_assembler(desc)
+    assembled = assemble_only(frame, pads, desc, assembler=assembler)
 
     centroids = np.zeros((0, 2), dtype=np.float32)
     if hitfinder is not None:
@@ -359,9 +350,8 @@ def _load_gcn_frame(
             pass
         else:
             # NOTE: on a cache hit, assembly is precomputed, so the desc-based
-            # assembler-selection branch above in _compute_gcn_frame ("JUNGFRAU"
-            # string match -> _to_2d vs. Reborn PADAssembler for everything
-            # else) is entirely bypassed here. The cache manifest's staleness
+            # get_geometry/get_assembler selection above in _compute_gcn_frame
+            # is entirely bypassed here. The cache manifest's staleness
             # keys (src/data/frame_cache.py::_HITFINDER_KEYS + GCN/LCN
             # constants + geometry file hashes) do NOT cover this selection
             # logic itself — only its numeric inputs. A future change to *how*
