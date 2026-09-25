@@ -109,3 +109,21 @@ class TestAssembleOnlyJungfrau:
         raw = np.ones((5632, 384), dtype=np.float32)
         with pytest.raises(ValueError, match="unrecognised detector_desc"):
             assemble_only(raw, pads, "Not A Detector")
+
+
+# ---------------------------------------------------------------------------
+# valid_pixel_mask
+# ---------------------------------------------------------------------------
+
+
+class TestValidPixelMaskJungfrau:
+    def test_returns_boolean_mask_via_padassembler(self):
+        from src.preprocessing.pipeline import _MASK_CACHE, valid_pixel_mask
+
+        _MASK_CACHE.pop("Jungfrau 4M", None)
+        mask = valid_pixel_mask("Jungfrau 4M")
+
+        assert mask.dtype == bool
+        assert mask.any()  # some pixels are real panel coverage
+        assert not mask.all()  # some pixels are gaps (excluded)
+        _MASK_CACHE.pop("Jungfrau 4M", None)

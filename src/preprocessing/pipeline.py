@@ -110,8 +110,7 @@ def valid_pixel_mask(detector_desc: str) -> np.ndarray:
 
     Args:
         detector_desc: CXI detector description, e.g. 'AGIPD 1M', 'EIGER 4M',
-            'Jungfrau 4M' (routed through its CrystFEL geometry since the
-            frame itself arrives pre-assembled).
+            'Jungfrau 4M'.
 
     The mask is then eroded by EDGE_EROSION_PX so physically double-size
     panel-edge pixels (genuinely brighter, but unrepresentative) are also
@@ -125,28 +124,16 @@ def valid_pixel_mask(detector_desc: str) -> np.ndarray:
     """
     from scipy.ndimage import binary_erosion
 
-    from src.preprocessing.geometry import DETECTOR_LOADERS, get_assembler, get_geometry
+    from src.preprocessing.geometry import get_assembler, get_geometry
 
     if detector_desc in _MASK_CACHE:
         return _MASK_CACHE[detector_desc]
 
-    if detector_desc == "Jungfrau 4M":
-        # Pre-assembled canvas: PADAssembler is not usable for this geometry
-        # (its flat_indices/n_pixels disagree), but each CrystFEL panel carries
-        # parent_data_slice — its slab in the canvas the frames arrive in.
-        pads = DETECTOR_LOADERS["JUNGFRAU_4M"]()
-        slices = [p.parent_data_slice for p in pads]
-        h = max(s[0].stop for s in slices)
-        w = max(s[1].stop for s in slices)
-        mask = np.zeros((h, w), dtype=bool)
-        for s in slices:
-            mask[s] = True
-    else:
-        pads = get_geometry(detector_desc)
-        assembler = get_assembler(detector_desc)
-        n_pixels = int(sum(int(p.n_fs) * int(p.n_ss) for p in pads))
-        coverage = assembler.assemble_data(np.ones(n_pixels, dtype=np.float32))
-        mask = np.asarray(coverage) > 0.5
+    pads = get_geometry(detector_desc)
+    assembler = get_assembler(detector_desc)
+    n_pixels = int(sum(int(p.n_fs) * int(p.n_ss) for p in pads))
+    coverage = assembler.assemble_data(np.ones(n_pixels, dtype=np.float32))
+    mask = np.asarray(coverage) > 0.5
     if EDGE_EROSION_PX > 0:
         mask = binary_erosion(mask, iterations=EDGE_EROSION_PX)
     _MASK_CACHE[detector_desc] = mask
