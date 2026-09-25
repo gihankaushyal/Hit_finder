@@ -7,14 +7,33 @@ import numpy as np
 import pytest
 import torch
 
+import src.data.dataset as dataset_module
 from src.data.dataset import SSLPretrainCXIDataset
 from src.data.dataloader import ssl_crop_loader
 from src.hitfinders import MockHitfinder
+from src.preprocessing.pipeline import _to_2d
+from src.preprocessing.pipeline import assemble_only as _real_assemble_only
 
 H, W = 512, 512
 N_FRAMES = 8
 LABEL_KEY = "entry_1/labels/hit"
 DATA_KEY = "entry_1/data_1/data"
+
+
+@pytest.fixture(autouse=True)
+def _fake_jungfrau_assembly(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Jungfrau fixtures here use small synthetic (512, 512) frames as a
+    detector-agnostic stand-in for generic SSL-dataset logic — real
+    PADAssembler requires a full-size (2164, 2068) canvas. Fall back to the
+    old _to_2d() passthrough only for undersized synthetic frames.
+    """
+
+    def _fake(frame, pads, detector_desc, assembler=None):
+        if detector_desc == "Jungfrau 4M" and frame.shape != (2164, 2068):
+            return _to_2d(frame)
+        return _real_assemble_only(frame, pads, detector_desc, assembler=assembler)
+
+    monkeypatch.setattr(dataset_module, "assemble_only", _fake)
 
 
 @pytest.fixture(scope="module")
