@@ -111,8 +111,14 @@ class _ConstantModel(nn.Module):
         )
 
 
-def _make_cxi(tmp_path, n_frames=4, n_hits=2, shape=(500, 500)):
-    """Write a minimal CXI-like HDF5 file with data and labels."""
+def _make_cxi(tmp_path, n_frames=4, n_hits=2, shape=(500, 500), desc="Jungfrau 4M"):
+    """Write a minimal CXI-like HDF5 file with data and labels.
+
+    desc="Jungfrau 4M" by default: an arbitrary-shape synthetic frame is not a
+    real detector canvas for any of the 4 detector types, so Jungfrau's
+    _fake_jungfrau_assembly fixture (below) is required to keep this
+    shape-agnostic — real PADAssembler needs a full (2164, 2068) canvas.
+    """
     import h5py
 
     path = tmp_path / "test.cxi"
@@ -123,7 +129,29 @@ def _make_cxi(tmp_path, n_frames=4, n_hits=2, shape=(500, 500)):
             [1.0] * n_hits + [0.0] * (n_frames - n_hits), dtype=np.float32
         )
         f.create_dataset("entry_1/labels/hit", data=labels)
+        if desc is not None:
+            f.create_dataset(
+                "entry_1/instrument_1/detector_1/description",
+                data=desc.encode(),
+            )
     return path
+
+
+@pytest.fixture(autouse=True)
+def _fake_jungfrau_assembly(monkeypatch: pytest.MonkeyPatch) -> None:
+    """See identical fixture in tests/test_asymmetric_dataset.py — same
+    rationale: these synthetic frames are undersized for real PADAssembler,
+    so fall back to _to_2d() passthrough for Jungfrau 4M only.
+    """
+    from src.preprocessing.pipeline import _to_2d
+    from src.preprocessing.pipeline import assemble_only as _real_assemble_only
+
+    def _fake(frame, pads, detector_desc, assembler=None):
+        if detector_desc == "Jungfrau 4M" and frame.shape != (2164, 2068):
+            return _to_2d(frame)
+        return _real_assemble_only(frame, pads, detector_desc, assembler=assembler)
+
+    monkeypatch.setattr("src.preprocessing.pipeline.assemble_only", _fake)
 
 
 class TestRunPatchAgg:
@@ -183,6 +211,28 @@ class TestRunPatchAgg:
             device="cpu",
         )
         assert 0.0 <= result["threshold"] <= 1.0
+
+
+class TestBenchmarkAssemblyErrorPropagation:
+    def test_geometry_error_propagates_not_swallowed(self, tmp_path, monkeypatch):
+        path = _make_cxi(tmp_path, n_frames=1, n_hits=0, desc="AGIPD 1M")
+
+        def _raise(*_args, **_kwargs):
+            raise ValueError("boom")
+
+        monkeypatch.setattr("src.preprocessing.geometry.get_geometry", _raise)
+
+        model = _ConstantModel()
+        with pytest.raises(ValueError, match="boom"):
+            run_patch_agg(
+                model,
+                session_map={"s0": path},
+                session_ids=["s0"],
+                label_key="entry_1/labels/hit",
+                patch_stride=224,
+                min_hit_patches=3,
+                device="cpu",
+            )
 
 
 def test_preprocess_eval_patches_from_gcn_matches_full_path() -> None:

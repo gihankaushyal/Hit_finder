@@ -239,11 +239,7 @@ def run_patch_agg(
         read_embedded_labels,
         read_frame,
     )
-    from src.preprocessing.pipeline import (
-        _to_2d,
-        assemble_only,
-        preprocess_eval_patches,
-    )
+    from src.preprocessing.pipeline import assemble_only, preprocess_eval_patches
 
     model.to(device)
     model.eval()
@@ -285,19 +281,18 @@ def run_patch_agg(
                     pass
                 else:
                     # NOTE: on a cache hit, assembly is precomputed, so the
-                    # desc-based assembler-selection branch below (JUNGFRAU ->
-                    # _to_2d vs. Reborn PADAssembler for everything else) is
-                    # entirely bypassed here. The cache manifest's staleness
-                    # keys (src/data/frame_cache.py::_HITFINDER_KEYS + GCN/LCN
-                    # constants + geometry file hashes) do NOT cover this
-                    # selection logic itself — only its numeric inputs. A
-                    # future change to *how* a detector's assembler is chosen
-                    # (e.g. adding a new pre-assembled-canvas detector, or
-                    # changing the "JUNGFRAU" string match) will silently keep
-                    # serving frames built under the old selection logic unless
-                    # the cache is rebuilt from scratch. Any such change must
-                    # be paired with a full `scripts/build_frame_cache.py`
-                    # rebuild, not just a manifest/config param bump.
+                    # assemble_only() call below is entirely bypassed here. The
+                    # cache manifest's staleness keys
+                    # (src/data/frame_cache.py::_HITFINDER_KEYS + GCN/LCN
+                    # constants + geometry file hashes + pipeline_version) do
+                    # NOT cover the assembler-*selection* logic itself — only
+                    # its numeric inputs. A future change to *how* a
+                    # detector's assembler is chosen will silently keep
+                    # serving frames built under the old selection logic
+                    # unless the cache is rebuilt from scratch. Any such
+                    # change must be paired with a full
+                    # `scripts/build_frame_cache.py` rebuild, not just a
+                    # manifest/config param bump.
                     from src.preprocessing.augment import patch_grid
                     from src.preprocessing.normalize import lcn_torch
 
@@ -323,20 +318,12 @@ def run_patch_agg(
             if patches_np is None and patch_tensors is None:
                 frame = read_frame(path, frame_idx)
                 # Assemble to native resolution exactly as AsymmetricCXIDataset does,
-                # so train and eval see identically-assembled images. Detectors with no
-                # description (or pre-assembled canvases like Jungfrau 4M) fall back to
-                # _to_2d, matching the dataset's own fallback.
-                if desc is not None and "JUNGFRAU" not in desc.upper():
-                    try:
-                        pads = get_geometry(desc)
-                        assembler = get_assembler(desc)
-                        assembled = assemble_only(
-                            frame, pads, desc, assembler=assembler
-                        )
-                    except (ValueError, KeyError, OSError):
-                        assembled = _to_2d(frame)
-                else:
-                    assembled = _to_2d(frame)
+                # so train and eval see identically-assembled images. Assembly errors
+                # propagate uniformly across all 4 detectors instead of silently
+                # degrading to an unassembled passthrough.
+                pads = get_geometry(desc)
+                assembler = get_assembler(desc)
+                assembled = assemble_only(frame, pads, desc, assembler=assembler)
                 try:
                     patches_np = preprocess_eval_patches(
                         assembled,
