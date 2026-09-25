@@ -4,11 +4,12 @@ Reads one frame from a CXI file, assembles it into a spatially correct 2D
 image, and saves a PNG.  No GCN, LCN, or resize is applied — the output shows
 exactly what enters the normalisation pipeline.
 
-Assembly strategy (confirmed by visual inspection 2026-06-26):
+Assembly strategy (confirmed by visual inspection 2026-06-26; Jungfrau 4M
+switched to PADAssembler 2026-09-24):
   AGIPD 1M     — Reborn standard pads + PADAssembler(frame.ravel())
   ePix10k 2.2M — Reborn standard pads + PADAssembler(frame.ravel())
   EIGER 4M     — CrystFEL geom pads  + PADAssembler(concat panel ravels)
-  Jungfrau 4M  — pre-assembled canvas, passed through _to_2d directly
+  Jungfrau 4M  — CrystFEL geom pads  + PADAssembler(concat panel ravels)
 
 Usage:
     python scripts/visualize_assembled.py <cxi_path> [--frame N] [--out path.png] [--vmax V]
@@ -41,7 +42,6 @@ from src.preprocessing.geometry import (
     get_geometry,
 )
 from src.preprocessing.io import read_detector_description, read_frame
-from src.preprocessing.pipeline import _to_2d
 
 DATA_ROOT = Path("/data/bioxfel/user/gihan/Resonet/production")
 
@@ -57,9 +57,6 @@ def assemble_raw(cxi_path: Path, frame_idx: int) -> tuple[np.ndarray, str]:
     """Return (assembled_2d, detector_desc) without normalisation or resize."""
     raw = read_frame(cxi_path, frame_idx).astype(np.float32)
     desc = read_detector_description(cxi_path)
-
-    if desc == "Jungfrau 4M":
-        return _to_2d(raw), desc
 
     pads = get_geometry(desc)
     asm = get_assembler(desc)

@@ -43,10 +43,6 @@ FAIL = "\033[91mFAIL\033[0m"
 
 def _assemble_intermediate(raw: np.ndarray, desc: str) -> tuple[tuple[int, ...], str]:
     """Return (assembled_shape, path_label) without running GCN/LCN/resize."""
-    if desc == "Jungfrau 4M":
-        assembled = _to_2d(raw)
-        return assembled.shape, "assembled"
-
     pads = get_geometry(desc)
     if desc == "AGIPD 1M":
         panels = [
@@ -79,14 +75,12 @@ def run():
             assembled_shape, path_label = _assemble_intermediate(raw, desc)
 
             # Assembly + symmetric border padding (new pipeline: no resize to 224)
-            pads = get_geometry(desc) if desc != "Jungfrau 4M" else None
-            if pads is not None:
-                from src.preprocessing.geometry import get_assembler
-                from src.preprocessing.pipeline import assemble_only
-                assembler = get_assembler(desc)
-                assembled_raw = assemble_only(raw, pads, desc, assembler=assembler)
-            else:
-                assembled_raw = _to_2d(raw)
+            from src.preprocessing.geometry import get_assembler
+            from src.preprocessing.pipeline import assemble_only
+
+            pads = get_geometry(desc)
+            assembler = get_assembler(desc)
+            assembled_raw = assemble_only(raw, pads, desc, assembler=assembler)
             padded = pad_border(assembled_raw)
             out_shape = padded.shape
             expected = (
