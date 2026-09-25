@@ -73,13 +73,12 @@ def assemble_only(
     """
     if detector_desc in ("AGIPD 1M", "ePix10k 2.2M"):
         flat = frame.ravel().astype(np.float32)
-    elif detector_desc == "EIGER 4M":
+    elif detector_desc in ("EIGER 4M", "Jungfrau 4M"):
         panels = extract_panels_from_canvas(frame.astype(np.float32), pads)
         flat = np.concatenate([p.ravel() for p in panels])
     else:
         raise ValueError(
-            f"assemble_only: unrecognised detector_desc '{detector_desc}'. "
-            "For Jungfrau 4M use _to_2d() directly (pre-assembled canvas)."
+            f"assemble_only: unrecognised detector_desc '{detector_desc}'."
         )
     if assembler is None:
         assembler = PADAssembler(pad_geometry=pads)

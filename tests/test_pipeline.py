@@ -79,3 +79,33 @@ class TestFillGapsAfterGCN:
         with pytest.warns(UserWarning, match="skipped"):
             out = fill_gaps_after_gcn(frame, "NotADetector 9000")
         assert (out == 1.5).all()
+
+
+# ---------------------------------------------------------------------------
+# assemble_only
+# ---------------------------------------------------------------------------
+
+
+class TestAssembleOnlyJungfrau:
+    def test_assembles_via_padassembler(self):
+        from src.preprocessing.geometry import get_geometry
+        from src.preprocessing.pipeline import assemble_only
+
+        pads = get_geometry("Jungfrau 4M")
+        # Raw canvas shape is fixed by the CXI file format: (2164, 2068).
+        raw = np.ones((2164, 2068), dtype=np.float32)
+        assembled = assemble_only(raw, pads, "Jungfrau 4M")
+
+        assert assembled.ndim == 2
+        # PADAssembler places panels at real lab-frame positions, producing a
+        # canvas different from the raw (2164, 2068) input.
+        assert assembled.shape != (2164, 2068)
+
+    def test_unrecognised_desc_still_raises(self):
+        from src.preprocessing.geometry import get_geometry
+        from src.preprocessing.pipeline import assemble_only
+
+        pads = get_geometry("EIGER 4M")
+        raw = np.ones((5632, 384), dtype=np.float32)
+        with pytest.raises(ValueError, match="unrecognised detector_desc"):
+            assemble_only(raw, pads, "Not A Detector")
