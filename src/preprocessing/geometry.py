@@ -8,7 +8,6 @@ import numpy as np
 from reborn import detector
 from reborn.external.crystfel import geometry_file_to_pad_geometry_list
 
-_JUNGFRAU_4M_GEOM_JSON = Path(__file__).parent / "data" / "jungfrau4m_jf4m_103mm.json"
 _EIGER_RESONET_GEOM = Path(__file__).parent / "data" / "eiger_resonet.geom"
 
 # CrystFEL geom file for Eiger4M — only detector that needs it.
@@ -22,15 +21,16 @@ _ASSEMBLER_CACHE: dict[str, detector.PADAssembler] = {}
 def jungfrau4m_crystfel_pad_geometry_list(
     detector_distance: float = 0.103,
 ) -> detector.PADGeometryList:
-    """Load JUNGFRAU 4M geometry derived from jf4m_103mm_20260408.geom.
+    """Load JUNGFRAU 4M geometry — 8 panels, 514x1030 px, 103mm distance.
 
+    Delegates to Reborn's bundled `detector.jungfrau_8_pad_geometry_list()`
+    (added upstream to match our own jf4m_103mm_20260408.geom-derived geometry,
+    confirmed numerically equivalent — max panel-position difference < 1 um).
     parent_data_shape=[2164, 2068] and parent_data_slice values match the
     pre-assembled canvas stored in Jungfrau.h5 so that panels can be extracted
     manually before passing to PADAssembler.
     """
-    pads = detector.load_pad_geometry_list(str(_JUNGFRAU_4M_GEOM_JSON))
-    pads.set_average_detector_distance(detector_distance, beam_vec=[0, 0, 1])
-    return pads
+    return detector.jungfrau_8_pad_geometry_list(detector_distance=detector_distance)
 
 
 def eiger4m_crystfel_pad_geometry_list(
