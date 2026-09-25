@@ -239,7 +239,11 @@ def run_patch_agg(
         read_embedded_labels,
         read_frame,
     )
-    from src.preprocessing.pipeline import assemble_only, preprocess_eval_patches
+    from src.preprocessing.pipeline import (
+        _to_2d,
+        assemble_only,
+        preprocess_eval_patches,
+    )
 
     model.to(device)
     model.eval()
@@ -320,10 +324,15 @@ def run_patch_agg(
                 # Assemble to native resolution exactly as AsymmetricCXIDataset does,
                 # so train and eval see identically-assembled images. Assembly errors
                 # propagate uniformly across all 4 detectors instead of silently
-                # degrading to an unassembled passthrough.
-                pads = get_geometry(desc)
-                assembler = get_assembler(desc)
-                assembled = assemble_only(frame, pads, desc, assembler=assembler)
+                # degrading to an unassembled passthrough — except when desc is None
+                # (detector description unreadable, warned above), where geometry
+                # lookup is impossible and _to_2d() is the only option.
+                if desc is None:
+                    assembled = _to_2d(frame)
+                else:
+                    pads = get_geometry(desc)
+                    assembler = get_assembler(desc)
+                    assembled = assemble_only(frame, pads, desc, assembler=assembler)
                 try:
                     patches_np = preprocess_eval_patches(
                         assembled,

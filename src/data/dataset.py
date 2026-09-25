@@ -31,6 +31,7 @@ from src.preprocessing.augment import (
 )
 from src.preprocessing.normalize import gcn, lcn
 from src.preprocessing.pipeline import (
+    _to_2d,
     assemble_only,
     fill_gaps_after_gcn,
     get_valid_mask_for_frame,
@@ -264,9 +265,15 @@ def _compute_gcn_frame(
     frame = read_frame(path, frame_idx)
 
     # --- Assemble to native resolution ---
-    pads = get_geometry(desc)
-    assembler = get_assembler(desc)
-    assembled = assemble_only(frame, pads, desc, assembler=assembler)
+    if desc is None:
+        # Detector description unreadable (see __init__'s read_detector_description
+        # try/except): geometry lookup is impossible, so fall back to a raw 2D
+        # passthrough rather than crashing the whole dataset on one bad file.
+        assembled = _to_2d(frame)
+    else:
+        pads = get_geometry(desc)
+        assembler = get_assembler(desc)
+        assembled = assemble_only(frame, pads, desc, assembler=assembler)
 
     centroids = np.zeros((0, 2), dtype=np.float32)
     if hitfinder is not None:

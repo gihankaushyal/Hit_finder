@@ -138,20 +138,8 @@ def _make_cxi(tmp_path, n_frames=4, n_hits=2, shape=(500, 500), desc="Jungfrau 4
 
 
 @pytest.fixture(autouse=True)
-def _fake_jungfrau_assembly(monkeypatch: pytest.MonkeyPatch) -> None:
-    """See identical fixture in tests/test_asymmetric_dataset.py — same
-    rationale: these synthetic frames are undersized for real PADAssembler,
-    so fall back to _to_2d() passthrough for Jungfrau 4M only.
-    """
-    from src.preprocessing.pipeline import _to_2d
-    from src.preprocessing.pipeline import assemble_only as _real_assemble_only
-
-    def _fake(frame, pads, detector_desc, assembler=None):
-        if detector_desc == "Jungfrau 4M" and frame.shape != (2164, 2068):
-            return _to_2d(frame)
-        return _real_assemble_only(frame, pads, detector_desc, assembler=assembler)
-
-    monkeypatch.setattr("src.preprocessing.pipeline.assemble_only", _fake)
+def _fake_jungfrau_assembly(fake_jungfrau_assembly_via_pipeline: None) -> None:
+    pass
 
 
 class TestRunPatchAgg:

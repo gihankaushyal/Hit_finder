@@ -9,7 +9,7 @@ import numpy as np
 from reborn.detector import PADAssembler, PADGeometryList
 
 
-from src.preprocessing.geometry import extract_panels_from_canvas
+from src.preprocessing.geometry import _KNOWN_DESCS, extract_panels_from_canvas
 from src.preprocessing.normalize import LCN_WINDOW_DEFAULT, gcn, lcn
 
 TARGET_SIZE: tuple[int, int] = (224, 224)
@@ -71,15 +71,18 @@ def assemble_only(
     Raises:
         ValueError: If detector_desc is unrecognised.
     """
-    if detector_desc in ("AGIPD 1M", "ePix10k 2.2M"):
-        flat = frame.ravel().astype(np.float32)
-    elif detector_desc in ("EIGER 4M", "Jungfrau 4M"):
-        panels = extract_panels_from_canvas(frame.astype(np.float32), pads)
-        flat = np.concatenate([p.ravel() for p in panels])
-    else:
+    if detector_desc not in _KNOWN_DESCS:
         raise ValueError(
             f"assemble_only: unrecognised detector_desc '{detector_desc}'."
         )
+    if pads.defines_slicing():
+        # Canvas-based detectors (EIGER 4M, Jungfrau 4M): extract panels via
+        # parent_data_slice before passing to PADAssembler — the same capability
+        # check src/preprocessing/geometry.py uses for this identical dispatch.
+        panels = extract_panels_from_canvas(frame.astype(np.float32), pads)
+        flat = np.concatenate([p.ravel() for p in panels])
+    else:
+        flat = frame.ravel().astype(np.float32)
     if assembler is None:
         assembler = PADAssembler(pad_geometry=pads)
     return assembler.assemble_data(flat).astype(np.float32)

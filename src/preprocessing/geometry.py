@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
@@ -65,6 +66,18 @@ def eiger_resonet_pad_geometry_list() -> detector.PADGeometryList:
 
 _KNOWN_DESCS = {"AGIPD 1M", "ePix10k 2.2M", "EIGER 4M", "Jungfrau 4M"}
 
+# Dispatch table mirroring the DETECTOR_LOADERS pattern below (generic
+# registry lookup instead of an if/elif chain) — keyed by the CXI
+# description string get_geometry() receives, rather than DETECTOR_LOADERS'
+# short detector-type keys, since the two callers (get_geometry vs
+# load_pad_geometry) use different naming conventions from their callers.
+_DESC_LOADERS: dict[str, Callable[[], detector.PADGeometryList]] = {
+    "AGIPD 1M": detector.agipd_pad_geometry_list,
+    "ePix10k 2.2M": detector.epix10k_pad_geometry_list,
+    "EIGER 4M": eiger4m_crystfel_pad_geometry_list,
+    "Jungfrau 4M": jungfrau4m_crystfel_pad_geometry_list,
+}
+
 
 def get_geometry(detector_desc: str) -> detector.PADGeometryList:
     """Load and cache PADGeometryList for the given CXI detector description.
@@ -92,16 +105,7 @@ def get_geometry(detector_desc: str) -> detector.PADGeometryList:
             f"Known: {sorted(_KNOWN_DESCS)}."
         )
     if detector_desc not in _GEOM_CACHE:
-        if detector_desc == "AGIPD 1M":
-            _GEOM_CACHE[detector_desc] = detector.agipd_pad_geometry_list()
-        elif detector_desc == "ePix10k 2.2M":
-            _GEOM_CACHE[detector_desc] = detector.epix10k_pad_geometry_list()
-        elif detector_desc == "EIGER 4M":
-            _GEOM_CACHE[detector_desc] = geometry_file_to_pad_geometry_list(
-                str(_EIGER4M_GEOM)
-            )
-        else:  # Jungfrau 4M — stacked canvas (2164x2068), 8 panels via Reborn
-            _GEOM_CACHE[detector_desc] = jungfrau4m_crystfel_pad_geometry_list()
+        _GEOM_CACHE[detector_desc] = _DESC_LOADERS[detector_desc]()
     return _GEOM_CACHE[detector_desc]
 
 
