@@ -11,10 +11,6 @@ from reborn.external.crystfel import geometry_file_to_pad_geometry_list
 
 _EIGER_RESONET_GEOM = Path(__file__).parent / "data" / "eiger_resonet.geom"
 
-# CrystFEL geom file for Eiger4M — only detector that needs it.
-# AGIPD and ePix10k use Reborn's built-in standard loaders instead.
-_EIGER4M_GEOM = Path(__file__).parent / "data" / "eiger4m.geom"
-
 _GEOM_CACHE: dict[str, detector.PADGeometryList] = {}
 _ASSEMBLER_CACHE: dict[str, detector.PADAssembler] = {}
 
@@ -37,17 +33,23 @@ def jungfrau4m_crystfel_pad_geometry_list(
 def eiger4m_crystfel_pad_geometry_list(
     detector_distance: float | None = None,
 ) -> detector.PADGeometryList:
-    """Load Eiger4M geometry from the CrystFEL .geom file.
+    """Load Eiger4M geometry — 64 panels, 176x192 px, effective z=113.9775mm.
 
-    Our Eiger4M data is stored as a stacked LCLS canvas (5632×384), 64 panels of
-    176×192 px each. Reborn's built-in eiger4M_pad_geometry_list() expects a
-    different pixel count and cannot be used. This loader sets parent_data_slice
-    on every panel so extract_panels_from_canvas() and PADAssembler work correctly.
+    Delegates to Reborn's bundled `detector.eiger4m_64_pad_geometry_list()`
+    (added upstream to match our own eiger4m.geom-derived geometry, confirmed
+    numerically equivalent — max panel-position difference < 1e-6 m, see
+    scripts/verify_eiger4m_geometry_match.py). The default 0.1139775 m
+    reproduces our geom file's clen=0.300 combined with its per-panel
+    coffset=-0.1860225 (CrystFEL sums these: 0.300 - 0.1860225 = 0.1139775).
+    Our Eiger4M data is stored as a stacked LCLS canvas (5632x384); the
+    geometry carries parent_data_slice so extract_panels_from_canvas() and
+    PADAssembler work correctly.
     """
-    pads = geometry_file_to_pad_geometry_list(str(_EIGER4M_GEOM))
-    if detector_distance is not None:
-        pads.set_average_detector_distance(detector_distance, beam_vec=[0, 0, 1])
-    return pads
+    return detector.eiger4m_64_pad_geometry_list(
+        detector_distance=(
+            detector_distance if detector_distance is not None else 0.1139775
+        )
+    )
 
 
 def eiger_resonet_pad_geometry_list() -> detector.PADGeometryList:
@@ -83,7 +85,8 @@ def get_geometry(detector_desc: str) -> detector.PADGeometryList:
     """Load and cache PADGeometryList for the given CXI detector description.
 
     AGIPD 1M and ePix10k 2.2M use Reborn's built-in standard geometry loaders.
-    EIGER 4M uses the CrystFEL .geom file in src/preprocessing/data/eiger4m.geom.
+    EIGER 4M uses Reborn's bundled eiger4m_64_pad_geometry_list() (via
+    eiger4m_crystfel_pad_geometry_list()).
     Jungfrau 4M uses Reborn's bundled jungfrau_8_pad_geometry_list() (via
     jungfrau4m_crystfel_pad_geometry_list()) — the CXI frame arrives as a
     pre-assembled canvas with gap pixels, so its geometry (like Eiger4M's)
