@@ -10,6 +10,12 @@ no notion of a separate coffset), so 0.1139775 must be passed explicitly to
 reproduce our current geometry. A first attempt at just clen=0.300 alone
 failed with a uniform 0.1860225m offset across all 64 panels (X/Y and panel
 ordering matched exactly) — the offset value is not a coincidence.
+
+Historical note: src/preprocessing/data/eiger4m.geom was deleted once this
+check passed and the migration in src/preprocessing/geometry.py landed
+(nothing else in the repo referenced it). This script is kept as a record of
+the equivalence proof, not as a runnable regression check — re-running it now
+will raise FileNotFoundError since the geom file it loads no longer exists.
 """
 
 from __future__ import annotations
