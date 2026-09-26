@@ -24,6 +24,11 @@ LABEL_KEY = "entry_1/labels/hit"
 DATA_KEY = "entry_1/data_1/data"
 
 
+@pytest.fixture(autouse=True)
+def _fake_jungfrau_assembly(fake_jungfrau_assembly_via_dataset: None) -> None:
+    pass
+
+
 @pytest.fixture(scope="module")
 def synthetic_cxi(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """Create a tiny 4-frame CXI file with detector/geometry metadata."""
@@ -246,6 +251,32 @@ def test_build_manifest_includes_pipeline_constants() -> None:
     assert params["lcn_eps"] == pytest.approx(1e-2)
     assert params["edge_erosion_px"] == 2
     assert params["cache_dtype"] == "float16"
+
+
+class TestPipelineVersion:
+    """PIPELINE_VERSION covers assembler-*selection* logic, which the other
+    staleness keys (geometry hashes, hitfinder/GCN/LCN constants) don't —
+    e.g. Jungfrau's _to_2d -> PADAssembler switch changed no hashed param."""
+
+    def test_manifest_includes_pipeline_version(self) -> None:
+        from src.data.frame_cache import PIPELINE_VERSION
+
+        params = build_manifest(CFG)["params"]
+        assert params["pipeline_version"] == PIPELINE_VERSION
+
+    def test_pipeline_version_bump_triggers_staleness(self, tmp_path: Path) -> None:
+        root = tmp_path / "cache"
+        root.mkdir()
+        write_manifest(root, CFG)
+
+        import json
+
+        m = json.loads((root / "cache_manifest.json").read_text())
+        m["params"]["pipeline_version"] += 1
+        (root / "cache_manifest.json").write_text(json.dumps(m))
+
+        with pytest.raises(CacheStaleError, match="pipeline_version"):
+            verify_manifest(root, CFG)
 
 
 # ---------------------------------------------------------------------------

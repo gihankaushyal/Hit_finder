@@ -17,6 +17,7 @@ by re-running the same command.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import shutil
 import sys
@@ -32,6 +33,8 @@ from src.data.frame_cache import (  # noqa: E402
     CACHE_DTYPE,
     CENTROIDS_NAME,
     FRAMES_NAME,
+    MANIFEST_NAME,
+    PIPELINE_VERSION,
     VALID_MASK_NAME,
     centroid_key,
     entry_dir,
@@ -149,6 +152,30 @@ def main() -> None:
     cfg = load_config(args.config)
     cache_root = Path(args.cache_root or cfg["cache"]["root"])
     cache_root.mkdir(parents=True, exist_ok=True)
+
+    # An existing manifest whose pipeline_version predates PIPELINE_VERSION means
+    # some entries under this root were built under old assembler-selection logic
+    # (e.g. Jungfrau's _to_2d -> PADAssembler switch). The per-entry skip below
+    # only checks file existence, not pipeline_version, so a plain re-run would
+    # leave those entries stale while write_manifest() at the end silently claims
+    # the current PIPELINE_VERSION. Require an explicit --overwrite instead of
+    # rebuilding a possibly-469GB cache (or lying about its freshness) by default.
+    manifest_path = cache_root / MANIFEST_NAME
+    if manifest_path.is_file() and not args.overwrite:
+        on_disk_version = (
+            json.loads(manifest_path.read_text())
+            .get("params", {})
+            .get("pipeline_version")
+        )
+        if on_disk_version != PIPELINE_VERSION:
+            print(
+                f"[build] ABORT: {cache_root} manifest has pipeline_version="
+                f"{on_disk_version!r}, code expects {PIPELINE_VERSION!r}. "
+                "Existing entries were built under different assembler-selection "
+                "logic and will NOT be refreshed by a plain re-run. Re-run with "
+                "--overwrite to rebuild every entry under the new pipeline."
+            )
+            sys.exit(1)
 
     pattern = cfg["lodo"].get("cxi_pattern", "compressed*.cxi")
     detector_dirs = cfg["lodo"]["detector_dirs"]

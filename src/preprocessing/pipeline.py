@@ -9,7 +9,7 @@ import numpy as np
 from reborn.detector import PADAssembler, PADGeometryList
 
 
-from src.preprocessing.geometry import extract_panels_from_canvas
+from src.preprocessing.geometry import _KNOWN_DESCS, extract_panels_from_canvas
 from src.preprocessing.normalize import LCN_WINDOW_DEFAULT, gcn, lcn
 
 TARGET_SIZE: tuple[int, int] = (224, 224)
@@ -71,16 +71,18 @@ def assemble_only(
     Raises:
         ValueError: If detector_desc is unrecognised.
     """
-    if detector_desc in ("AGIPD 1M", "ePix10k 2.2M"):
-        flat = frame.ravel().astype(np.float32)
-    elif detector_desc == "EIGER 4M":
+    if detector_desc not in _KNOWN_DESCS:
+        raise ValueError(
+            f"assemble_only: unrecognised detector_desc '{detector_desc}'."
+        )
+    if pads.defines_slicing():
+        # Canvas-based detectors (EIGER 4M, Jungfrau 4M): extract panels via
+        # parent_data_slice before passing to PADAssembler — the same capability
+        # check src/preprocessing/geometry.py uses for this identical dispatch.
         panels = extract_panels_from_canvas(frame.astype(np.float32), pads)
         flat = np.concatenate([p.ravel() for p in panels])
     else:
-        raise ValueError(
-            f"assemble_only: unrecognised detector_desc '{detector_desc}'. "
-            "For Jungfrau 4M use _to_2d() directly (pre-assembled canvas)."
-        )
+        flat = frame.ravel().astype(np.float32)
     if assembler is None:
         assembler = PADAssembler(pad_geometry=pads)
     return assembler.assemble_data(flat).astype(np.float32)
@@ -111,8 +113,7 @@ def valid_pixel_mask(detector_desc: str) -> np.ndarray:
 
     Args:
         detector_desc: CXI detector description, e.g. 'AGIPD 1M', 'EIGER 4M',
-            'Jungfrau 4M' (routed through its CrystFEL geometry since the
-            frame itself arrives pre-assembled).
+            'Jungfrau 4M'.
 
     The mask is then eroded by EDGE_EROSION_PX so physically double-size
     panel-edge pixels (genuinely brighter, but unrepresentative) are also
@@ -126,28 +127,16 @@ def valid_pixel_mask(detector_desc: str) -> np.ndarray:
     """
     from scipy.ndimage import binary_erosion
 
-    from src.preprocessing.geometry import DETECTOR_LOADERS, get_assembler, get_geometry
+    from src.preprocessing.geometry import get_assembler, get_geometry
 
     if detector_desc in _MASK_CACHE:
         return _MASK_CACHE[detector_desc]
 
-    if detector_desc == "Jungfrau 4M":
-        # Pre-assembled canvas: PADAssembler is not usable for this geometry
-        # (its flat_indices/n_pixels disagree), but each CrystFEL panel carries
-        # parent_data_slice — its slab in the canvas the frames arrive in.
-        pads = DETECTOR_LOADERS["JUNGFRAU_4M"]()
-        slices = [p.parent_data_slice for p in pads]
-        h = max(s[0].stop for s in slices)
-        w = max(s[1].stop for s in slices)
-        mask = np.zeros((h, w), dtype=bool)
-        for s in slices:
-            mask[s] = True
-    else:
-        pads = get_geometry(detector_desc)
-        assembler = get_assembler(detector_desc)
-        n_pixels = int(sum(int(p.n_fs) * int(p.n_ss) for p in pads))
-        coverage = assembler.assemble_data(np.ones(n_pixels, dtype=np.float32))
-        mask = np.asarray(coverage) > 0.5
+    pads = get_geometry(detector_desc)
+    assembler = get_assembler(detector_desc)
+    n_pixels = int(sum(int(p.n_fs) * int(p.n_ss) for p in pads))
+    coverage = assembler.assemble_data(np.ones(n_pixels, dtype=np.float32))
+    mask = np.asarray(coverage) > 0.5
     if EDGE_EROSION_PX > 0:
         mask = binary_erosion(mask, iterations=EDGE_EROSION_PX)
     _MASK_CACHE[detector_desc] = mask

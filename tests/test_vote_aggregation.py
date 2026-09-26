@@ -9,6 +9,11 @@ import torch
 from src.evaluation.benchmark import run_patch_agg
 
 
+@pytest.fixture(autouse=True)
+def _fake_jungfrau_assembly(fake_jungfrau_assembly_via_pipeline: None) -> None:
+    pass
+
+
 class _FixedScoreModel(torch.nn.Module):
     """Returns fixed softmax scores for every patch."""
 
@@ -26,13 +31,22 @@ class _FixedScoreModel(torch.nn.Module):
 
 
 def _make_single_frame_session(tmp_path, frame: np.ndarray, label: int):
-    """Write one-frame CXI and return session_map, session_ids."""
+    """Write one-frame CXI and return session_map, session_ids.
+
+    desc="Jungfrau 4M": an arbitrary-shape synthetic frame is not a real
+    detector canvas for any of the 4 detector types, so the
+    _fake_jungfrau_assembly fixture (above) is required to keep this
+    shape-agnostic — real PADAssembler needs a full (2164, 2068) canvas.
+    """
     import h5py
 
     cxi = tmp_path / "test.cxi"
     with h5py.File(cxi, "w") as f:
         f.create_dataset("entry_1/data_1/data", data=frame[np.newaxis])
         f.create_dataset("entry_1/labels/hit", data=np.array([label], dtype=np.float32))
+        f.create_dataset(
+            "entry_1/instrument_1/detector_1/description", data=b"Jungfrau 4M"
+        )
     return {"s0": cxi}, ["s0"]
 
 

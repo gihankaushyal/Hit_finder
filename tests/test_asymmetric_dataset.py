@@ -32,6 +32,11 @@ LABEL_KEY = "entry_1/labels/hit"
 DATA_KEY = "entry_1/data_1/data"
 
 
+@pytest.fixture(autouse=True)
+def _fake_jungfrau_assembly(fake_jungfrau_assembly_via_dataset: None) -> None:
+    pass
+
+
 @pytest.fixture(scope="module")
 def synthetic_cxi(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """Create a tiny 8-frame CXI file with 4 hits and 4 misses."""

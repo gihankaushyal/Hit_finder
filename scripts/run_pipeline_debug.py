@@ -33,7 +33,6 @@ from src.preprocessing.geometry import get_assembler, get_geometry
 from src.preprocessing.normalize import gcn, lcn
 from src.preprocessing.augment import pad_border
 from src.preprocessing.pipeline import (
-    _to_2d,
     assemble_only,
     fill_gaps_after_gcn,
     get_valid_mask_for_frame,
@@ -133,21 +132,14 @@ def _process_frame(
 
     # ── Step 2: Geometry ───────────────────────────────────────────────────────
     desc = read_detector_description(cxi_path)
-    if "JUNGFRAU" in desc.upper():
-        _log(2, "Geometry", f"{desc}  (pre-assembled — skipping Reborn assembly)")
-        pads = assembler = None
-    else:
-        pads = get_geometry(desc)
-        assembler = get_assembler(desc)
-        _log(2, "Geometry", f"{desc}  ({len(pads)} panels)")
+    pads = get_geometry(desc)
+    assembler = get_assembler(desc)
+    _log(2, "Geometry", f"{desc}  ({len(pads)} panels)")
     result["detector_desc"] = desc
 
     # ── Step 3: Assembly ───────────────────────────────────────────────────────
     t0 = time.perf_counter()
-    if desc == "Jungfrau 4M":
-        assembled = _to_2d(frame)
-    else:
-        assembled = assemble_only(frame, pads, desc, assembler)
+    assembled = assemble_only(frame, pads, desc, assembler)
     elapsed = time.perf_counter() - t0
     _log(
         3,
