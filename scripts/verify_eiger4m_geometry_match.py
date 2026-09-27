@@ -27,12 +27,12 @@ import numpy as np
 from reborn import detector
 from reborn.external.crystfel import geometry_file_to_pad_geometry_list
 
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from src.preprocessing.geometry import EIGER4M_EFFECTIVE_DISTANCE_M
+
 _EIGER4M_GEOM = (
     Path(__file__).parent.parent / "src" / "preprocessing" / "data" / "eiger4m.geom"
 )
-
-
-EIGER4M_EFFECTIVE_DISTANCE_M = 0.1139775  # clen(0.300) + coffset(-0.1860225)
 
 
 def main() -> None:

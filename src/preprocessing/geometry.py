@@ -11,6 +11,11 @@ from reborn.external.crystfel import geometry_file_to_pad_geometry_list
 
 _EIGER_RESONET_GEOM = Path(__file__).parent / "data" / "eiger_resonet.geom"
 
+# clen(0.300) + coffset(-0.1860225), summed per CrystFEL convention — see
+# eiger4m_crystfel_pad_geometry_list() docstring. Shared with
+# scripts/verify_eiger4m_geometry_match.py so the two never drift apart.
+EIGER4M_EFFECTIVE_DISTANCE_M = 0.1139775
+
 _GEOM_CACHE: dict[str, detector.PADGeometryList] = {}
 _ASSEMBLER_CACHE: dict[str, detector.PADAssembler] = {}
 
@@ -47,7 +52,9 @@ def eiger4m_crystfel_pad_geometry_list(
     """
     return detector.eiger4m_64_pad_geometry_list(
         detector_distance=(
-            detector_distance if detector_distance is not None else 0.1139775
+            detector_distance
+            if detector_distance is not None
+            else EIGER4M_EFFECTIVE_DISTANCE_M
         )
     )
 
@@ -175,7 +182,8 @@ def load_pad_geometry(
         detector_type: One of "AGIPD", "JUNGFRAU_4M", "ePix10k", "Eiger4M".
         detector_distance: Sample-to-detector distance in metres. When None
             (default) each detector loader uses its own natural default
-            (0.103 m for JUNGFRAU_4M, 0.1 m for the others).
+            (0.103 m for JUNGFRAU_4M, 0.1139775 m for Eiger4M, 0.1 m for
+            AGIPD and ePix10k).
 
     Raises:
         ValueError: If detector_type is not one of the four supported values.
