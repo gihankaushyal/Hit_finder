@@ -99,6 +99,13 @@ def _geometry_digest() -> dict[str, str]:
     Content hashing rather than mtime: staging and rsync perturb mtimes without
     changing the geometry, and a false-positive stale error on a 469 GB cache is
     expensive.
+
+    Only hashes files under GEOMETRY_DIR. Detectors whose geometry now comes
+    from reborn's bundled loaders (e.g. Eiger4M's eiger4m_64_pad_geometry_list(),
+    Jungfrau's jungfrau_8_pad_geometry_list()) are invisible to this digest —
+    an update to reborn's bundled geometry data will not invalidate an
+    existing cache. Bump PIPELINE_VERSION by hand if a reborn geometry update
+    ever needs to force a rebuild.
     """
     digest: dict[str, str] = {}
     if not GEOMETRY_DIR.is_dir():

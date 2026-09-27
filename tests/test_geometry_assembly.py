@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 
-from src.preprocessing.geometry import _EIGER4M_GEOM, get_geometry
+from src.preprocessing.geometry import get_geometry
 
 # ---------------------------------------------------------------------------
 # read_detector_description
@@ -56,11 +56,6 @@ class TestGetGeometry:
     def test_raises_for_unknown(self):
         with pytest.raises(ValueError, match="Unknown detector"):
             get_geometry("MYSTERY DETECTOR")
-
-    def test_eiger4m_geom_file_exists(self):
-        # AGIPD and ePix10k use Reborn standard loaders (no file needed).
-        # Only Eiger4M requires a CrystFEL .geom file.
-        assert _EIGER4M_GEOM.exists(), f"Missing Eiger4M geom file: {_EIGER4M_GEOM}"
 
     @pytest.mark.parametrize(
         "desc", ["AGIPD 1M", "ePix10k 2.2M", "EIGER 4M", "Jungfrau 4M"]
