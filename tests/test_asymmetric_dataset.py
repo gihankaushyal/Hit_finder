@@ -168,6 +168,48 @@ def test_len(synthetic_cxi: Path) -> None:
     assert len(ds) == N_FRAMES
 
 
+def test_set_epoch_changes_output(synthetic_cxi: Path) -> None:
+    """Different epochs draw different crops/labels/augmentations for the
+    same frame index — this is the epoch-asymmetry bug fix under test."""
+    peaks = np.array([[256.0, 256.0]], dtype=np.float32)
+    hf = MockHitfinder(peaks=peaks)
+    ds = AsymmetricCXIDataset(
+        session_ids=["s0"],
+        session_map={"s0": synthetic_cxi},
+        hitfinder=hf,
+        label_key=LABEL_KEY,
+    )
+
+    ds.set_epoch(0)
+    tensor_e0, label_e0 = ds[0]
+
+    ds.set_epoch(1)
+    tensor_e1, label_e1 = ds[0]
+
+    differs = (not torch.equal(tensor_e0, tensor_e1)) or (label_e0 != label_e1)
+    assert differs, "epoch 0 and epoch 1 produced identical output for idx=0"
+
+
+def test_set_epoch_is_deterministic_within_epoch(synthetic_cxi: Path) -> None:
+    """Two draws of the same index under the same epoch are bit-identical."""
+    peaks = np.array([[256.0, 256.0]], dtype=np.float32)
+    hf = MockHitfinder(peaks=peaks)
+    ds = AsymmetricCXIDataset(
+        session_ids=["s0"],
+        session_map={"s0": synthetic_cxi},
+        hitfinder=hf,
+        label_key=LABEL_KEY,
+    )
+
+    ds.set_epoch(3)
+    tensor_a, label_a = ds[0]
+    ds.set_epoch(3)
+    tensor_b, label_b = ds[0]
+
+    assert torch.equal(tensor_a, tensor_b)
+    assert label_a == label_b
+
+
 def test_hit_path_returns_crop_shape_and_label_one(synthetic_cxi: Path) -> None:
     """Metadata-hit frames with a peak found return a valid (1,224,224) crop.
 

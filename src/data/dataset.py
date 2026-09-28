@@ -442,6 +442,7 @@ class AsymmetricCXIDataset(Dataset):
         self._hard_neg_max_attempts = hard_neg_max_attempts
         self._hard_neg_margin = 50
         self._last_geom_path_holder: list = [None]
+        self._epoch: int = 0
 
         # Resolve session_map to Path objects for requested session_ids only.
         cxi_paths: list[Path] = []
@@ -490,6 +491,16 @@ class AsymmetricCXIDataset(Dataset):
     def __len__(self) -> int:
         return len(self._index)
 
+    def set_epoch(self, epoch: int) -> None:
+        """Advance the epoch counter so each epoch draws different crops.
+
+        Call this at the start of every training epoch (before iterating the
+        DataLoader) so that per-frame RNG seeds vary across epochs and the
+        model sees different crops, coin-toss outcomes, and augmentations
+        each pass.
+        """
+        self._epoch = epoch
+
     def __getitem__(self, idx: int) -> tuple[torch.Tensor, int] | None:
         path, frame_idx = self._index[idx]
         desc = self._path_to_desc.get(path)
@@ -528,7 +539,9 @@ class AsymmetricCXIDataset(Dataset):
         )
 
         ph, pw = padded.shape[:2]
-        rng = np.random.default_rng(self._seed + idx)
+        rng = np.random.default_rng(
+            self._seed * 1_000_003 + self._epoch * len(self._index) + idx
+        )
 
         _CROP = 224
 
