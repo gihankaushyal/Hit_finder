@@ -7,10 +7,10 @@ from src.preprocessing.geometry import (
     DETECTOR_LOADERS,
     EIGER4M_EFFECTIVE_DISTANCE_M,
     assemble_image,
-    eiger4m_pad_geometry_list,
+    eiger4m_64_pad_geometry_list,
     eiger_resonet_pad_geometry_list,
     extract_panels_from_canvas,
-    jungfrau4m_pad_geometry_list,
+    jungfrau_8_pad_geometry_list,
     load_pad_geometry,
 )
 
@@ -58,23 +58,23 @@ def test_all_detectors_covered():
 
 
 # ---------------------------------------------------------------------------
-# jungfrau4m_pad_geometry_list
+# jungfrau_8_pad_geometry_list
 # ---------------------------------------------------------------------------
 
 
 def test_jungfrau4m_geometry_has_8_panels():
-    pads = jungfrau4m_pad_geometry_list()
+    pads = jungfrau_8_pad_geometry_list()
     assert len(pads) == 8
 
 
 def test_jungfrau4m_geometry_pixel_count():
-    pads = jungfrau4m_pad_geometry_list()
+    pads = jungfrau_8_pad_geometry_list()
     assert pads.n_pixels == 8 * 514 * 1030
 
 
 def test_jungfrau4m_geometry_default_distance_is_103mm():
     """Default distance must be ~103 mm — matches the source .geom file."""
-    pads = jungfrau4m_pad_geometry_list()
+    pads = jungfrau_8_pad_geometry_list()
     dist = pads.average_detector_distance(beam_vec=[0, 0, 1])
     assert abs(dist - 0.103) < 1e-3
 
@@ -87,25 +87,25 @@ def test_jungfrau4m_load_pad_geometry_default_distance_is_103mm():
 
 
 def test_jungfrau4m_geometry_defines_slicing():
-    pads = jungfrau4m_pad_geometry_list()
+    pads = jungfrau_8_pad_geometry_list()
     assert pads.defines_slicing()
 
 
 def test_jungfrau4m_geometry_explicit_distance_override():
     """Passing detector_distance explicitly must override the 103mm default."""
-    pads = jungfrau4m_pad_geometry_list(detector_distance=0.2)
+    pads = jungfrau_8_pad_geometry_list(detector_distance=0.2)
     dist = pads.average_detector_distance(beam_vec=[0, 0, 1])
     assert abs(dist - 0.2) < 1e-3
 
 
 # ---------------------------------------------------------------------------
-# eiger4m_pad_geometry_list
+# eiger4m_64_pad_geometry_list
 # ---------------------------------------------------------------------------
 
 
 def test_eiger4m_geometry_default_distance_is_effective_value():
     """Default distance must be ~113.9775 mm — clen(0.300) + coffset(-0.1860225)."""
-    pads = eiger4m_pad_geometry_list()
+    pads = eiger4m_64_pad_geometry_list()
     dist = pads.average_detector_distance(beam_vec=[0, 0, 1])
     assert abs(dist - EIGER4M_EFFECTIVE_DISTANCE_M) < 1e-3
 
@@ -119,7 +119,7 @@ def test_eiger4m_load_pad_geometry_default_distance_is_effective_value():
 
 def test_eiger4m_geometry_explicit_distance_override():
     """Passing detector_distance explicitly must override the effective default."""
-    pads = eiger4m_pad_geometry_list(detector_distance=0.2)
+    pads = eiger4m_64_pad_geometry_list(detector_distance=0.2)
     dist = pads.average_detector_distance(beam_vec=[0, 0, 1])
     assert abs(dist - 0.2) < 1e-3
 
