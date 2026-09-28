@@ -412,7 +412,10 @@ class AsymmetricCXIDataset(Dataset):
         session_map: Maps session_id → Path to CXI file.
         hitfinder: Hitfinder Protocol instance (find_peaks method).
         label_key: HDF5 key for per-frame labels (used only to build the flat index).
-        seed: Base RNG seed; per-sample seed is seed+idx for reproducibility.
+        seed: Base RNG seed; per-sample seed is
+            seed * 1_000_003 + epoch * len(index) + idx, where epoch is
+            advanced via set_epoch() — varies crops across epochs while
+            staying reproducible within a given epoch.
         frame_cache: Optional FrameCache serving the read/assemble/hitfinder/GCN
             prefix from disk. A miss falls back to live computation.
         hit_frac: Probability of choosing Path A (peak-centred, label=1) over
@@ -539,6 +542,9 @@ class AsymmetricCXIDataset(Dataset):
         )
 
         ph, pw = padded.shape[:2]
+        # 1_000_003 is prime, chosen so seed/epoch/idx components don't
+        # alias into each other's ranges; mirrors SSLPretrainCXIDataset's
+        # identical formula for cross-track consistency.
         rng = np.random.default_rng(
             self._seed * 1_000_003 + self._epoch * len(self._index) + idx
         )
