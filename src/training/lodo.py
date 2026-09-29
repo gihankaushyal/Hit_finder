@@ -129,6 +129,7 @@ def _train_fold(
     label_key = cfg["lodo"].get("label_key", "entry_1/labels/hit")
     hit_frac = cfg.get("asymmetric", {}).get("hit_frac", 0.5)
     hard_neg_max_attempts = cfg.get("asymmetric", {}).get("hard_neg_max_attempts", 50)
+    crops_per_frame = cfg.get("asymmetric", {}).get("crops_per_frame", 1)
 
     train_ids = [sid for sid, s in split_artifact["splits"].items() if s == SPLIT_TRAIN]
 
@@ -143,6 +144,7 @@ def _train_fold(
         frame_cache=frame_cache,
         hit_frac=hit_frac,
         hard_neg_max_attempts=hard_neg_max_attempts,
+        crops_per_frame=crops_per_frame,
     )
 
     bench_cfg = cfg.get("benchmark", {})

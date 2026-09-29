@@ -72,6 +72,7 @@ def asymmetric_loader(
     frame_cache: "FrameCache | None" = None,
     hit_frac: float = 0.5,
     hard_neg_max_attempts: int = 50,
+    crops_per_frame: int = 1,
 ) -> DataLoader:
     """DataLoader for asymmetric hitfinder-guided training.
 
@@ -95,6 +96,9 @@ def asymmetric_loader(
             centroids found. Default 0.5.
         hard_neg_max_attempts: Max random-position attempts when searching for
             a hard-negative crop before falling back to Path A. Default 50.
+        crops_per_frame: Number of independently-augmented crops drawn per
+            frame per epoch (dataset-length multiplier). Default 1 preserves
+            current behavior.
 
     Returns:
         DataLoader yielding (tensor(B,1,224,224), label(B,)) pairs.
@@ -120,6 +124,7 @@ def asymmetric_loader(
         frame_cache=frame_cache,
         hit_frac=hit_frac,
         hard_neg_max_attempts=hard_neg_max_attempts,
+        crops_per_frame=crops_per_frame,
     )
     return DataLoader(
         dataset,
