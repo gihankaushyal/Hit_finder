@@ -12,7 +12,7 @@ from reborn.external.crystfel import geometry_file_to_pad_geometry_list
 _EIGER_RESONET_GEOM = Path(__file__).parent / "data" / "eiger_resonet.geom"
 
 # clen(0.300) + coffset(-0.1860225), summed per CrystFEL convention — see
-# eiger4m_crystfel_pad_geometry_list() docstring. Shared with
+# eiger4m_64_pad_geometry_list() docstring. Shared with
 # scripts/verify_eiger4m_geometry_match.py so the two never drift apart.
 EIGER4M_EFFECTIVE_DISTANCE_M = 0.1139775
 
@@ -20,7 +20,7 @@ _GEOM_CACHE: dict[str, detector.PADGeometryList] = {}
 _ASSEMBLER_CACHE: dict[str, detector.PADAssembler] = {}
 
 
-def jungfrau4m_crystfel_pad_geometry_list(
+def jungfrau_8_pad_geometry_list(
     detector_distance: float = 0.103,
 ) -> detector.PADGeometryList:
     """Load JUNGFRAU 4M geometry — 8 panels, 514x1030 px, 103mm distance.
@@ -35,7 +35,7 @@ def jungfrau4m_crystfel_pad_geometry_list(
     return detector.jungfrau_8_pad_geometry_list(detector_distance=detector_distance)
 
 
-def eiger4m_crystfel_pad_geometry_list(
+def eiger4m_64_pad_geometry_list(
     detector_distance: float | None = None,
 ) -> detector.PADGeometryList:
     """Load Eiger4M geometry — 64 panels, 176x192 px, effective z=113.9775mm.
@@ -83,8 +83,8 @@ _KNOWN_DESCS = {"AGIPD 1M", "ePix10k 2.2M", "EIGER 4M", "Jungfrau 4M"}
 _DESC_LOADERS: dict[str, Callable[[], detector.PADGeometryList]] = {
     "AGIPD 1M": detector.agipd_pad_geometry_list,
     "ePix10k 2.2M": detector.epix10k_pad_geometry_list,
-    "EIGER 4M": eiger4m_crystfel_pad_geometry_list,
-    "Jungfrau 4M": jungfrau4m_crystfel_pad_geometry_list,
+    "EIGER 4M": eiger4m_64_pad_geometry_list,
+    "Jungfrau 4M": jungfrau_8_pad_geometry_list,
 }
 
 
@@ -92,12 +92,11 @@ def get_geometry(detector_desc: str) -> detector.PADGeometryList:
     """Load and cache PADGeometryList for the given CXI detector description.
 
     AGIPD 1M and ePix10k 2.2M use Reborn's built-in standard geometry loaders.
-    EIGER 4M uses Reborn's bundled eiger4m_64_pad_geometry_list() (via
-    eiger4m_crystfel_pad_geometry_list()).
-    Jungfrau 4M uses Reborn's bundled jungfrau_8_pad_geometry_list() (via
-    jungfrau4m_crystfel_pad_geometry_list()) — the CXI frame arrives as a
-    pre-assembled canvas with gap pixels, so its geometry (like Eiger4M's)
-    carries parent_data_slice for extract_panels_from_canvas().
+    EIGER 4M and Jungfrau 4M use this module's eiger4m_64_pad_geometry_list()
+    and jungfrau_8_pad_geometry_list() wrappers, which delegate directly to
+    Reborn's own bundled functions of the same name — the CXI frame arrives
+    as a pre-assembled canvas with gap pixels, so the geometry carries
+    parent_data_slice for extract_panels_from_canvas().
 
     Args:
         detector_desc: Value of entry_1/instrument_1/detector_1/description,
@@ -134,9 +133,9 @@ def get_assembler(detector_desc: str) -> detector.PADAssembler:
 
 DETECTOR_LOADERS = {
     "AGIPD": detector.agipd_pad_geometry_list,
-    "JUNGFRAU_4M": jungfrau4m_crystfel_pad_geometry_list,
+    "JUNGFRAU_4M": jungfrau_8_pad_geometry_list,
     "ePix10k": detector.epix10k_pad_geometry_list,
-    "Eiger4M": eiger4m_crystfel_pad_geometry_list,
+    "Eiger4M": eiger4m_64_pad_geometry_list,
     "EigerRESoNeT": eiger_resonet_pad_geometry_list,
 }
 
