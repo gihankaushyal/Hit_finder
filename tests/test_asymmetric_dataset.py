@@ -531,6 +531,19 @@ def test_crops_per_frame_replicas_differ(synthetic_cxi: Path) -> None:
     assert not torch.equal(tensor_0, tensor_1)
 
 
+def test_crops_per_frame_zero_raises(synthetic_cxi: Path) -> None:
+    """crops_per_frame < 1 must fail fast at construction, not lazily at len()."""
+    hf = MockHitfinder(peaks=np.array([[256.0, 256.0]], dtype=np.float32))
+    with pytest.raises(ValueError, match="crops_per_frame"):
+        AsymmetricCXIDataset(
+            session_ids=["s0"],
+            session_map={"s0": synthetic_cxi},
+            hitfinder=hf,
+            label_key=LABEL_KEY,
+            crops_per_frame=0,
+        )
+
+
 def test_crop_is_normalised(synthetic_cxi: Path) -> None:
     """Returned tensor values are not in raw detector range — GCN+LCN has been applied."""
     peaks = np.array([[256.0, 256.0]], dtype=np.float32)

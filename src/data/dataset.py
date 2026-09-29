@@ -452,6 +452,8 @@ class AsymmetricCXIDataset(Dataset):
         self._hard_neg_max_attempts = hard_neg_max_attempts
         self._hard_neg_margin = 50
         self._crops_per_frame = crops_per_frame
+        if crops_per_frame < 1:
+            raise ValueError(f"crops_per_frame must be >= 1, got {crops_per_frame}")
         self._last_geom_path_holder: list = [None]
         self._epoch: int = 0
 
