@@ -243,6 +243,7 @@ def _train_fold(
                 )
 
         for epoch in range(start_epoch, epochs + 1):
+            train_dl.dataset.set_epoch(epoch)
             train_m = train_one_epoch(model, train_dl, optimizer, criterion, device)
             val_m = run_patch_agg(
                 model,
