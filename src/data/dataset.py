@@ -413,7 +413,7 @@ class AsymmetricCXIDataset(Dataset):
         hitfinder: Hitfinder Protocol instance (find_peaks method).
         label_key: HDF5 key for per-frame labels (used only to build the flat index).
         seed: Base RNG seed; per-sample seed is
-            seed * 1_000_003 + epoch * len(index) + idx, where epoch is
+            seed * 1_000_003 + epoch * len(self) + idx, where epoch is
             advanced via set_epoch() — varies crops across epochs while
             staying reproducible within a given epoch.
         frame_cache: Optional FrameCache serving the read/assemble/hitfinder/GCN
@@ -424,6 +424,12 @@ class AsymmetricCXIDataset(Dataset):
         hard_neg_max_attempts: Max random-position attempts when searching for
             a hard-negative crop with margin clearance before falling back to
             Path A (or returning None if no centroids exist). Default 50.
+        crops_per_frame: Number of independently-augmented crops drawn per
+            underlying frame per epoch. Multiplies __len__ by this factor;
+            every replica of the same frame re-uses the identical cached
+            read/assemble/hitfinder/GCN prefix, varying only the crop
+            position, Path A/B coin toss, rot90/flip, and cutout via the
+            per-idx RNG seed. Default 1 preserves prior behavior exactly.
     """
 
     def __init__(
@@ -436,6 +442,7 @@ class AsymmetricCXIDataset(Dataset):
         frame_cache: FrameCache | None = None,
         hit_frac: float = 0.5,
         hard_neg_max_attempts: int = 50,
+        crops_per_frame: int = 1,
     ) -> None:
         self._hitfinder = hitfinder
         self._label_key = label_key
@@ -444,6 +451,7 @@ class AsymmetricCXIDataset(Dataset):
         self._hit_frac = hit_frac
         self._hard_neg_max_attempts = hard_neg_max_attempts
         self._hard_neg_margin = 50
+        self._crops_per_frame = crops_per_frame
         self._last_geom_path_holder: list = [None]
         self._epoch: int = 0
 
@@ -492,7 +500,7 @@ class AsymmetricCXIDataset(Dataset):
                 self._labels.append(lbl)
 
     def __len__(self) -> int:
-        return len(self._index)
+        return len(self._index) * self._crops_per_frame
 
     def set_epoch(self, epoch: int) -> None:
         """Advance the epoch counter so each epoch draws different crops.
@@ -505,14 +513,15 @@ class AsymmetricCXIDataset(Dataset):
         self._epoch = epoch
 
     def __getitem__(self, idx: int) -> tuple[torch.Tensor, int] | None:
-        path, frame_idx = self._index[idx]
+        flat_idx = idx // self._crops_per_frame
+        path, frame_idx = self._index[flat_idx]
         desc = self._path_to_desc.get(path)
         # Metadata gating: only run the hitfinder for frames the embedded
         # ground-truth label marks as a hit. Non-hit frames skip PF8 entirely
         # — _load_gcn_frame's `if hitfinder is not None` guard already
         # short-circuits every hitfinder-related step and returns empty
         # centroids, so the rest of this method is unchanged for that case.
-        label = self._labels[idx]
+        label = self._labels[flat_idx]
         hitfinder = self._hitfinder if label == 1 else None
         assembled, valid_mask, centroids = _load_gcn_frame(
             path,
@@ -544,9 +553,12 @@ class AsymmetricCXIDataset(Dataset):
         ph, pw = padded.shape[:2]
         # 1_000_003 is prime, chosen so seed/epoch/idx components don't
         # alias into each other's ranges; mirrors SSLPretrainCXIDataset's
-        # identical formula for cross-track consistency.
+        # identical formula for cross-track consistency. len(self) (not
+        # len(self._index)) so every (epoch, virtual_idx) pair stays
+        # seed-unique now that idx ranges over len(self._index) *
+        # crops_per_frame instead of just len(self._index).
         rng = np.random.default_rng(
-            self._seed * 1_000_003 + self._epoch * len(self._index) + idx
+            self._seed * 1_000_003 + self._epoch * len(self) + idx
         )
 
         _CROP = 224

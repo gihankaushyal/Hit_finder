@@ -481,6 +481,56 @@ def test_hard_neg_max_attempts_zero_always_falls_back_to_path_a(
     )
 
 
+def test_crops_per_frame_default_is_backward_compatible(synthetic_cxi: Path) -> None:
+    """Omitting crops_per_frame must preserve today's exact dataset length."""
+    hf = MockHitfinder(peaks=np.array([[256.0, 256.0]], dtype=np.float32))
+    ds = AsymmetricCXIDataset(
+        session_ids=["s0"],
+        session_map={"s0": synthetic_cxi},
+        hitfinder=hf,
+        label_key=LABEL_KEY,
+    )
+    assert len(ds) == N_FRAMES
+
+
+def test_crops_per_frame_multiplies_len(synthetic_cxi: Path) -> None:
+    """crops_per_frame=3 must multiply the dataset length by 3."""
+    hf = MockHitfinder(peaks=np.array([[256.0, 256.0]], dtype=np.float32))
+    ds = AsymmetricCXIDataset(
+        session_ids=["s0"],
+        session_map={"s0": synthetic_cxi},
+        hitfinder=hf,
+        label_key=LABEL_KEY,
+        crops_per_frame=3,
+    )
+    assert len(ds) == 3 * N_FRAMES
+
+
+def test_crops_per_frame_replicas_differ(synthetic_cxi: Path) -> None:
+    """Two replicas of the same underlying frame must draw different crops.
+
+    With crops_per_frame=2, virtual indices 0 and 1 both map to frame_idx=0
+    (the first metadata-hit frame in the fixture) but must receive distinct
+    RNG seeds, so the returned tensors differ — mirrors the existing
+    test_set_epoch_changes_output pattern but compares replicas within the
+    same epoch instead of across epochs.
+    """
+    hf = MockHitfinder(peaks=np.array([[256.0, 256.0]], dtype=np.float32))
+    ds = AsymmetricCXIDataset(
+        session_ids=["s0"],
+        session_map={"s0": synthetic_cxi},
+        hitfinder=hf,
+        label_key=LABEL_KEY,
+        crops_per_frame=2,
+    )
+    result_0 = ds[0]
+    result_1 = ds[1]
+    assert result_0 is not None and result_1 is not None
+    tensor_0, _ = result_0
+    tensor_1, _ = result_1
+    assert not torch.equal(tensor_0, tensor_1)
+
+
 def test_crop_is_normalised(synthetic_cxi: Path) -> None:
     """Returned tensor values are not in raw detector range — GCN+LCN has been applied."""
     peaks = np.array([[256.0, 256.0]], dtype=np.float32)
