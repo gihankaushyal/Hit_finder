@@ -35,6 +35,13 @@ hitfinder:
   gpu_script_path: ""
   gpu_device: cuda
 
+# Track 1 (asymmetric pipeline) knobs. hit_frac and hard_neg_max_attempts are
+# NOT listed here — they currently rely on lodo.py's inline .get(..., default)
+# fallback (0.5 / 50) with no corresponding YAML key; adding them is out of
+# scope for this change.
+asymmetric:
+  crops_per_frame: 1  # crops drawn per cached frame per epoch (dataset-length multiplier)
+
 benchmark:
   split_seed: 42
   split_ratios: [0.80, 0.10, 0.10]
