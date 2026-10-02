@@ -28,7 +28,10 @@ def train_one_epoch(
 ) -> dict[str, float]:
     model.train()
     total_loss, n, hit_total = 0.0, 0, 0
-    for x, y in loader:
+    for batch in loader:
+        if batch is None:
+            continue
+        x, y = batch
         x, y = x.float().to(device), y.long().to(device)
         optimizer.zero_grad()
         loss = criterion(model(x), y)

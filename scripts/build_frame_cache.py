@@ -161,19 +161,37 @@ def main() -> None:
     # the current PIPELINE_VERSION. Require an explicit --overwrite instead of
     # rebuilding a possibly-469GB cache (or lying about its freshness) by default.
     manifest_path = cache_root / MANIFEST_NAME
-    if manifest_path.is_file() and not args.overwrite:
+    if manifest_path.is_file():
         on_disk_version = (
             json.loads(manifest_path.read_text())
             .get("params", {})
             .get("pipeline_version")
         )
-        if on_disk_version != PIPELINE_VERSION:
+        version_stale = on_disk_version != PIPELINE_VERSION
+        if version_stale and not args.overwrite:
             print(
                 f"[build] ABORT: {cache_root} manifest has pipeline_version="
                 f"{on_disk_version!r}, code expects {PIPELINE_VERSION!r}. "
                 "Existing entries were built under different assembler-selection "
                 "logic and will NOT be refreshed by a plain re-run. Re-run with "
                 "--overwrite to rebuild every entry under the new pipeline."
+            )
+            sys.exit(1)
+        if version_stale and args.detectors:
+            # write_manifest() below stamps pipeline_version for the WHOLE
+            # cache_root, not just the rebuilt subset. A partial
+            # `--overwrite --detectors X` run would leave every
+            # non-rebuilt detector's entries on the OLD pipeline logic while
+            # the manifest falsely claims the entire root is current —
+            # exactly the staleness this check exists to prevent. Require a
+            # full rebuild (no --detectors) to bump the on-disk version.
+            print(
+                f"[build] ABORT: {cache_root} manifest has pipeline_version="
+                f"{on_disk_version!r}, code expects {PIPELINE_VERSION!r}, and "
+                "--detectors restricts this run to a subset. A partial "
+                "rebuild cannot safely bump the manifest's pipeline_version "
+                "for detectors it does not touch. Re-run with --overwrite "
+                "and no --detectors filter to rebuild the whole cache."
             )
             sys.exit(1)
 

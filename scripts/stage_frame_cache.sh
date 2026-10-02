@@ -107,7 +107,17 @@ stage_one_entry() {
     fi
 
     mkdir -p "$(dirname "${dst}")"
-    cp -r "${src}" "${dst}.tmp"
+    # Clear any stale .tmp first: a prior aborted run (failed cp, or a
+    # concurrent worker that lost the free-space race under `xargs -P`) can
+    # leave a partial copy here, and `cp -r` into an existing directory
+    # merges rather than overwrites — silently mixing old partial bytes with
+    # the new copy instead of producing a clean one.
+    rm -rf "${dst}.tmp"
+    if ! cp -r "${src}" "${dst}.tmp"; then
+        rm -rf "${dst}.tmp"
+        echo "[stage] cp failed for ${entry} (disk full mid-copy?)" >&2
+        return 1
+    fi
     mv "${dst}.tmp" "${dst}"
     echo "staged"
 }

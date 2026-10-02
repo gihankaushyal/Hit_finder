@@ -65,6 +65,11 @@ _HITFINDER_KEYS = (
     "pf8_min_res",
     "pf8_max_res",
     "pf8_use_saturated",
+    # Tracked so the GPU backend's user-provided peak-finding script is part
+    # of the staleness contract too — without these, pointing gpu_script_path
+    # at a different script silently reuses centroids computed by the old one.
+    "gpu_script_path",
+    "gpu_device",
 )
 
 
@@ -272,6 +277,21 @@ class FrameCache:
             return frame, self._mask(root, det), centroids
 
         if found_out_of_range:
+            # Distinct from a normal "not staged yet" miss below: every root
+            # that HAS this entry has an incomplete frames.npy. That means a
+            # previously-successful build is now corrupt/truncated (aborted
+            # write, disk-full, etc.), not an unstaged NVMe tier — callers
+            # silently fall back to live compute on CacheMissError, so warn
+            # here or this goes unnoticed.
+            import warnings
+
+            warnings.warn(
+                f"frame cache entry {det}/{stem} is truncated: frame "
+                f"{frame_idx} is out of range in every root containing this "
+                "entry. This indicates a corrupt/incomplete cache build, not "
+                "an unstaged tier — consider rebuilding this entry.",
+                stacklevel=2,
+            )
             raise CacheMissError(
                 f"{det}/{stem} frame {frame_idx} out of range in every root that "
                 "has this entry (all copies truncated/partial): "
