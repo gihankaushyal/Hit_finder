@@ -25,6 +25,7 @@ import hashlib
 import json
 import os
 import subprocess
+import warnings
 from collections.abc import Sequence
 from datetime import datetime, timezone
 from pathlib import Path
@@ -65,10 +66,10 @@ _HITFINDER_KEYS = (
     "pf8_min_res",
     "pf8_max_res",
     "pf8_use_saturated",
-    # Tracked so the GPU backend's user-provided peak-finding script is part
-    # of the staleness contract too — without these, pointing gpu_script_path
-    # at a different script silently reuses centroids computed by the old one.
-    "gpu_script_path",
+    # gpu_script_path is NOT listed here: its *contents*, not its path string,
+    # determine the centroids it produces. build_manifest() hashes the file
+    # instead (gpu_script_digest below), so in-place edits at the same path
+    # are caught too.
     "gpu_device",
 )
 
@@ -141,8 +142,17 @@ def build_manifest(cfg: dict) -> dict:
     created are provenance only — a new commit must not invalidate the cache.
     """
     hf = cfg.get("hitfinder", {})
+    gpu_script_path = hf.get("gpu_script_path")
+    gpu_script_digest = (
+        hashlib.sha256(Path(gpu_script_path).read_bytes()).hexdigest()
+        if gpu_script_path
+        else None
+    )
     params = {
-        "hitfinder": {k: hf.get(k) for k in _HITFINDER_KEYS},
+        "hitfinder": {
+            **{k: hf.get(k) for k in _HITFINDER_KEYS},
+            "gpu_script_digest": gpu_script_digest,
+        },
         "gcn_eps": GCN_EPSILON,
         "lcn_eps": LCN_EPSILON,
         "lcn_window": LCN_WINDOW_DEFAULT,
@@ -179,6 +189,24 @@ def _first_difference(want: dict, have: dict, prefix: str = "") -> str | None:
     return None
 
 
+def manifest_diff(cache_root: Path, cfg: dict) -> str | None:
+    """First differing param key between cache_root's on-disk manifest and cfg.
+
+    None when the manifest is missing (nothing to compare against) or every
+    tracked param matches. Covers the full params dict — geometry, GCN/LCN
+    constants, pipeline_version, and every hitfinder param including
+    gpu_script_digest — so a hitfinder config change (not just a
+    pipeline_version bump) is caught the same way. Shared by verify_manifest
+    (training-time hard stop) and scripts/build_frame_cache.py (build-time
+    abort on a would-be partial rebuild).
+    """
+    manifest_path = Path(cache_root) / MANIFEST_NAME
+    if not manifest_path.is_file():
+        return None
+    on_disk = json.loads(manifest_path.read_text()).get("params", {})
+    return _first_difference(build_manifest(cfg)["params"], on_disk)
+
+
 def verify_manifest(cache_root: Path, cfg: dict) -> None:
     """Raise CacheStaleError naming the first differing key.
 
@@ -191,8 +219,7 @@ def verify_manifest(cache_root: Path, cfg: dict) -> None:
             f"no manifest at {manifest_path}; build the cache with "
             "`python -m scripts.build_frame_cache` or pass --no-cache."
         )
-    on_disk = json.loads(manifest_path.read_text()).get("params", {})
-    diff = _first_difference(build_manifest(cfg)["params"], on_disk)
+    diff = manifest_diff(cache_root, cfg)
     if diff is not None:
         raise CacheStaleError(
             f"frame cache at {cache_root} is stale: {diff}. "
@@ -283,20 +310,15 @@ class FrameCache:
             # write, disk-full, etc.), not an unstaged NVMe tier — callers
             # silently fall back to live compute on CacheMissError, so warn
             # here or this goes unnoticed.
-            import warnings
-
-            warnings.warn(
-                f"frame cache entry {det}/{stem} is truncated: frame "
-                f"{frame_idx} is out of range in every root containing this "
-                "entry. This indicates a corrupt/incomplete cache build, not "
-                "an unstaged tier — consider rebuilding this entry.",
-                stacklevel=2,
-            )
-            raise CacheMissError(
-                f"{det}/{stem} frame {frame_idx} out of range in every root that "
-                "has this entry (all copies truncated/partial): "
+            msg = (
+                f"{det}/{stem} frame {frame_idx} out of range in every root "
+                "that has this entry (all copies truncated/partial) — this "
+                "indicates a corrupt/incomplete cache build, not an unstaged "
+                "tier; consider rebuilding this entry: "
                 + ", ".join(str(r) for r in self._roots)
             )
+            warnings.warn(msg, stacklevel=2)
+            raise CacheMissError(msg)
         raise CacheMissError(
             f"{det}/{stem} frame {frame_idx} not found in any of: "
             + ", ".join(str(r) for r in self._roots)

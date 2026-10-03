@@ -118,7 +118,11 @@ stage_one_entry() {
         echo "[stage] cp failed for ${entry} (disk full mid-copy?)" >&2
         return 1
     fi
-    mv "${dst}.tmp" "${dst}"
+    if ! mv "${dst}.tmp" "${dst}"; then
+        rm -rf "${dst}.tmp"
+        echo "[stage] mv failed for ${entry}" >&2
+        return 1
+    fi
     echo "staged"
 }
 export -f stage_one_entry
