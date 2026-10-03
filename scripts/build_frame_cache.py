@@ -17,7 +17,6 @@ by re-running the same command.
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import shutil
 import sys
@@ -34,10 +33,10 @@ from src.data.frame_cache import (  # noqa: E402
     CENTROIDS_NAME,
     FRAMES_NAME,
     MANIFEST_NAME,
-    PIPELINE_VERSION,
     VALID_MASK_NAME,
     centroid_key,
     entry_dir,
+    manifest_diff,
     write_manifest,
 )
 from src.preprocessing.io import count_frames, read_detector_description  # noqa: E402
@@ -153,29 +152,44 @@ def main() -> None:
     cache_root = Path(args.cache_root or cfg["cache"]["root"])
     cache_root.mkdir(parents=True, exist_ok=True)
 
-    # An existing manifest whose pipeline_version predates PIPELINE_VERSION means
-    # some entries under this root were built under old assembler-selection logic
-    # (e.g. Jungfrau's _to_2d -> PADAssembler switch). The per-entry skip below
-    # only checks file existence, not pipeline_version, so a plain re-run would
-    # leave those entries stale while write_manifest() at the end silently claims
-    # the current PIPELINE_VERSION. Require an explicit --overwrite instead of
-    # rebuilding a possibly-469GB cache (or lying about its freshness) by default.
+    # An existing manifest whose params differ from the current config — a
+    # pipeline_version bump (e.g. Jungfrau's _to_2d -> PADAssembler switch) OR
+    # a changed hitfinder param (pf8 threshold, backend, gpu_script_path,
+    # ...) — means some entries under this root were built under different
+    # logic. The per-entry skip below only checks file existence, not params,
+    # so a plain re-run would leave those entries stale while write_manifest()
+    # at the end silently claims the current params. Require an explicit
+    # --overwrite instead of rebuilding a possibly-469GB cache (or lying
+    # about its freshness) by default.
+    def _abort(reason: str) -> None:
+        print(f"[build] ABORT: {reason}")
+        sys.exit(1)
+
     manifest_path = cache_root / MANIFEST_NAME
-    if manifest_path.is_file() and not args.overwrite:
-        on_disk_version = (
-            json.loads(manifest_path.read_text())
-            .get("params", {})
-            .get("pipeline_version")
-        )
-        if on_disk_version != PIPELINE_VERSION:
-            print(
-                f"[build] ABORT: {cache_root} manifest has pipeline_version="
-                f"{on_disk_version!r}, code expects {PIPELINE_VERSION!r}. "
-                "Existing entries were built under different assembler-selection "
-                "logic and will NOT be refreshed by a plain re-run. Re-run with "
-                "--overwrite to rebuild every entry under the new pipeline."
+    if manifest_path.is_file():
+        diff = manifest_diff(cache_root, cfg)
+        stale = diff is not None
+        if stale and not args.overwrite:
+            _abort(
+                f"{cache_root} manifest is stale: {diff}. Existing entries "
+                "were built under different parameters and will NOT be "
+                "refreshed by a plain re-run. Re-run with --overwrite to "
+                "rebuild every entry under the current parameters."
             )
-            sys.exit(1)
+        if stale and args.detectors:
+            # write_manifest() below stamps params for the WHOLE cache_root,
+            # not just the rebuilt subset. A partial `--overwrite
+            # --detectors X` run would leave every non-rebuilt detector's
+            # entries on the OLD params while the manifest falsely claims
+            # the entire root is current. Require a full rebuild (no
+            # --detectors) to bump the on-disk params.
+            _abort(
+                f"{cache_root} manifest is stale: {diff}, and --detectors "
+                "restricts this run to a subset. A partial rebuild cannot "
+                "safely bump the manifest's params for detectors it does "
+                "not touch. Re-run with --overwrite and no --detectors "
+                "filter to rebuild the whole cache."
+            )
 
     pattern = cfg["lodo"].get("cxi_pattern", "compressed*.cxi")
     detector_dirs = cfg["lodo"]["detector_dirs"]
