@@ -425,11 +425,12 @@ class AsymmetricCXIDataset(Dataset):
             a hard-negative crop with margin clearance before falling back to
             Path A (or returning None if no centroids exist). Default 50.
         crops_per_frame: Number of independently-augmented crops drawn per
-            underlying frame per epoch. Multiplies __len__ by this factor;
-            every replica of the same frame re-uses the identical cached
-            read/assemble/hitfinder/GCN prefix, varying only the crop
-            position, Path A/B coin toss, rot90/flip, and cutout via the
-            per-idx RNG seed. Default 1 preserves prior behavior exactly.
+            underlying frame per epoch. __len__ is NOT multiplied by this —
+            it stays one item per frame. _load_gcn_frame (read/assemble/
+            hitfinder/GCN) runs ONCE per __getitem__ call regardless of
+            crops_per_frame; all crops for that frame are drawn from the
+            single assembled result, mirroring SSLPretrainCXIDataset. Default
+            1 preserves prior behavior exactly (one crop, scalar label).
     """
 
     def __init__(
@@ -502,7 +503,7 @@ class AsymmetricCXIDataset(Dataset):
                 self._labels.append(lbl)
 
     def __len__(self) -> int:
-        return len(self._index) * self._crops_per_frame
+        return len(self._index)
 
     def set_epoch(self, epoch: int) -> None:
         """Advance the epoch counter so each epoch draws different crops.
@@ -514,17 +515,100 @@ class AsymmetricCXIDataset(Dataset):
         """
         self._epoch = epoch
 
-    def __getitem__(self, idx: int) -> tuple[torch.Tensor, int] | None:
-        flat_idx = idx // self._crops_per_frame
-        path, frame_idx = self._index[flat_idx]
+    def _draw_one_crop(
+        self,
+        padded: np.ndarray,
+        centroids: np.ndarray,
+        rng: np.random.Generator,
+        ph: int,
+        pw: int,
+        crop_size: int,
+    ) -> tuple[torch.Tensor, int] | None:
+        """Draw, augment, and normalise a single crop from an already-padded frame.
+
+        Returns None when Path B (hard-negative) cannot find a clear position
+        within max_tries and centroids is empty (no Path A fallback exists for
+        a frame with no peaks) — the caller skips this crop, matching the
+        prior per-item None-sentinel contract.
+        """
+        if centroids.shape[0] > 0:
+            # Metadata HIT frame with centroids found: 50/50 coin toss between
+            # Path A (peak-centred, label=1) and Path B (hard-negative crop
+            # sampled from this same hit frame's background, label=0). Path B
+            # falls back to Path A if no 50px-clear position exists — the
+            # frame has known peaks, so a valid Path A crop always exists.
+            if rng.random() < self._hit_frac:
+                crop, derived_label = _path_a_crop(
+                    padded, centroids, rng, ph, pw, crop_size
+                )
+            else:
+                crop = _sample_clear_crop(
+                    padded,
+                    centroids,
+                    rng,
+                    ph,
+                    pw,
+                    crop_size,
+                    margin=self._hard_neg_margin,
+                    max_tries=self._hard_neg_max_attempts,
+                )
+                if crop is None:
+                    crop, derived_label = _path_a_crop(
+                        padded, centroids, rng, ph, pw, crop_size
+                    )
+                else:
+                    derived_label = 0
+        else:
+            # Path B: miss crop — random position with 50 px clearance from all peaks → label=0
+            # (centroids is empty here either because the frame is metadata
+            # NON-HIT and the hitfinder never ran, or the frame is metadata HIT
+            # but the hitfinder found nothing — both fall through identically.)
+            crop = _sample_clear_crop(
+                padded,
+                centroids,
+                rng,
+                ph,
+                pw,
+                crop_size,
+                margin=self._hard_neg_margin,
+                max_tries=self._hard_neg_max_attempts,
+            )
+            if crop is None:
+                return None
+            derived_label = 0
+
+        # --- Augmentation + normalisation: rot90 → flip → LCN → cutout ---
+        crop = random_rot90(crop, rng)
+        crop = random_flip(crop, rng)
+
+        crop_img = crop[:, :, 0]
+        crop_mask = crop[:, :, 1] > 0.5
+        crop_protect = crop[:, :, 2] > 0.5
+
+        # Masked LCN before cutout (GCN already applied to full frame above),
+        # so holes never enter the local statistics.
+        crop_img = lcn(crop_img, mask=crop_mask)
+
+        # Peak-aware cutout after LCN: holes are exact 0 in LCN space; positions
+        # avoid the (co-transformed) peak-protection channel so Bragg evidence
+        # is never erased.
+        crop_img = random_cutout(crop_img, rng, avoid=crop_protect)
+
+        tensor = torch.from_numpy(np.ascontiguousarray(crop_img)).unsqueeze(0).float()
+        return tensor, derived_label
+
+    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor] | None:
+        path, frame_idx = self._index[idx]
         desc = self._path_to_desc.get(path)
         # Metadata gating: only run the hitfinder for frames the embedded
         # ground-truth label marks as a hit. Non-hit frames skip PF8 entirely
         # — _load_gcn_frame's `if hitfinder is not None` guard already
         # short-circuits every hitfinder-related step and returns empty
         # centroids, so the rest of this method is unchanged for that case.
-        label = self._labels[flat_idx]
+        label = self._labels[idx]
         hitfinder = self._hitfinder if label == 1 else None
+        # Assembly + hitfinder + GCN run ONCE per frame regardless of
+        # crops_per_frame — the crops drawn below all reuse this same result.
         assembled, valid_mask, centroids = _load_gcn_frame(
             path,
             frame_idx,
@@ -555,82 +639,28 @@ class AsymmetricCXIDataset(Dataset):
         ph, pw = padded.shape[:2]
         # 1_000_003 is prime, chosen so seed/epoch/idx components don't
         # alias into each other's ranges; mirrors SSLPretrainCXIDataset's
-        # identical formula for cross-track consistency. len(self) (not
-        # len(self._index)) so every (epoch, virtual_idx) pair stays
-        # seed-unique now that idx ranges over len(self._index) *
-        # crops_per_frame instead of just len(self._index).
+        # identical formula. One generator instance advances across all
+        # crops_per_frame draws below (same pattern as SSLPretrainCXIDataset),
+        # so replicas of the same frame still get distinct crops/augmentations
+        # without needing a per-crop virtual index.
         rng = np.random.default_rng(
             self._seed * 1_000_003 + self._epoch * len(self) + idx
         )
 
         _CROP = 224
 
-        # --- Guided crop ---
-        if centroids.shape[0] > 0:
-            # Metadata HIT frame with centroids found: 50/50 coin toss between
-            # Path A (peak-centred, label=1) and Path B (hard-negative crop
-            # sampled from this same hit frame's background, label=0). Path B
-            # falls back to Path A if no 50px-clear position exists — the
-            # frame has known peaks, so a valid Path A crop always exists.
-            if rng.random() < self._hit_frac:
-                crop, derived_label = _path_a_crop(
-                    padded, centroids, rng, ph, pw, _CROP
-                )
-            else:
-                crop = _sample_clear_crop(
-                    padded,
-                    centroids,
-                    rng,
-                    ph,
-                    pw,
-                    _CROP,
-                    margin=self._hard_neg_margin,
-                    max_tries=self._hard_neg_max_attempts,
-                )
-                if crop is None:
-                    crop, derived_label = _path_a_crop(
-                        padded, centroids, rng, ph, pw, _CROP
-                    )
-                else:
-                    derived_label = 0
-        else:
-            # Path B: miss crop — random position with 50 px clearance from all peaks → label=0
-            # (centroids is empty here either because the frame is metadata
-            # NON-HIT and the hitfinder never ran, or the frame is metadata HIT
-            # but the hitfinder found nothing — both fall through identically.)
-            crop = _sample_clear_crop(
-                padded,
-                centroids,
-                rng,
-                ph,
-                pw,
-                _CROP,
-                margin=self._hard_neg_margin,
-                max_tries=self._hard_neg_max_attempts,
-            )
-            if crop is None:
-                return None
-            derived_label = 0
+        crop_tensors: list[torch.Tensor] = []
+        labels: list[int] = []
+        for _ in range(self._crops_per_frame):
+            result = self._draw_one_crop(padded, centroids, rng, ph, pw, _CROP)
+            if result is None:
+                continue
+            crop_tensors.append(result[0])
+            labels.append(result[1])
 
-        # --- Augmentation + normalisation: rot90 → flip → LCN → cutout ---
-        crop = random_rot90(crop, rng)
-        crop = random_flip(crop, rng)
-
-        crop_img = crop[:, :, 0]
-        crop_mask = crop[:, :, 1] > 0.5
-        crop_protect = crop[:, :, 2] > 0.5
-
-        # Masked LCN before cutout (GCN already applied to full frame above),
-        # so holes never enter the local statistics.
-        crop_img = lcn(crop_img, mask=crop_mask)
-
-        # Peak-aware cutout after LCN: holes are exact 0 in LCN space; positions
-        # avoid the (co-transformed) peak-protection channel so Bragg evidence
-        # is never erased.
-        crop_img = random_cutout(crop_img, rng, avoid=crop_protect)
-
-        tensor = torch.from_numpy(np.ascontiguousarray(crop_img)).unsqueeze(0).float()
-        return tensor, derived_label
+        if not crop_tensors:
+            return None
+        return torch.stack(crop_tensors), torch.tensor(labels, dtype=torch.long)
 
 
 # ---------------------------------------------------------------------------
@@ -749,7 +779,9 @@ class SSLPretrainCXIDataset(Dataset):
         """
         self._epoch = epoch
 
-    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def __getitem__(
+        self, idx: int
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor] | None:
         path, frame_idx = self._index[idx]
         # Fold epoch into seed so crop positions vary across epochs.
         rng = np.random.default_rng(
@@ -778,13 +810,10 @@ class SSLPretrainCXIDataset(Dataset):
                 f"SSLPretrainCXIDataset: skipping frame {frame_idx} of {path}: {exc}",
                 stacklevel=2,
             )
-            n_patches = (_SSL_CROP // _SSL_PATCH) ** 2
-            zeros_img = torch.zeros(self._crops_per_frame, 1, _SSL_CROP, _SSL_CROP)
-            zeros_peaks = torch.zeros(
-                self._crops_per_frame, n_patches, dtype=torch.bool
-            )
-            zeros_vmask = torch.zeros(self._crops_per_frame, 1, _SSL_CROP, _SSL_CROP)
-            return zeros_img, zeros_peaks, zeros_vmask
+            # None, not all-zero tensors: an all-zero crop/valid_mask is
+            # indistinguishable from a real (if degenerate) sample downstream
+            # — _ssl_flatten_collate filters None out instead.
+            return None
         fh, fw = gcn_frame.shape
 
         crop_tensors: list[torch.Tensor] = []

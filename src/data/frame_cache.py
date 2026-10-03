@@ -26,6 +26,7 @@ import json
 import os
 import subprocess
 import warnings
+from collections import OrderedDict
 from collections.abc import Sequence
 from datetime import datetime, timezone
 from pathlib import Path
@@ -45,7 +46,7 @@ MANIFEST_NAME = "cache_manifest.json"
 # change there (like Jungfrau's _to_2d -> PADAssembler switch) would
 # otherwise go undetected and old caches would keep serving frames built
 # under the old selection logic.
-PIPELINE_VERSION = 1
+PIPELINE_VERSION = 2
 FRAMES_NAME = "frames.npy"
 CENTROIDS_NAME = "centroids.npz"
 VALID_MASK_NAME = "valid_mask.npy"
@@ -227,20 +228,34 @@ def verify_manifest(cache_root: Path, cfg: dict) -> None:
         )
 
 
+#: Max distinct (root, det, stem) entries held open at once. Each entry owns a
+#: memmap and an open NpzFile (real file descriptor). A long LODO fold touches
+#: far more entries than this over its lifetime, so without a cap a single
+#: worker's open-FD count grows unbounded and can hit the OS ulimit.
+MAX_OPEN_CACHE_ENTRIES = 64
+
+
 class FrameCache:
     """Resolve cached frames against an ordered list of roots (NVMe, then NFS).
 
     Handles are opened lazily inside get() and never in __init__, because
     DataLoader workers fork after construction (CLAUDE.md rule #4). A pid guard
-    drops any handle inherited across a fork.
+    drops any handle inherited across a fork. Frame/centroid handles are kept
+    in bounded LRU dicts (see MAX_OPEN_CACHE_ENTRIES) and explicitly closed on
+    eviction so long runs don't exhaust file descriptors.
     """
 
-    def __init__(self, roots: Sequence[Path]) -> None:
+    def __init__(
+        self, roots: Sequence[Path], max_open_entries: int = MAX_OPEN_CACHE_ENTRIES
+    ) -> None:
         self._roots = [Path(r) for r in roots]
         self._pid = os.getpid()
-        self._frames: dict[tuple[str, str, str], np.ndarray] = {}
+        self._max_open_entries = max_open_entries
+        self._frames: OrderedDict[tuple[str, str, str], np.ndarray] = OrderedDict()
         self._masks: dict[tuple[str, str], np.ndarray] = {}
-        self._centroids: dict[tuple[str, str, str], np.lib.npyio.NpzFile] = {}
+        self._centroids: OrderedDict[tuple[str, str, str], np.lib.npyio.NpzFile] = (
+            OrderedDict()
+        )
 
     @property
     def roots(self) -> list[Path]:
@@ -248,10 +263,20 @@ class FrameCache:
 
     def _reset_if_forked(self) -> None:
         if os.getpid() != self._pid:
+            # Handles inherited across a fork are not safely shared (and the
+            # parent still owns/will close them) — drop references without
+            # closing here.
             self._frames.clear()
             self._masks.clear()
             self._centroids.clear()
             self._pid = os.getpid()
+
+    def _evict_lru(self) -> None:
+        while len(self._frames) > self._max_open_entries:
+            key, _ = self._frames.popitem(last=False)
+            npz = self._centroids.pop(key, None)
+            if npz is not None:
+                npz.close()
 
     def _mask(self, root: Path, det: str) -> np.ndarray:
         key = (str(root), det)
@@ -285,6 +310,9 @@ class FrameCache:
             if memmap is None:
                 memmap = np.load(frames_path, mmap_mode="r")
                 self._frames[key] = memmap
+                self._evict_lru()
+            else:
+                self._frames.move_to_end(key)
             if not 0 <= frame_idx < memmap.shape[0]:
                 # This root's copy is truncated/partial; a later root may have
                 # a complete copy of the same entry, so keep searching instead
@@ -296,6 +324,8 @@ class FrameCache:
             if npz is None:
                 npz = np.load(entry / CENTROIDS_NAME)
                 self._centroids[key] = npz
+            else:
+                self._centroids.move_to_end(key)
 
             # Slicing a memmap and casting produces a fresh writable array, so
             # downstream in-place ops (fill_gaps_after_gcn) cannot touch the file.

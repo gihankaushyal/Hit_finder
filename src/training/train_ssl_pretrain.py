@@ -102,7 +102,10 @@ def run_pretrain(
             g["lr"] = lr
         model.train()
         losses = []
-        for crops, peak_patches, valid_masks in dl:
+        for batch in dl:
+            if batch is None:
+                continue
+            crops, peak_patches, valid_masks = batch
             crops = crops.to(device)
             # Only transfer peak_patches when the masking mode actually uses them
             peak_patches_dev = (
