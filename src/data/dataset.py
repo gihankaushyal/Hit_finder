@@ -37,6 +37,24 @@ from src.preprocessing.pipeline import (
     get_valid_mask_for_frame,
 )
 
+# Bound on retry attempts in AsymmetricCXIDataset.__getitem__'s crop loop:
+# at most this many draws per requested crop before giving up and returning
+# None for the whole item (see _draw_one_crop's rare Path-B exhaustion case).
+CROP_RETRY_FACTOR = 4
+
+# 1_000_003 is prime, chosen so the seed/epoch/idx components of the formula
+# below don't alias into each other's ranges.
+_SEED_PRIME = 1_000_003
+
+
+def _epoch_seed(seed: int, epoch: int, idx: int, n: int) -> int:
+    """Per-sample RNG seed shared by AsymmetricCXIDataset and
+    SSLPretrainCXIDataset so every crops_per_frame draw inside one
+    __getitem__ call shares one advancing Generator, while different
+    (epoch, idx) pairs get different seeds.
+    """
+    return seed * _SEED_PRIME + epoch * n + idx
+
 
 class UnlabeledDataset(Dataset):
     """Dataset of assembled diffraction images with no labels.
@@ -637,28 +655,34 @@ class AsymmetricCXIDataset(Dataset):
         )
 
         ph, pw = padded.shape[:2]
-        # 1_000_003 is prime, chosen so seed/epoch/idx components don't
-        # alias into each other's ranges; mirrors SSLPretrainCXIDataset's
-        # identical formula. One generator instance advances across all
-        # crops_per_frame draws below (same pattern as SSLPretrainCXIDataset),
-        # so replicas of the same frame still get distinct crops/augmentations
-        # without needing a per-crop virtual index.
+        # One generator instance advances across all crops_per_frame draws
+        # below (same pattern as SSLPretrainCXIDataset), so replicas of the
+        # same frame still get distinct crops/augmentations without needing
+        # a per-crop virtual index.
         rng = np.random.default_rng(
-            self._seed * 1_000_003 + self._epoch * len(self) + idx
+            _epoch_seed(self._seed, self._epoch, idx, len(self))
         )
 
         _CROP = 224
 
+        # Each draw can independently fail (Path B rejection-sampling exhausts
+        # max_tries); retry failed draws rather than skipping them, so an item
+        # is always either exactly crops_per_frame crops or None — never a
+        # partial stack. none_collate_fn's torch.cat doesn't enforce equal
+        # dim-0 sizes, so a partial stack would silently shrink the batch.
         crop_tensors: list[torch.Tensor] = []
         labels: list[int] = []
-        for _ in range(self._crops_per_frame):
+        max_attempts = self._crops_per_frame * CROP_RETRY_FACTOR
+        for _ in range(max_attempts):
+            if len(crop_tensors) >= self._crops_per_frame:
+                break
             result = self._draw_one_crop(padded, centroids, rng, ph, pw, _CROP)
             if result is None:
                 continue
             crop_tensors.append(result[0])
             labels.append(result[1])
 
-        if not crop_tensors:
+        if len(crop_tensors) < self._crops_per_frame:
             return None
         return torch.stack(crop_tensors), torch.tensor(labels, dtype=torch.long)
 
@@ -785,7 +809,7 @@ class SSLPretrainCXIDataset(Dataset):
         path, frame_idx = self._index[idx]
         # Fold epoch into seed so crop positions vary across epochs.
         rng = np.random.default_rng(
-            self._seed * 1_000_003 + self._epoch * len(self._index) + idx
+            _epoch_seed(self._seed, self._epoch, idx, len(self._index))
         )
 
         if path not in self._path_to_desc:

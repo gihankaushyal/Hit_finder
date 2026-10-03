@@ -29,9 +29,17 @@ def _fake_assemble_only(frame, pads, detector_desc, assembler=None):
     return _real_assemble_only(frame, pads, detector_desc, assembler=assembler)
 
 
-@pytest.fixture
+@pytest.fixture(autouse=True)
 def fake_jungfrau_assembly_via_dataset(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Patch assemble_only as bound into src.data.dataset's namespace."""
+    """Patch assemble_only as bound into src.data.dataset's namespace.
+
+    autouse so every test file gets this for free — no file can forget the
+    opt-in (one did: tests/test_train_ssl.py, 2026-10). Safe to apply
+    globally: it only intercepts undersized synthetic Jungfrau frames and
+    delegates to the real assembler for real (2164, 2068) frames, and no
+    test exercises undersized Jungfrau frames through src.data.dataset on
+    purpose.
+    """
     import src.data.dataset as dataset_module
 
     monkeypatch.setattr(dataset_module, "assemble_only", _fake_assemble_only)

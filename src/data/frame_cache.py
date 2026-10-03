@@ -306,23 +306,37 @@ class FrameCache:
                 continue
 
             key = (str(root), det, stem)
-            memmap = self._frames.get(key)
-            if memmap is None:
-                memmap = np.load(frames_path, mmap_mode="r")
+            cached_memmap = self._frames.get(key)
+            memmap = (
+                cached_memmap
+                if cached_memmap is not None
+                else np.load(frames_path, mmap_mode="r")
+            )
+            if not 0 <= frame_idx < memmap.shape[0]:
+                # This root's copy is truncated/partial; a later root may have
+                # a complete copy of the same entry, so keep searching instead
+                # of failing on the first (possibly stale) match. Nothing was
+                # registered into self._frames/_centroids yet, so there is
+                # nothing to roll back.
+                found_out_of_range = True
+                continue
+
+            # Load centroids before registering the memmap into self._frames
+            # — if this raises, self._frames/_centroids are left untouched
+            # instead of holding a frames entry with no matching centroids.
+            cached_npz = self._centroids.get(key)
+            npz = (
+                cached_npz
+                if cached_npz is not None
+                else np.load(entry / CENTROIDS_NAME)
+            )
+
+            if cached_memmap is None:
                 self._frames[key] = memmap
                 self._evict_lru()
             else:
                 self._frames.move_to_end(key)
-            if not 0 <= frame_idx < memmap.shape[0]:
-                # This root's copy is truncated/partial; a later root may have
-                # a complete copy of the same entry, so keep searching instead
-                # of failing on the first (possibly stale) match.
-                found_out_of_range = True
-                continue
-
-            npz = self._centroids.get(key)
-            if npz is None:
-                npz = np.load(entry / CENTROIDS_NAME)
+            if cached_npz is None:
                 self._centroids[key] = npz
             else:
                 self._centroids.move_to_end(key)

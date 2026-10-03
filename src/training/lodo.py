@@ -158,7 +158,8 @@ def _train_fold(
         sid for sid, s in split_artifact["splits"].items() if s == SPLIT_CROSS_DETECTOR
     ]
 
-    n_train = len(train_dl.dataset)
+    n_train_frames = len(train_dl.dataset)
+    n_train = n_train_frames * crops_per_frame
     n_val = len(val_ids)
     n_indomain = len(in_domain_ids)
     n_cross = len(cross_ids)
@@ -166,7 +167,8 @@ def _train_fold(
     print(
         f"\n{'='*60}\n"
         f"Fold {fold_id}  |  held-out: {fold['test_detector']}\n"
-        f"  train={n_train} patches  val={n_val} sessions  in_domain_test={n_indomain} sessions  cross={n_cross} sessions\n"
+        f"  train={n_train} crops ({n_train_frames} frames x {crops_per_frame} crops/frame)  "
+        f"val={n_val} sessions  in_domain_test={n_indomain} sessions  cross={n_cross} sessions\n"
         f"{'='*60}"
     )
 

@@ -18,6 +18,22 @@ from src.data.frame_cache import FrameCache
 from src.hitfinders.base import Hitfinder
 
 
+def _flatten_collate(batch: list[tuple | None]) -> tuple | None:
+    """Drop None items (frames where every crop draw failed) and torch.cat
+    the rest field-by-field along dim 0.
+
+    Shared by none_collate_fn (2-tuple: crops, labels) and
+    _ssl_flatten_collate (3-tuple: crops, peak_patches, valid_masks). An
+    all-None batch returns None; the training loop must skip it with
+    ``if batch is None: continue``.
+    """
+    batch = [b for b in batch if b is not None]
+    if not batch:
+        return None
+    n_fields = len(batch[0])
+    return tuple(torch.cat([b[i] for b in batch], dim=0) for i in range(n_fields))
+
+
 def none_collate_fn(
     batch: list,
 ) -> tuple[torch.Tensor, torch.Tensor] | None:
@@ -33,13 +49,7 @@ def none_collate_fn(
     the training loop sees the same shape as before regardless of
     crops_per_frame (crops_per_frame=1 reduces to the original per-item shape).
     """
-    batch = [b for b in batch if b is not None]
-    if not batch:
-        return None
-    return (
-        torch.cat([b[0] for b in batch], dim=0),
-        torch.cat([b[1] for b in batch], dim=0),
-    )
+    return _flatten_collate(batch)
 
 
 def ssl_pretrain_loader(
@@ -165,14 +175,7 @@ def _ssl_flatten_collate(
     torch.cat across the batch dimension yields (B*N, 1, H, W) so the training
     loop sees the same shape as before regardless of crops_per_frame.
     """
-    batch = [b for b in batch if b is not None]
-    if not batch:
-        return None
-    return (
-        torch.cat([b[0] for b in batch], dim=0),
-        torch.cat([b[1] for b in batch], dim=0),
-        torch.cat([b[2] for b in batch], dim=0),
-    )
+    return _flatten_collate(batch)
 
 
 def ssl_crop_loader(

@@ -51,7 +51,13 @@ def main() -> None:
         shuffle=True,
         seed=cfg["seed"],
     )
-    crops, _, _ = next(iter(dl))
+    batch = next((b for b in dl if b is not None), None)
+    if batch is None:
+        raise RuntimeError(
+            "No valid batch found — every crop in the loader failed "
+            "min_valid_frac or load checks. Try a larger --n-samples."
+        )
+    crops, _, _ = batch
 
     with torch.no_grad():
         _, pred, mask = model(crops, mask_ratio=cfg["ssl"]["mask_ratio"])
