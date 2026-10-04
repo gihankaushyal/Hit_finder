@@ -111,8 +111,14 @@ class _ConstantModel(nn.Module):
         )
 
 
-def _make_cxi(tmp_path, n_frames=4, n_hits=2, shape=(500, 500)):
-    """Write a minimal CXI-like HDF5 file with data and labels."""
+def _make_cxi(tmp_path, n_frames=4, n_hits=2, shape=(500, 500), desc="Jungfrau 4M"):
+    """Write a minimal CXI-like HDF5 file with data and labels.
+
+    desc="Jungfrau 4M" by default: an arbitrary-shape synthetic frame is not a
+    real detector canvas for any of the 4 detector types, so Jungfrau's
+    _fake_jungfrau_assembly fixture (below) is required to keep this
+    shape-agnostic — real PADAssembler needs a full (2164, 2068) canvas.
+    """
     import h5py
 
     path = tmp_path / "test.cxi"
@@ -123,7 +129,17 @@ def _make_cxi(tmp_path, n_frames=4, n_hits=2, shape=(500, 500)):
             [1.0] * n_hits + [0.0] * (n_frames - n_hits), dtype=np.float32
         )
         f.create_dataset("entry_1/labels/hit", data=labels)
+        if desc is not None:
+            f.create_dataset(
+                "entry_1/instrument_1/detector_1/description",
+                data=desc.encode(),
+            )
     return path
+
+
+@pytest.fixture(autouse=True)
+def _fake_jungfrau_assembly(fake_jungfrau_assembly_via_pipeline: None) -> None:
+    pass
 
 
 class TestRunPatchAgg:
@@ -183,3 +199,81 @@ class TestRunPatchAgg:
             device="cpu",
         )
         assert 0.0 <= result["threshold"] <= 1.0
+
+
+class TestBenchmarkAssemblyErrorPropagation:
+    def test_geometry_error_propagates_not_swallowed(self, tmp_path, monkeypatch):
+        path = _make_cxi(tmp_path, n_frames=1, n_hits=0, desc="AGIPD 1M")
+
+        def _raise(*_args, **_kwargs):
+            raise ValueError("boom")
+
+        monkeypatch.setattr("src.preprocessing.geometry.get_geometry", _raise)
+
+        model = _ConstantModel()
+        with pytest.raises(ValueError, match="boom"):
+            run_patch_agg(
+                model,
+                session_map={"s0": path},
+                session_ids=["s0"],
+                label_key="entry_1/labels/hit",
+                patch_stride=224,
+                min_hit_patches=3,
+                device="cpu",
+            )
+
+
+def test_preprocess_eval_patches_from_gcn_matches_full_path() -> None:
+    """Splitting GCN out of preprocess_eval_patches changes nothing.
+
+    preprocess_eval_patches(x) must equal
+    preprocess_eval_patches_from_gcn(fill_gaps(gcn(x))).
+    """
+    import numpy as np
+
+    from src.preprocessing.normalize import gcn
+    from src.preprocessing.pipeline import (
+        fill_gaps_after_gcn,
+        preprocess_eval_patches,
+        preprocess_eval_patches_from_gcn,
+    )
+
+    rng = np.random.default_rng(0)
+    frame = rng.random((448, 448)).astype(np.float32)
+
+    want = preprocess_eval_patches(frame, patch_size=224, stride=224)
+
+    gcn_frame = gcn(frame.astype(np.float32))
+    gcn_frame = fill_gaps_after_gcn(gcn_frame, None, mask=None)
+    got = preprocess_eval_patches_from_gcn(
+        gcn_frame, mask=None, patch_size=224, stride=224
+    )
+
+    assert got.shape == want.shape == (4, 224, 224)
+    np.testing.assert_allclose(got, want, rtol=1e-6, atol=1e-6)
+
+
+def test_preprocess_eval_patches_from_gcn_honours_mask() -> None:
+    """Invalid pixels are zeroed in the output, as in the masked NumPy LCN."""
+    import numpy as np
+
+    from src.preprocessing.pipeline import preprocess_eval_patches_from_gcn
+
+    rng = np.random.default_rng(1)
+    gcn_frame = rng.standard_normal((224, 224)).astype(np.float32)
+    mask = np.ones((224, 224), dtype=bool)
+    mask[:10, :] = False
+
+    out = preprocess_eval_patches_from_gcn(gcn_frame, mask=mask)
+    assert out.shape == (1, 224, 224)
+    assert np.all(out[0][:10, :] == 0.0)
+
+
+def test_preprocess_eval_patches_from_gcn_raises_when_no_patch_fits() -> None:
+    import numpy as np
+    import pytest
+
+    from src.preprocessing.pipeline import preprocess_eval_patches_from_gcn
+
+    with pytest.raises(ValueError, match="no complete"):
+        preprocess_eval_patches_from_gcn(np.zeros((100, 100), np.float32))

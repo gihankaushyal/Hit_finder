@@ -24,7 +24,7 @@ for FOLD in $FOLDS; do
         --time=24:00:00 \
         --output="logs/lodo-fold${FOLD}-%j.out" \
         --error="logs/lodo-fold${FOLD}-%j.err" \
-        --wrap="module load mamba/latest && source activate sfx-hitfinder && source .secrets/wandb.env && python -u scripts/train_asymmetric.py --config ${CONFIG} --folds ${FOLD} --tags supervised,resnet18,asymmetric-pipeline,lodo-parallel --resume-training"
+        --wrap="module load mamba/latest && source activate sfx-hitfinder && source .secrets/wandb.env && python -u -m src.training.train_asymmetric --config ${CONFIG} --folds ${FOLD} --tags supervised,resnet18,asymmetric-pipeline,lodo-parallel --resume-training"
     )
     echo "Fold ${FOLD} → job ${JOBID}  (logs/lodo-fold${FOLD}-${JOBID}.{out,err})"
 done

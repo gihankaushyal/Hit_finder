@@ -35,9 +35,28 @@ hitfinder:
   gpu_script_path: ""
   gpu_device: cuda
 
+# Track 1 (asymmetric pipeline) knobs. hit_frac and hard_neg_max_attempts are
+# NOT listed here — they currently rely on lodo.py's inline .get(..., default)
+# fallback (0.5 / 50) with no corresponding YAML key; adding them is out of
+# scope for this change.
+asymmetric:
+  crops_per_frame: 1  # independently-augmented crops drawn per cached frame per item; __len__ is frame count, not frame count * this
+
 benchmark:
   split_seed: 42
   split_ratios: [0.80, 0.10, 0.10]
   variants: [strict_lodo, semi_supervised_lodo]
   detector_agnostic_max_relative_degradation: null  # set after Phase 4
   detector_agnostic_min_absolute_ap: null           # set after Phase 4
+
+# Persistent preprocessing frame cache (assembled + GCN'd frames, fp16, plus PF8
+# centroids). `root` is the permanent NFS copy; `nvme_root` is the per-fold local
+# staging tier checked first. A root that does not exist on the current node is
+# silently skipped, so an unstaged node still runs, just slower. Disabled by
+# default so no run's behavior silently depends on whatever cache state happens
+# to exist on the node — opt in explicitly per config (see configs/ssl/*.yaml)
+# or pass --no-cache/--cache to override.
+cache:
+  enabled: false
+  root: /data/bioxfel/user/gihan/Hit_finder_cache
+  nvme_root: /tmp/sfx_frame_cache

@@ -16,6 +16,6 @@ source activate sfx-hitfinder
 
 source .secrets/wandb.env
 
-python -u scripts/train_asymmetric.py \
+python -u -m src.training.train_asymmetric \
     --config configs/supervised/resnet18_asymmetric.yaml \
     --tags supervised,resnet18,asymmetric-pipeline,lodo-all-folds

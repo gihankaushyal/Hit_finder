@@ -14,23 +14,42 @@ from src.data.dataset import (
     SSLPretrainCXIDataset,
     UnlabeledDataset,
 )
+from src.data.frame_cache import FrameCache
 from src.hitfinders.base import Hitfinder
+
+
+def _flatten_collate(batch: list[tuple | None]) -> tuple | None:
+    """Drop None items (frames where every crop draw failed) and torch.cat
+    the rest field-by-field along dim 0.
+
+    Shared by none_collate_fn (2-tuple: crops, labels) and
+    _ssl_flatten_collate (3-tuple: crops, peak_patches, valid_masks). An
+    all-None batch returns None; the training loop must skip it with
+    ``if batch is None: continue``.
+    """
+    batch = [b for b in batch if b is not None]
+    if not batch:
+        return None
+    n_fields = len(batch[0])
+    return tuple(torch.cat([b[i] for b in batch], dim=0) for i in range(n_fields))
 
 
 def none_collate_fn(
     batch: list,
 ) -> tuple[torch.Tensor, torch.Tensor] | None:
-    """Collate function that silently drops None items from the batch.
+    """Flatten-collate for AsymmetricCXIDataset's per-frame multi-crop items.
 
-    AsymmetricCXIDataset.__getitem__ returns None when no valid miss crop can be
-    found after 50 random attempts. This collate function filters those out so
-    the DataLoader can continue without error. Returns None for an all-None batch
-    (the training loop must skip it with ``if batch is None: continue``).
+    Each item is (crops_per_frame, 1, H, W), (crops_per_frame,) — or None when
+    every crop draw for that frame failed (e.g. no clear hard-negative position
+    found and the frame has no centroids to fall back to Path A). None items are
+    dropped before concatenation; an all-None batch returns None and the
+    training loop must skip it with ``if batch is None: continue``.
+
+    torch.cat across the batch dimension yields (B*crops_per_frame, 1, H, W) so
+    the training loop sees the same shape as before regardless of
+    crops_per_frame (crops_per_frame=1 reduces to the original per-item shape).
     """
-    batch = [b for b in batch if b is not None]
-    if not batch:
-        return None
-    return torch.utils.data.dataloader.default_collate(batch)
+    return _flatten_collate(batch)
 
 
 def ssl_pretrain_loader(
@@ -68,26 +87,46 @@ def asymmetric_loader(
     num_workers: int = 4,
     shuffle: bool = True,
     label_key: str = "entry_1/labels/hit",
+    frame_cache: "FrameCache | None" = None,
+    hit_frac: float = 0.5,
+    hard_neg_max_attempts: int = 50,
+    crops_per_frame: int = 1,
 ) -> DataLoader:
     """DataLoader for asymmetric hitfinder-guided training.
 
-    Each item is a (1, 224, 224) float32 tensor and a crop-derived binary label
-    (1 = hit crop centred on a Bragg peak, 0 = miss crop with 50 px clearance).
-    None items (rare fallback when no valid miss crop is found) are filtered by
-    none_collate_fn; the training loop must skip any None batch.
+    AsymmetricCXIDataset yields one item per underlying frame — assembly,
+    hitfinder, and GCN run once per frame regardless of crops_per_frame — and
+    each item stacks crops_per_frame independently-augmented crops:
+    (crops_per_frame, 1, 224, 224) and (crops_per_frame,) crop-derived binary
+    labels (1 = hit crop centred on a Bragg peak, 0 = miss crop with 50 px
+    clearance). none_collate_fn concatenates across the batch dimension, so
+    batch_size is frames per batch and the yielded batch is
+    (batch_size * crops_per_frame, 1, 224, 224) — crops_per_frame=1 reduces to
+    the original per-frame shape. None items (a frame where every crop draw
+    failed) are filtered by none_collate_fn; the training loop must skip any
+    None batch.
 
     Args:
         session_map: Maps session_id → CXI file path.
         session_ids: Session IDs to include.
         hitfinder: Hitfinder instance (PF8Hitfinder or GPUHitfinder).
             GPU hitfinder requires num_workers=0 (no fork-safe GPU context).
-        batch_size: Crops per batch.
+        batch_size: Frames per batch (yielded batch is batch_size * crops_per_frame crops).
         num_workers: DataLoader worker processes. Must be 0 for GPU hitfinder.
         shuffle: Shuffle each epoch.
         label_key: HDF5 key for per-frame labels (used only to build the index).
+        frame_cache: Optional FrameCache for the preprocessing prefix.
+        hit_frac: Probability of Path A (peak-centred, label=1) vs Path B
+            (hard-negative) on the coin toss for metadata-HIT frames with
+            centroids found. Default 0.5.
+        hard_neg_max_attempts: Max random-position attempts when searching for
+            a hard-negative crop before falling back to Path A. Default 50.
+        crops_per_frame: Number of independently-augmented crops drawn per
+            frame per epoch, reusing the same assembled/GCN'd frame. Default
+            1 preserves current behavior exactly.
 
     Returns:
-        DataLoader yielding (tensor(B,1,224,224), label(B,)) pairs.
+        DataLoader yielding (tensor(B*crops_per_frame,1,224,224), label(B*crops_per_frame,)) pairs.
     """
     from src.hitfinders.gpu import GPUHitfinder
 
@@ -107,6 +146,10 @@ def asymmetric_loader(
         session_map=session_map,
         hitfinder=hitfinder,
         label_key=label_key,
+        frame_cache=frame_cache,
+        hit_frac=hit_frac,
+        hard_neg_max_attempts=hard_neg_max_attempts,
+        crops_per_frame=crops_per_frame,
     )
     return DataLoader(
         dataset,
@@ -116,6 +159,23 @@ def asymmetric_loader(
         pin_memory=torch.cuda.is_available(),
         collate_fn=none_collate_fn,
     )
+
+
+def _ssl_flatten_collate(
+    batch: list[tuple[torch.Tensor, torch.Tensor, torch.Tensor] | None],
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor] | None:
+    """Flatten per-frame multi-crop batches into a flat crop batch.
+
+    Each dataset item is (N,1,H,W), (N,L), (N,1,H,W) where N=crops_per_frame,
+    or None when SSLPretrainCXIDataset.__getitem__ failed to load that frame
+    (same convention as none_collate_fn). None items are dropped before
+    concatenation; an all-None batch returns None and the training loop must
+    skip it, mirroring the asymmetric_loader/none_collate_fn contract.
+
+    torch.cat across the batch dimension yields (B*N, 1, H, W) so the training
+    loop sees the same shape as before regardless of crops_per_frame.
+    """
+    return _flatten_collate(batch)
 
 
 def ssl_crop_loader(
@@ -128,13 +188,38 @@ def ssl_crop_loader(
     crops_per_frame: int = 1,
     hitfinder: Hitfinder | None = None,
     min_valid_frac: float = SSL_MIN_VALID_FRAC_DEFAULT,
+    frame_cache: "FrameCache | None" = None,
 ) -> DataLoader:
     """DataLoader for MAE pretraining crops (SSLPretrainCXIDataset).
 
-    GPU hitfinder backends require num_workers=0 — CUDA contexts cannot be
-    forked into DataLoader worker processes (enforced by the caller, same
-    convention as asymmetric_loader).
+    batch_size controls the number of crops per GPU batch (after flatten collate).
+    The DataLoader uses loader_batch = batch_size // crops_per_frame frames per
+    batch so that collate expands each back to batch_size crops.
+
+    Shuffle granularity: shuffle=True reorders *frames*, not individual crops.
+    All crops_per_frame crops from the same frame always land in the same batch.
+    With crops_per_frame=N, each GPU batch draws from batch_size//N unique frames.
+    This is intentional — _load_gcn_frame runs once per frame.
+
+    GPU hitfinder ⇒ num_workers=0 is enforced here (CUDA contexts cannot be
+    forked into DataLoader worker processes).
+
+    Args:
+        frame_cache: Optional FrameCache for the preprocessing prefix.
     """
+    from src.hitfinders.gpu import GPUHitfinder
+
+    if isinstance(hitfinder, GPUHitfinder) and num_workers > 0:
+        import warnings
+
+        warnings.warn(
+            "GPUHitfinder requires num_workers=0 (CUDA context cannot be shared "
+            "across forked DataLoader workers). Overriding num_workers to 0.",
+            UserWarning,
+            stacklevel=2,
+        )
+        num_workers = 0
+
     ds = SSLPretrainCXIDataset(
         session_ids=session_ids,
         session_map=session_map,
@@ -142,11 +227,21 @@ def ssl_crop_loader(
         crops_per_frame=crops_per_frame,
         hitfinder=hitfinder,
         min_valid_frac=min_valid_frac,
+        frame_cache=frame_cache,
     )
+    if batch_size % crops_per_frame != 0:
+        raise ValueError(
+            f"batch_size ({batch_size}) must be divisible by crops_per_frame "
+            f"({crops_per_frame}) so the flatten collate yields exactly batch_size crops."
+        )
+    loader_batch = batch_size // crops_per_frame
+    generator = torch.Generator().manual_seed(seed)
     return DataLoader(
         ds,
-        batch_size=batch_size,
+        batch_size=loader_batch,
         shuffle=shuffle,
         num_workers=num_workers,
         pin_memory=torch.cuda.is_available(),
+        collate_fn=_ssl_flatten_collate,
+        generator=generator,
     )

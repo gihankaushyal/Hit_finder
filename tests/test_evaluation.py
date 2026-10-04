@@ -261,7 +261,19 @@ def test_run_on_loader_keys():
     assert set(result.keys()) == {"ap", "auc_roc", "f1", "threshold"}
 
 
-def _make_cxi(tmp_path, name="test.cxi", n_frames=4, n_hits=2, shape=(500, 500)):
+def _make_cxi(
+    tmp_path,
+    name="test.cxi",
+    n_frames=4,
+    n_hits=2,
+    shape=(500, 500),
+    desc="Jungfrau 4M",
+):
+    """desc="Jungfrau 4M" by default: an arbitrary-shape synthetic frame is not
+    a real detector canvas for any of the 4 detector types, so the
+    _fake_jungfrau_assembly fixture (below) is required to keep this
+    shape-agnostic — real PADAssembler needs a full (2164, 2068) canvas.
+    """
     import h5py
 
     path = tmp_path / name
@@ -275,7 +287,16 @@ def _make_cxi(tmp_path, name="test.cxi", n_frames=4, n_hits=2, shape=(500, 500))
             [1.0] * n_hits + [0.0] * (n_frames - n_hits), dtype=np.float32
         )
         f.create_dataset("entry_1/labels/hit", data=labels)
+        if desc is not None:
+            f.create_dataset(
+                "entry_1/instrument_1/detector_1/description", data=desc.encode()
+            )
     return path
+
+
+@pytest.fixture(autouse=True)
+def _fake_jungfrau_assembly(fake_jungfrau_assembly_via_pipeline: None) -> None:
+    pass
 
 
 def test_run_fold_returns_metrics_and_detector(tmp_path):

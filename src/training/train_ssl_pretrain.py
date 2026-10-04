@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import argparse
 import math
+import shutil
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -15,6 +17,7 @@ import torch
 import wandb
 
 from src.data.dataloader import ssl_crop_loader
+from src.data.frame_cache import FrameCache, frame_cache_from_cfg, verify_cache_or_raise
 from src.hitfinders import get_hitfinder
 from src.models.ssl import MASKING_PEAK_AWARE, build_mae_model
 from src.training.lodo import build_sessions
@@ -38,7 +41,10 @@ def run_pretrain(
     run_name: str,
     device: str,
     resume: bool = False,
+    frame_cache: "FrameCache | None" = None,
 ) -> dict:
+    verify_cache_or_raise(frame_cache, cfg)
+
     _set_seeds(cfg["seed"])
     ssl_cfg = cfg["ssl"]
     tr = cfg["training"]
@@ -55,6 +61,7 @@ def run_pretrain(
         crops_per_frame=ssl_cfg.get("crops_per_frame", 1),
         hitfinder=hitfinder,
         min_valid_frac=ssl_cfg.get("min_valid_frac", 0.5),
+        frame_cache=frame_cache,
     )
     model = build_mae_model(cfg).to(device)
     opt = torch.optim.AdamW(
@@ -80,11 +87,15 @@ def run_pretrain(
         tags=cfg["wandb"].get("tags", []),
         resume="allow",
     )
+    wandb.define_metric("epoch")
+    wandb.define_metric("pretrain/loss", step_metric="epoch")
+    wandb.define_metric("pretrain/lr", step_metric="epoch")
 
     epochs = tr["epochs"]
     final_loss = float("nan")
     epochs_run = 0
     for epoch in range(start_epoch, epochs + 1):
+        dl.dataset.set_epoch(epoch)
         lr = _cosine_lr(
             tr["learning_rate"], epoch - 1, tr.get("warmup_epochs", 0), epochs
         )
@@ -92,7 +103,10 @@ def run_pretrain(
             g["lr"] = lr
         model.train()
         losses = []
-        for crops, peak_patches, valid_masks in dl:
+        for batch in dl:
+            if batch is None:
+                continue
+            crops, peak_patches, valid_masks = batch
             crops = crops.to(device)
             # Only transfer peak_patches when the masking mode actually uses them
             peak_patches_dev = (
@@ -111,37 +125,37 @@ def run_pretrain(
             torch.nn.utils.clip_grad_norm_(model.parameters(), tr.get("grad_clip", 1.0))
             opt.step()
             losses.append(loss.item())
-        final_loss = float(np.mean(losses)) if losses else float("nan")
+        if not losses:
+            # Every batch in this epoch collated to None (e.g. all crops
+            # failed min_valid_frac). Skip the checkpoint write rather than
+            # persisting a NaN-loss state — resume will simply retry this
+            # epoch next time.
+            warnings.warn(
+                f"[ssl-pretrain] epoch {epoch}: all batches were empty after "
+                "collate; skipping checkpoint save for this epoch.",
+                stacklevel=2,
+            )
+            continue
+        final_loss = float(np.mean(losses))
         epochs_run += 1
-        wandb.log({"epoch": epoch, "pretrain/loss": final_loss, "pretrain/lr": lr})
-        torch.save(
-            {
-                "epoch": epoch,
-                "model_state_dict": model.state_dict(),
-                "optimizer_state_dict": opt.state_dict(),
-                "loss": final_loss,
-                "backbone": cfg.get("model", {}).get(
-                    "backbone", "mae_vit_small_patch16"
-                ),
-                "ssl": ssl_cfg,
-            },
-            last_path,
+        wandb.log(
+            {"epoch": epoch, "pretrain/loss": final_loss, "pretrain/lr": lr}, step=epoch
         )
+        ckpt_payload = {
+            "epoch": epoch,
+            "model_state_dict": model.state_dict(),
+            "optimizer_state_dict": opt.state_dict(),
+            "loss": final_loss,
+            "backbone": cfg.get("model", {}).get("backbone", "mae_vit_small_patch16"),
+            "ssl": ssl_cfg,
+            # detector_dirs snapshot lets resume validation detect data-source drift
+            # (e.g. a different --stage-dir that wasn't copied from the same NFS source).
+            "detector_dirs": dict(cfg.get("lodo", {}).get("detector_dirs", {})),
+        }
+        torch.save(ckpt_payload, last_path)
         if epoch % tr.get("checkpoint_every", 20) == 0:
             epoch_ckpt = ckpt_dir / f"epoch{epoch}.pt"
-            torch.save(
-                {
-                    "epoch": epoch,
-                    "model_state_dict": model.state_dict(),
-                    "optimizer_state_dict": opt.state_dict(),
-                    "loss": final_loss,
-                    "backbone": cfg.get("model", {}).get(
-                        "backbone", "mae_vit_small_patch16"
-                    ),
-                    "ssl": ssl_cfg,
-                },
-                epoch_ckpt,
-            )
+            shutil.copy2(last_path, epoch_ckpt)
     wandb.finish()
     return {
         "epochs_run": epochs_run,
@@ -161,9 +175,66 @@ def main() -> None:
     )
     p.add_argument("--device", default=None)
     p.add_argument("--resume", action="store_true")
+    p.add_argument(
+        "--epochs",
+        type=int,
+        default=None,
+        help="Override training.epochs from config (e.g. 100 for a smoke run).",
+    )
+    p.add_argument(
+        "--stage-dir",
+        default=None,
+        metavar="DIR",
+        help=(
+            "Local directory containing pre-staged CXI subdirs "
+            "(e.g. /tmp/sfx_stage_12345). Replaces the parent path of every "
+            "lodo.detector_dirs entry so training reads from local NVMe "
+            "instead of NFS."
+        ),
+    )
+    p.add_argument(
+        "--cache-root",
+        default=None,
+        help="Override cache.root — the permanent NFS frame cache directory.",
+    )
+    p.add_argument(
+        "--cache-nvme",
+        default=None,
+        help="Override cache.nvme_root — the local NVMe frame cache tier, "
+        "checked before cache.root.",
+    )
+    p.add_argument(
+        "--no-cache",
+        action="store_true",
+        help="Disable the frame cache and recompute assembly/hitfinder/GCN live.",
+    )
     args = p.parse_args()
 
     cfg = load_config(args.config)
+    if args.epochs is not None:
+        cfg["training"]["epochs"] = args.epochs
+    if args.stage_dir is not None:
+        from pathlib import Path as _Path
+
+        stage = _Path(args.stage_dir)
+        remapped = []
+        for det, nfs_path in cfg["lodo"]["detector_dirs"].items():
+            staged = stage / _Path(nfs_path).name
+            if staged.is_dir():
+                cfg["lodo"]["detector_dirs"][det] = str(staged)
+                remapped.append(det)
+        print(f"[stage] detector_dirs remapped to {args.stage_dir}: {remapped}")
+    cache_cfg = cfg.setdefault("cache", {})
+    if args.cache_root is not None:
+        cache_cfg["root"] = args.cache_root
+    if args.cache_nvme is not None:
+        cache_cfg["nvme_root"] = args.cache_nvme
+    if args.no_cache:
+        cache_cfg["enabled"] = False
+    frame_cache = frame_cache_from_cfg(cfg)
+    print(
+        f"[cache] {'roots: ' + ', '.join(str(r) for r in frame_cache.roots) if frame_cache else 'disabled — computing live'}"
+    )
     device = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
     sessions, session_map = build_sessions(cfg["lodo"])
 
@@ -175,7 +246,13 @@ def main() -> None:
     run_name = f"mae-vits16-fold{args.fold}-seed{cfg['seed']}"
     print(f"Fold {args.fold}: excluding {held_out}; {len(pretrain_ids)} sessions")
     summary = run_pretrain(
-        cfg, session_map, pretrain_ids, run_name, device, resume=args.resume
+        cfg,
+        session_map,
+        pretrain_ids,
+        run_name,
+        device,
+        resume=args.resume,
+        frame_cache=frame_cache,
     )
     print(summary)
 

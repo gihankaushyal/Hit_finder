@@ -1,4 +1,4 @@
-"""Unit tests for the --resume-training flag in scripts/train_asymmetric.py.
+"""Unit tests for the --resume-training flag in src/training/train_asymmetric.py.
 
 All tests run on CPU with mocked checkpoints — no SLURM, no real training.
 """
