@@ -79,7 +79,7 @@ def build_one_cxi(
 
     geom_cache: dict[Path, dict[str, float]] = {}
     holder: list = [None]
-    frames_out: np.ndarray | None = None
+    frames_out: np.memmap | None = None
     centroids_out: dict[str, np.ndarray] = {}
     mask_out: np.ndarray | None = None
 
@@ -88,9 +88,17 @@ def build_one_cxi(
             cxi_path, idx, desc, geom_cache, hitfinder, holder
         )
         if frames_out is None:
-            # Allocate once the assembled shape is known (it is geometry-derived,
-            # identical for every frame in the file).
-            frames_out = np.empty((n_frames, *frame.shape), dtype=CACHE_DTYPE)
+            # Open a disk-backed memmap once the assembled shape is known (it
+            # is geometry-derived, identical for every frame in the file), so
+            # a 5000-frame x ~2000x2000 file (~40GB) never needs a matching
+            # in-RAM buffer — each write below goes straight to the tmp file,
+            # bounding this worker's RSS regardless of n_frames.
+            frames_out = np.lib.format.open_memmap(
+                tmp / FRAMES_NAME,
+                mode="w+",
+                dtype=CACHE_DTYPE,
+                shape=(n_frames, *frame.shape),
+            )
             mask_out = mask
         frames_out[idx] = frame.astype(CACHE_DTYPE)
         centroids_out[centroid_key(idx)] = centroids.astype(np.float32)
@@ -99,7 +107,8 @@ def build_one_cxi(
         shutil.rmtree(tmp)
         raise ValueError(f"{cxi_path} contains no frames")
 
-    np.save(tmp / FRAMES_NAME, frames_out)
+    frames_out.flush()
+    del frames_out
     np.savez(tmp / CENTROIDS_NAME, **centroids_out)
 
     # valid_mask is a pure function of (desc, shape) — one copy per detector dir.

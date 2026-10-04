@@ -32,11 +32,6 @@ LABEL_KEY = "entry_1/labels/hit"
 DATA_KEY = "entry_1/data_1/data"
 
 
-@pytest.fixture(autouse=True)
-def _fake_jungfrau_assembly(fake_jungfrau_assembly_via_dataset: None) -> None:
-    pass
-
-
 @pytest.fixture(scope="module")
 def synthetic_cxi(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """Create a tiny 8-frame CXI file with 4 hits and 4 misses."""
@@ -233,9 +228,14 @@ def test_hit_path_returns_crop_shape_and_label_one(synthetic_cxi: Path) -> None:
         result = ds[idx]
         assert result is not None, f"item {idx}: unexpected None"
         tensor, label = result
-        assert tensor.shape == (1, 224, 224), f"item {idx}: wrong shape {tensor.shape}"
+        assert tensor.shape == (
+            1,
+            1,
+            224,
+            224,
+        ), f"item {idx}: wrong shape {tensor.shape}"
         assert tensor.dtype == torch.float32, f"item {idx}: wrong dtype {tensor.dtype}"
-        assert label in (0, 1), f"item {idx}: unexpected label {label}"
+        assert label[0].item() in (0, 1), f"item {idx}: unexpected label {label}"
 
 
 def test_hit_path_a_forced_returns_label_one_for_all_hit_indices(
@@ -261,10 +261,15 @@ def test_hit_path_a_forced_returns_label_one_for_all_hit_indices(
         result = ds[idx]
         assert result is not None, f"item {idx}: unexpected None"
         tensor, label = result
-        assert tensor.shape == (1, 224, 224), f"item {idx}: wrong shape {tensor.shape}"
+        assert tensor.shape == (
+            1,
+            1,
+            224,
+            224,
+        ), f"item {idx}: wrong shape {tensor.shape}"
         assert tensor.dtype == torch.float32, f"item {idx}: wrong dtype {tensor.dtype}"
         assert (
-            label == 1
+            label[0].item() == 1
         ), f"item {idx}: hit_frac=1.0 must force Path A (label=1), got {label}"
 
 
@@ -313,8 +318,10 @@ def test_hit_path_b_coin_toss_crop_satisfies_margin(synthetic_cxi: Path) -> None
 
     assert result is not None
     tensor, label = result
-    assert tensor.shape == (1, 224, 224)
-    assert label == 0, f"hit_frac=0.0 must choose Path B (label=0), got {label}"
+    assert tensor.shape == (1, 1, 224, 224)
+    assert (
+        label[0].item() == 0
+    ), f"hit_frac=0.0 must choose Path B (label=0), got {label}"
 
     # The accepted position is the last recorded call — _sample_clear_crop
     # returns immediately once _crop_within_margin reports False.
@@ -351,9 +358,16 @@ def test_miss_path_returns_crop_shape_and_label_zero(synthetic_cxi: Path) -> Non
             result is not None
         ), f"item {idx}: unexpected None — empty centroids always yield a valid miss crop"
         tensor, label = result
-        assert tensor.shape == (1, 224, 224), f"item {idx}: wrong shape {tensor.shape}"
+        assert tensor.shape == (
+            1,
+            1,
+            224,
+            224,
+        ), f"item {idx}: wrong shape {tensor.shape}"
         assert tensor.dtype == torch.float32, f"item {idx}: wrong dtype {tensor.dtype}"
-        assert label == 0, f"item {idx}: expected label=0 (miss crop), got {label}"
+        assert (
+            label[0].item() == 0
+        ), f"item {idx}: expected label=0 (miss crop), got {label}"
 
 
 def test_non_hit_frame_never_calls_hitfinder(synthetic_cxi: Path) -> None:
@@ -373,8 +387,8 @@ def test_non_hit_frame_never_calls_hitfinder(synthetic_cxi: Path) -> None:
         result = ds[idx]
         assert result is not None
         tensor, label = result
-        assert label == 0, f"item {idx}: metadata non-hit must yield label=0"
-        assert tensor.shape == (1, 224, 224)
+        assert label[0].item() == 0, f"item {idx}: metadata non-hit must yield label=0"
+        assert tensor.shape == (1, 1, 224, 224)
 
 
 def test_hit_frame_coin_toss_produces_both_labels(synthetic_cxi: Path) -> None:
@@ -393,7 +407,7 @@ def test_hit_frame_coin_toss_produces_both_labels(synthetic_cxi: Path) -> None:
         result = ds[0]  # index 0 is metadata hit
         assert result is not None
         _, label = result
-        labels_seen.add(label)
+        labels_seen.add(label[0].item())
         if labels_seen == {0, 1}:
             break
     assert labels_seen == {
@@ -424,8 +438,8 @@ def test_hit_path_b_falls_back_to_path_a_when_margin_search_fails(
         result = ds[0]  # index 0 is metadata hit
         assert result is not None, f"seed {seed}: fallback must never return None"
         tensor, label = result
-        assert tensor.shape == (1, 224, 224)
-        assert label == 1, (
+        assert tensor.shape == (1, 1, 224, 224)
+        assert label[0].item() == 1, (
             f"seed {seed}: dense peak grid leaves no clear region, so every "
             f"draw (Path A directly, or Path B falling back) must land on "
             f"label=1, got {label}"
@@ -449,8 +463,8 @@ def test_hit_frac_zero_forces_path_b(synthetic_cxi: Path) -> None:
         result = ds[0]  # index 0 is metadata hit
         assert result is not None
         tensor, label = result
-        assert tensor.shape == (1, 224, 224)
-        assert label == 0, (
+        assert tensor.shape == (1, 1, 224, 224)
+        assert label[0].item() == 0, (
             f"seed {seed}: hit_frac=0.0 must always choose Path B "
             f"(a clear crop exists far from the single peak), got label={label}"
         )
@@ -474,8 +488,8 @@ def test_hard_neg_max_attempts_zero_always_falls_back_to_path_a(
     result = ds[0]  # index 0 is metadata hit, centroids present
     assert result is not None
     tensor, label = result
-    assert tensor.shape == (1, 224, 224)
-    assert label == 1, (
+    assert tensor.shape == (1, 1, 224, 224)
+    assert label[0].item() == 1, (
         "hard_neg_max_attempts=0 must exhaust the margin search instantly and "
         f"fall back to _path_a_crop (label=1), got label={label}"
     )
@@ -494,7 +508,10 @@ def test_crops_per_frame_default_is_backward_compatible(synthetic_cxi: Path) -> 
 
 
 def test_crops_per_frame_multiplies_len(synthetic_cxi: Path) -> None:
-    """crops_per_frame=3 must multiply the dataset length by 3."""
+    """crops_per_frame no longer multiplies __len__ — assembly/hitfinder/GCN
+    run once per frame regardless of crops_per_frame (mirrors
+    SSLPretrainCXIDataset). Instead, each item's stacked tensors grow a
+    leading crops_per_frame dimension."""
     hf = MockHitfinder(peaks=np.array([[256.0, 256.0]], dtype=np.float32))
     ds = AsymmetricCXIDataset(
         session_ids=["s0"],
@@ -503,17 +520,22 @@ def test_crops_per_frame_multiplies_len(synthetic_cxi: Path) -> None:
         label_key=LABEL_KEY,
         crops_per_frame=3,
     )
-    assert len(ds) == 3 * N_FRAMES
+    assert len(ds) == N_FRAMES
+    result = ds[0]
+    assert result is not None
+    tensor, label = result
+    assert tensor.shape == (3, 1, 224, 224)
+    assert label.shape == (3,)
 
 
 def test_crops_per_frame_replicas_differ(synthetic_cxi: Path) -> None:
-    """Two replicas of the same underlying frame must draw different crops.
+    """The crops_per_frame replicas drawn for the same frame must differ.
 
-    With crops_per_frame=2, virtual indices 0 and 1 both map to frame_idx=0
-    (the first metadata-hit frame in the fixture) but must receive distinct
-    RNG seeds, so the returned tensors differ — mirrors the existing
-    test_set_epoch_changes_output pattern but compares replicas within the
-    same epoch instead of across epochs.
+    With crops_per_frame=2, ds[0] draws two independently-augmented crops
+    from the same assembled/GCN'd frame (loaded once), stacked along a new
+    leading dimension — mirrors the existing test_set_epoch_changes_output
+    pattern but compares replicas within a single item instead of across
+    epochs.
     """
     hf = MockHitfinder(peaks=np.array([[256.0, 256.0]], dtype=np.float32))
     ds = AsymmetricCXIDataset(
@@ -523,12 +545,11 @@ def test_crops_per_frame_replicas_differ(synthetic_cxi: Path) -> None:
         label_key=LABEL_KEY,
         crops_per_frame=2,
     )
-    result_0 = ds[0]
-    result_1 = ds[1]
-    assert result_0 is not None and result_1 is not None
-    tensor_0, _ = result_0
-    tensor_1, _ = result_1
-    assert not torch.equal(tensor_0, tensor_1)
+    result = ds[0]
+    assert result is not None
+    tensor, _ = result
+    assert tensor.shape == (2, 1, 224, 224)
+    assert not torch.equal(tensor[0], tensor[1])
 
 
 def test_crops_per_frame_zero_raises(synthetic_cxi: Path) -> None:
@@ -662,5 +683,7 @@ def test_out_of_range_label_warns_and_still_functions(
     result = ds[2]  # the corrupted frame (raw label -1)
     assert result is not None
     tensor, label = result
-    assert tensor.shape == (1, 224, 224)
-    assert label == 0, f"out-of-range label must be treated as non-hit, got {label}"
+    assert tensor.shape == (1, 1, 224, 224)
+    assert (
+        label[0].item() == 0
+    ), f"out-of-range label must be treated as non-hit, got {label}"

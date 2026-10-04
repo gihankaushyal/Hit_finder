@@ -24,11 +24,6 @@ LABEL_KEY = "entry_1/labels/hit"
 DATA_KEY = "entry_1/data_1/data"
 
 
-@pytest.fixture(autouse=True)
-def _fake_jungfrau_assembly(fake_jungfrau_assembly_via_dataset: None) -> None:
-    pass
-
-
 @pytest.fixture(scope="module")
 def synthetic_cxi(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """Create a tiny 4-frame CXI file with detector/geometry metadata."""
@@ -721,3 +716,38 @@ class TestBitExactnessAgainstRealData:
             assert cached is not None
             assert cached[1] == live[1], f"{detector} idx {idx}: label differs"
             torch.testing.assert_close(cached[0], live[0], atol=0.05, rtol=1e-3)
+
+
+# ---------------------------------------------------------------------------
+# _HITFINDER_KEYS must track every cfg["hitfinder"] key get_hitfinder() reads
+# ---------------------------------------------------------------------------
+
+
+def test_hitfinder_keys_cover_every_key_get_hitfinder_reads():
+    """_HITFINDER_KEYS is hand-maintained; this guards it against silent drift.
+
+    If get_hitfinder() starts reading a new hf_cfg.get(...) key (a new pf8
+    param, a new backend-specific knob) without _HITFINDER_KEYS being updated
+    to match, the frame cache manifest would stop detecting that the cache is
+    stale under the new param — this test fails loudly instead.
+
+    gpu_script_path is deliberately excluded: its *contents*, not the path
+    string, determine hitfinder output, and build_manifest() hashes the file
+    separately (gpu_script_digest) instead of including the raw key.
+    """
+    import inspect
+    import re
+
+    from src.data.frame_cache import _HITFINDER_KEYS
+    from src.hitfinders import get_hitfinder
+
+    source = inspect.getsource(get_hitfinder)
+    read_keys = set(re.findall(r'hf_cfg\.get\(\s*"([^"]+)"', source))
+    read_keys.discard("gpu_script_path")
+
+    assert read_keys == set(_HITFINDER_KEYS), (
+        f"get_hitfinder() reads {read_keys} but _HITFINDER_KEYS tracks "
+        f"{set(_HITFINDER_KEYS)}. Update _HITFINDER_KEYS in "
+        "src/data/frame_cache.py to match (or add a comment there excluding "
+        "the new key, like gpu_script_path)."
+    )

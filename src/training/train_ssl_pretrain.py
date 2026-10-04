@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import math
 import shutil
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -102,7 +103,10 @@ def run_pretrain(
             g["lr"] = lr
         model.train()
         losses = []
-        for crops, peak_patches, valid_masks in dl:
+        for batch in dl:
+            if batch is None:
+                continue
+            crops, peak_patches, valid_masks = batch
             crops = crops.to(device)
             # Only transfer peak_patches when the masking mode actually uses them
             peak_patches_dev = (
@@ -121,7 +125,18 @@ def run_pretrain(
             torch.nn.utils.clip_grad_norm_(model.parameters(), tr.get("grad_clip", 1.0))
             opt.step()
             losses.append(loss.item())
-        final_loss = float(np.mean(losses)) if losses else float("nan")
+        if not losses:
+            # Every batch in this epoch collated to None (e.g. all crops
+            # failed min_valid_frac). Skip the checkpoint write rather than
+            # persisting a NaN-loss state — resume will simply retry this
+            # epoch next time.
+            warnings.warn(
+                f"[ssl-pretrain] epoch {epoch}: all batches were empty after "
+                "collate; skipping checkpoint save for this epoch.",
+                stacklevel=2,
+            )
+            continue
+        final_loss = float(np.mean(losses))
         epochs_run += 1
         wandb.log(
             {"epoch": epoch, "pretrain/loss": final_loss, "pretrain/lr": lr}, step=epoch

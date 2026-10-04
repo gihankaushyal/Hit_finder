@@ -40,7 +40,7 @@ hitfinder:
 # fallback (0.5 / 50) with no corresponding YAML key; adding them is out of
 # scope for this change.
 asymmetric:
-  crops_per_frame: 1  # crops drawn per cached frame per epoch (dataset-length multiplier)
+  crops_per_frame: 1  # independently-augmented crops drawn per cached frame per item; __len__ is frame count, not frame count * this
 
 benchmark:
   split_seed: 42

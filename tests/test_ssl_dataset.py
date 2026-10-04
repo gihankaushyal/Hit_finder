@@ -8,18 +8,13 @@ import pytest
 import torch
 
 from src.data.dataset import SSLPretrainCXIDataset
-from src.data.dataloader import ssl_crop_loader
+from src.data.dataloader import _ssl_flatten_collate, ssl_crop_loader
 from src.hitfinders import MockHitfinder
 
 H, W = 512, 512
 N_FRAMES = 8
 LABEL_KEY = "entry_1/labels/hit"
 DATA_KEY = "entry_1/data_1/data"
-
-
-@pytest.fixture(autouse=True)
-def _fake_jungfrau_assembly(fake_jungfrau_assembly_via_dataset: None) -> None:
-    pass
 
 
 @pytest.fixture(scope="module")
@@ -126,6 +121,21 @@ class TestSSLPretrainDataset:
         assert peaks.shape == (4, 196)
         assert vmasks.shape == (4, 1, 224, 224)
 
+    def test_getitem_returns_none_on_load_failure(self, synthetic_cxi, monkeypatch):
+        """A frame that fails to load must surface as None, not a disguised
+        all-zero sample — downstream collate relies on this to filter it out
+        rather than silently training on a degenerate crop/valid_mask."""
+        import src.data.dataset as dataset_mod
+
+        def _boom(*args, **kwargs):
+            raise RuntimeError("synthetic load failure")
+
+        monkeypatch.setattr(dataset_mod, "_load_gcn_frame", _boom)
+        ds = _dataset(synthetic_cxi, crops_per_frame=2)
+        with pytest.warns(UserWarning, match="skipping frame"):
+            item = ds[0]
+        assert item is None
+
     def test_loader_multicrop_flatten(self, synthetic_cxi):
         """crops_per_frame=2, batch_size=4: loader_batch=2 frames, flatten → 4 crops."""
         dl = ssl_crop_loader(
@@ -140,3 +150,15 @@ class TestSSLPretrainDataset:
         assert crops.shape == (4, 1, 224, 224)
         assert peaks.shape == (4, 196)
         assert vmasks.shape == (4, 1, 224, 224)
+
+
+class TestSSLFlattenCollate:
+    def test_filters_none_items(self, synthetic_cxi):
+        good = _dataset(synthetic_cxi, crops_per_frame=2)[0]
+        crops, peaks, vmasks = _ssl_flatten_collate([good, None, good])
+        assert crops.shape == (4, 1, 224, 224)
+        assert peaks.shape == (4, 196)
+        assert vmasks.shape == (4, 1, 224, 224)
+
+    def test_all_none_batch_returns_none(self):
+        assert _ssl_flatten_collate([None, None]) is None
