@@ -27,13 +27,20 @@ def train_one_epoch(
     device: str | torch.device,
 ) -> dict[str, float]:
     model.train()
-    total_loss, n = 0.0, 0
-    for x, y in loader:
+    total_loss, n, hit_total = 0.0, 0, 0
+    for batch in loader:
+        if batch is None:
+            continue
+        x, y = batch
         x, y = x.float().to(device), y.long().to(device)
         optimizer.zero_grad()
         loss = criterion(model(x), y)
         loss.backward()
         optimizer.step()
         total_loss += loss.item() * len(y)
+        hit_total += int(y.sum().item())
         n += len(y)
-    return {"loss": total_loss / max(n, 1)}
+    return {
+        "loss": total_loss / max(n, 1),
+        "hit_frac": hit_total / max(n, 1),
+    }

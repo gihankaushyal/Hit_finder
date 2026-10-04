@@ -89,3 +89,99 @@ def lcn(
     if mask is not None:
         out[~mask] = 0.0
     return out
+
+
+def lcn_torch(
+    images: "torch.Tensor",
+    window: int = LCN_WINDOW_DEFAULT,
+    eps: float = LCN_EPSILON,
+    masks: "torch.Tensor | None" = None,
+) -> "torch.Tensor":
+    """Batched masked Local Contrast Normalization on the caller's device.
+
+    GPU counterpart of lcn(), used by the evaluation patch path. With assembly
+    and GCN served from the frame cache, LCN is nearly all that remains of the
+    eval cost, so it runs on the GPU alongside inference.
+
+    Implements the *masked* branch of lcn() — a normalized convolution: a
+    zero-padded box filter divided by the per-pixel count of valid neighbours.
+    When masks is None every pixel is valid (mask of all ones) and the box
+    filter is applied to reflect-padded input, matching lcn(image, mask=None)'s
+    use of scipy's default reflect-padding uniform_filter.
+
+    Args:
+        images: (B, H, W) or (B, 1, H, W) float tensor, typically GCN'd patches.
+        window: Side length of the local neighbourhood (odd, >= 1).
+        eps: Added to the local *variance*, flooring the denominator at sqrt(eps).
+        masks: Optional bool/float tensor broadcastable to images' spatial shape;
+            True = valid detector pixel. Invalid pixels are excluded from the
+            local statistics and set to 0 in the output.
+
+    Returns:
+        float32 tensor with the same shape as `images`.
+    """
+    import torch
+    import torch.nn.functional as F
+
+    squeeze_channel = images.ndim == 4
+    x = images if squeeze_channel else images.unsqueeze(1)
+    x = x.to(torch.float32)
+
+    if masks is None:
+        m = torch.ones_like(x)
+    else:
+        m = masks if masks.ndim == 4 else masks.unsqueeze(1)
+        m = m.to(torch.float32)
+
+    pad = window // 2
+
+    def _pad_reflect_scipy_style(t: "torch.Tensor") -> "torch.Tensor":
+        """Pad the last two dims like scipy.ndimage's default mode="reflect".
+
+        scipy's `reflect` duplicates the edge pixel (`d c b a | a b c d |
+        d c b a` — equivalent to numpy.pad(mode="symmetric")).
+        torch.nn.functional.pad's own "reflect" mode does NOT duplicate the
+        edge pixel (`c b | a b c d | c b` — scipy's "mirror"), so it cannot be
+        used directly; build the symmetric variant via flip + concat instead.
+        """
+        if pad == 0:
+            return t
+        left = t[..., :pad].flip(-1)
+        right = t[..., -pad:].flip(-1)
+        t = torch.cat([left, t, right], dim=-1)
+        top = t[..., :pad, :].flip(-2)
+        bottom = t[..., -pad:, :].flip(-2)
+        return torch.cat([top, t, bottom], dim=-2)
+
+    def _box(t: "torch.Tensor") -> "torch.Tensor":
+        # Zero padding + count_include_pad=True reproduces scipy's
+        # uniform_filter(mode="constant", cval=0) up to the 1/window**2 factor,
+        # which cancels in the sum/count ratio below.
+        return F.avg_pool2d(
+            F.pad(t, (pad, pad, pad, pad), mode="constant", value=0.0),
+            kernel_size=window,
+            stride=1,
+        )
+
+    if masks is None:
+        # Unmasked path: match lcn()'s scipy uniform_filter default, mode=
+        # "reflect" (`d c b a | a b c d | d c b a`, edge pixel duplicated).
+        # That convention is numpy's "symmetric", NOT torch F.pad's "reflect"
+        # (which drops the edge pixel, i.e. scipy's "mirror"), so build it via
+        # flip + concat rather than passing a pad "mode" string. count is a
+        # constant window**2 everywhere (no gap pixels), so mean/sq_mean can
+        # be computed directly without the count division the masked path uses.
+        x_padded = _pad_reflect_scipy_style(x)
+        local_mean = F.avg_pool2d(x_padded, kernel_size=window, stride=1)
+        local_sq_mean = F.avg_pool2d(x_padded * x_padded, kernel_size=window, stride=1)
+        local_var = (local_sq_mean - local_mean * local_mean).clamp_min(0.0)
+    else:
+        x_clean = torch.where(m > 0, x, torch.zeros_like(x))
+        count = _box(m).clamp_min(1e-12)
+        local_mean = _box(x_clean) / count
+        local_sq_mean = _box(x_clean * x_clean) / count
+        local_var = (local_sq_mean - local_mean * local_mean).clamp_min(0.0)
+
+    out = (x - local_mean) / torch.sqrt(local_var + eps)
+    out = torch.where(m > 0, out, torch.zeros_like(out))
+    return out if squeeze_channel else out.squeeze(1)

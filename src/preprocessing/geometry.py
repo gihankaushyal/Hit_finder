@@ -2,51 +2,61 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
 from reborn import detector
 from reborn.external.crystfel import geometry_file_to_pad_geometry_list
 
-_JUNGFRAU_4M_GEOM_JSON = Path(__file__).parent / "data" / "jungfrau4m_jf4m_103mm.json"
 _EIGER_RESONET_GEOM = Path(__file__).parent / "data" / "eiger_resonet.geom"
 
-# CrystFEL geom file for Eiger4M — only detector that needs it.
-# AGIPD and ePix10k use Reborn's built-in standard loaders instead.
-_EIGER4M_GEOM = Path(__file__).parent / "data" / "eiger4m.geom"
+# clen(0.300) + coffset(-0.1860225), summed per CrystFEL convention — see
+# eiger4m_64_pad_geometry_list() docstring. Shared with
+# scripts/verify_eiger4m_geometry_match.py so the two never drift apart.
+EIGER4M_EFFECTIVE_DISTANCE_M = 0.1139775
 
 _GEOM_CACHE: dict[str, detector.PADGeometryList] = {}
 _ASSEMBLER_CACHE: dict[str, detector.PADAssembler] = {}
 
 
-def jungfrau4m_crystfel_pad_geometry_list(
+def jungfrau_8_pad_geometry_list(
     detector_distance: float = 0.103,
 ) -> detector.PADGeometryList:
-    """Load JUNGFRAU 4M geometry derived from jf4m_103mm_20260408.geom.
+    """Load JUNGFRAU 4M geometry — 8 panels, 514x1030 px, 103mm distance.
 
+    Delegates to Reborn's bundled `detector.jungfrau_8_pad_geometry_list()`
+    (added upstream to match our own jf4m_103mm_20260408.geom-derived geometry,
+    confirmed numerically equivalent — max panel-position difference < 1 um).
     parent_data_shape=[2164, 2068] and parent_data_slice values match the
     pre-assembled canvas stored in Jungfrau.h5 so that panels can be extracted
     manually before passing to PADAssembler.
     """
-    pads = detector.load_pad_geometry_list(str(_JUNGFRAU_4M_GEOM_JSON))
-    pads.set_average_detector_distance(detector_distance, beam_vec=[0, 0, 1])
-    return pads
+    return detector.jungfrau_8_pad_geometry_list(detector_distance=detector_distance)
 
 
-def eiger4m_crystfel_pad_geometry_list(
+def eiger4m_64_pad_geometry_list(
     detector_distance: float | None = None,
 ) -> detector.PADGeometryList:
-    """Load Eiger4M geometry from the CrystFEL .geom file.
+    """Load Eiger4M geometry — 64 panels, 176x192 px, effective z=113.9775mm.
 
-    Our Eiger4M data is stored as a stacked LCLS canvas (5632×384), 64 panels of
-    176×192 px each. Reborn's built-in eiger4M_pad_geometry_list() expects a
-    different pixel count and cannot be used. This loader sets parent_data_slice
-    on every panel so extract_panels_from_canvas() and PADAssembler work correctly.
+    Delegates to Reborn's bundled `detector.eiger4m_64_pad_geometry_list()`
+    (added upstream to match our own eiger4m.geom-derived geometry, confirmed
+    numerically equivalent — max panel-position difference < 1e-6 m, see
+    scripts/verify_eiger4m_geometry_match.py). The default 0.1139775 m
+    reproduces our geom file's clen=0.300 combined with its per-panel
+    coffset=-0.1860225 (CrystFEL sums these: 0.300 - 0.1860225 = 0.1139775).
+    Our Eiger4M data is stored as a stacked LCLS canvas (5632x384); the
+    geometry carries parent_data_slice so extract_panels_from_canvas() and
+    PADAssembler work correctly.
     """
-    pads = geometry_file_to_pad_geometry_list(str(_EIGER4M_GEOM))
-    if detector_distance is not None:
-        pads.set_average_detector_distance(detector_distance, beam_vec=[0, 0, 1])
-    return pads
+    return detector.eiger4m_64_pad_geometry_list(
+        detector_distance=(
+            detector_distance
+            if detector_distance is not None
+            else EIGER4M_EFFECTIVE_DISTANCE_M
+        )
+    )
 
 
 def eiger_resonet_pad_geometry_list() -> detector.PADGeometryList:
@@ -63,44 +73,48 @@ def eiger_resonet_pad_geometry_list() -> detector.PADGeometryList:
     return geometry_file_to_pad_geometry_list(str(_EIGER_RESONET_GEOM))
 
 
-_KNOWN_DESCS = {"AGIPD 1M", "ePix10k 2.2M", "EIGER 4M"}
+_KNOWN_DESCS = {"AGIPD 1M", "ePix10k 2.2M", "EIGER 4M", "Jungfrau 4M"}
+
+# Dispatch table mirroring the DETECTOR_LOADERS pattern below (generic
+# registry lookup instead of an if/elif chain) — keyed by the CXI
+# description string get_geometry() receives, rather than DETECTOR_LOADERS'
+# short detector-type keys, since the two callers (get_geometry vs
+# load_pad_geometry) use different naming conventions from their callers.
+_DESC_LOADERS: dict[str, Callable[[], detector.PADGeometryList]] = {
+    "AGIPD 1M": detector.agipd_pad_geometry_list,
+    "ePix10k 2.2M": detector.epix10k_pad_geometry_list,
+    "EIGER 4M": eiger4m_64_pad_geometry_list,
+    "Jungfrau 4M": jungfrau_8_pad_geometry_list,
+}
 
 
 def get_geometry(detector_desc: str) -> detector.PADGeometryList:
     """Load and cache PADGeometryList for the given CXI detector description.
 
     AGIPD 1M and ePix10k 2.2M use Reborn's built-in standard geometry loaders.
-    EIGER 4M uses the CrystFEL .geom file in src/preprocessing/data/eiger4m.geom.
+    EIGER 4M and Jungfrau 4M use this module's eiger4m_64_pad_geometry_list()
+    and jungfrau_8_pad_geometry_list() wrappers, which delegate directly to
+    Reborn's own bundled functions of the same name — the CXI frame arrives
+    as a pre-assembled canvas with gap pixels, so the geometry carries
+    parent_data_slice for extract_panels_from_canvas().
 
     Args:
         detector_desc: Value of entry_1/instrument_1/detector_1/description,
-            e.g. 'AGIPD 1M', 'ePix10k 2.2M', 'EIGER 4M'.
+            e.g. 'AGIPD 1M', 'ePix10k 2.2M', 'EIGER 4M', 'Jungfrau 4M'.
 
     Returns:
         PADGeometryList, cached in _GEOM_CACHE so it is loaded only once per process.
 
     Raises:
-        ValueError: If detector_desc is 'Jungfrau 4M' (pre-assembled — call
-            _to_2d() then pad_border() directly) or an unrecognised string.
+        ValueError: If detector_desc is not a recognised string.
     """
-    if detector_desc == "Jungfrau 4M":
-        raise ValueError(
-            "Jungfrau 4M arrives pre-assembled. Call _to_2d() then pad_border() directly."
-        )
     if detector_desc not in _KNOWN_DESCS:
         raise ValueError(
             f"Unknown detector description '{detector_desc}'. "
-            f"Known: {sorted(_KNOWN_DESCS)} (plus 'Jungfrau 4M' which is pre-assembled)."
+            f"Known: {sorted(_KNOWN_DESCS)}."
         )
     if detector_desc not in _GEOM_CACHE:
-        if detector_desc == "AGIPD 1M":
-            _GEOM_CACHE[detector_desc] = detector.agipd_pad_geometry_list()
-        elif detector_desc == "ePix10k 2.2M":
-            _GEOM_CACHE[detector_desc] = detector.epix10k_pad_geometry_list()
-        else:  # EIGER 4M — stacked LCLS canvas (5632×384), 64 panels via CrystFEL geom
-            _GEOM_CACHE[detector_desc] = geometry_file_to_pad_geometry_list(
-                str(_EIGER4M_GEOM)
-            )
+        _GEOM_CACHE[detector_desc] = _DESC_LOADERS[detector_desc]()
     return _GEOM_CACHE[detector_desc]
 
 
@@ -119,9 +133,9 @@ def get_assembler(detector_desc: str) -> detector.PADAssembler:
 
 DETECTOR_LOADERS = {
     "AGIPD": detector.agipd_pad_geometry_list,
-    "JUNGFRAU_4M": jungfrau4m_crystfel_pad_geometry_list,
+    "JUNGFRAU_4M": jungfrau_8_pad_geometry_list,
     "ePix10k": detector.epix10k_pad_geometry_list,
-    "Eiger4M": eiger4m_crystfel_pad_geometry_list,
+    "Eiger4M": eiger4m_64_pad_geometry_list,
     "EigerRESoNeT": eiger_resonet_pad_geometry_list,
 }
 
@@ -167,7 +181,8 @@ def load_pad_geometry(
         detector_type: One of "AGIPD", "JUNGFRAU_4M", "ePix10k", "Eiger4M".
         detector_distance: Sample-to-detector distance in metres. When None
             (default) each detector loader uses its own natural default
-            (0.103 m for JUNGFRAU_4M, 0.1 m for the others).
+            (0.103 m for JUNGFRAU_4M, 0.1139775 m for Eiger4M, 0.1 m for
+            AGIPD and ePix10k).
 
     Raises:
         ValueError: If detector_type is not one of the four supported values.

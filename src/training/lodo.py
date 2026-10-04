@@ -11,12 +11,11 @@ import json
 from collections.abc import Callable
 from pathlib import Path
 
-import h5py
 import numpy as np
 import torch
-import torch.nn as nn
 
 from src.data.dataloader import asymmetric_loader
+from src.data.frame_cache import FrameCache, verify_cache_or_raise
 from src.evaluation.benchmark import (
     SPLIT_CROSS_DETECTOR,
     SPLIT_IN_DOMAIN_TEST,
@@ -91,6 +90,7 @@ def _train_fold(
     model_builder: Callable[[], nn.Module] | None = None,
     run_name_prefix: str | None = None,
     extra_results: dict | None = None,
+    frame_cache: FrameCache | None = None,
 ) -> dict:
     """Train one LODO fold and return metrics.
 
@@ -100,8 +100,13 @@ def _train_fold(
     `run_name_prefix`: overrides the default `{backbone}-asymmetric` prefix in
       the wandb run name and checkpoint directory.
     `extra_results`: extra keys merged into the per-fold results.json.
+    `frame_cache`: optional two-tier FrameCache. When supplied, its manifest is
+      verified against `cfg` before any training starts, and it is forwarded to
+      the training loader and to every run_patch_agg call.
     """
     import wandb
+
+    verify_cache_or_raise(frame_cache, cfg)
 
     backbone = cfg["model"].get("backbone", "vit_small_mae")
     seed = cfg["seed"]
@@ -116,9 +121,13 @@ def _train_fold(
     patience = cfg["training"].get("early_stopping_patience", 10)
 
     prefix = run_name_prefix or f"{backbone}-asymmetric"
-    run_name = f"{prefix}-fold{fold_id}-seed{seed}"
+    run_suffix = cfg.get("wandb", {}).get("run_suffix", "")
+    run_name = f"{prefix}-fold{fold_id}-seed{seed}{run_suffix}"
 
     label_key = cfg["lodo"].get("label_key", "entry_1/labels/hit")
+    hit_frac = cfg.get("asymmetric", {}).get("hit_frac", 0.5)
+    hard_neg_max_attempts = cfg.get("asymmetric", {}).get("hard_neg_max_attempts", 50)
+    crops_per_frame = cfg.get("asymmetric", {}).get("crops_per_frame", 1)
 
     train_ids = [sid for sid, s in split_artifact["splits"].items() if s == SPLIT_TRAIN]
 
@@ -130,6 +139,10 @@ def _train_fold(
         num_workers=num_workers,
         shuffle=True,
         label_key=label_key,
+        frame_cache=frame_cache,
+        hit_frac=hit_frac,
+        hard_neg_max_attempts=hard_neg_max_attempts,
+        crops_per_frame=crops_per_frame,
     )
 
     bench_cfg = cfg.get("benchmark", {})
@@ -145,7 +158,8 @@ def _train_fold(
         sid for sid, s in split_artifact["splits"].items() if s == SPLIT_CROSS_DETECTOR
     ]
 
-    n_train = len(train_dl.dataset)
+    n_train_frames = len(train_dl.dataset)
+    n_train = n_train_frames * crops_per_frame
     n_val = len(val_ids)
     n_indomain = len(in_domain_ids)
     n_cross = len(cross_ids)
@@ -153,7 +167,8 @@ def _train_fold(
     print(
         f"\n{'='*60}\n"
         f"Fold {fold_id}  |  held-out: {fold['test_detector']}\n"
-        f"  train={n_train} patches  val={n_val} sessions  in_domain_test={n_indomain} sessions  cross={n_cross} sessions\n"
+        f"  train={n_train} crops ({n_train_frames} frames x {crops_per_frame} crops/frame)  "
+        f"val={n_val} sessions  in_domain_test={n_indomain} sessions  cross={n_cross} sessions\n"
         f"{'='*60}"
     )
 
@@ -183,6 +198,9 @@ def _train_fold(
         tags=cfg["wandb"].get("tags", []),
         resume="allow",
     )
+    wandb.define_metric("epoch")
+    wandb.define_metric("train/*", step_metric="epoch")
+    wandb.define_metric("val/*", step_metric="epoch")
 
     wandb.log({"hitfinder/backend": cfg["hitfinder"]["backend"]})
 
@@ -227,6 +245,7 @@ def _train_fold(
                 )
 
         for epoch in range(start_epoch, epochs + 1):
+            train_dl.dataset.set_epoch(epoch)
             train_m = train_one_epoch(model, train_dl, optimizer, criterion, device)
             val_m = run_patch_agg(
                 model,
@@ -237,6 +256,7 @@ def _train_fold(
                 min_hit_patches=min_hit_patches,
                 device=device,
                 aggregation=aggregation,
+                frame_cache=frame_cache,
             )
 
             print(
@@ -248,11 +268,13 @@ def _train_fold(
                 {
                     "epoch": epoch,
                     "train/loss": train_m["loss"],
+                    "train/realized_hit_frac": train_m["hit_frac"],
                     "val/ap": val_m["ap"],
                     "val/auc": val_m["auc_roc"],
                     "val/f1": val_m["f1"],
                     "hitfinder/n_peaks_mean": float("nan"),
-                }
+                },
+                step=epoch,
             )
 
             if not np.isnan(val_m["f1"]) and val_m["f1"] > best_f1:
@@ -339,6 +361,7 @@ def _train_fold(
         min_hit_patches=min_hit_patches,
         device=device,
         aggregation=aggregation,
+        frame_cache=frame_cache,
     )
     cross_m = run_patch_agg(
         model,
@@ -349,6 +372,7 @@ def _train_fold(
         min_hit_patches=min_hit_patches,
         device=device,
         aggregation=aggregation,
+        frame_cache=frame_cache,
     )
 
     print(

@@ -6,15 +6,16 @@
 #SBATCH --gres=gpu:h100:1
 #SBATCH --nodelist=scg020
 #SBATCH -N 1
-#SBATCH -c 8
+#SBATCH -c 32
 #SBATCH --mem=128G
-#SBATCH --time=24:00:00
+#SBATCH --time=96:00:00
 #SBATCH --output=logs/ssl-finetune-%j.out
 #SBATCH --error=logs/ssl-finetune-%j.err
 
 set -euo pipefail
 FOLD="${1:?fold id required (1-4)}"
-EXTRA="${2:-}"
+shift
+EXTRA=("$@")
 
 module load mamba/latest
 source activate sfx-hitfinder
@@ -25,4 +26,5 @@ python -m src.training.train_ssl_finetune \
     --config configs/ssl/mae_finetune.yaml \
     --fold "${FOLD}" \
     --pretrain-checkpoint "checkpoints/mae-vits16-fold${FOLD}-seed42/last.pt" \
-    ${EXTRA}
+    --cache-nvme "${CACHE_NVME:-/tmp/sfx_frame_cache}" \
+    "${EXTRA[@]}"

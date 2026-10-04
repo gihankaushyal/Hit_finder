@@ -6,6 +6,7 @@ from pathlib import Path
 
 import h5py
 import numpy as np
+import pytest
 import torch
 
 from src.data.dataloader import ssl_pretrain_loader
@@ -134,3 +135,30 @@ class TestSSLPretrainLoader:
         loader = ssl_pretrain_loader(paths, batch_size=2, num_workers=0, shuffle=False)
         batches = list(loader)
         assert len(batches) == _N // 2
+
+
+class TestAssemblyErrorPropagation:
+    def test_geometry_error_propagates_not_swallowed(self, tmp_path, monkeypatch):
+        from src.data.dataset import _compute_gcn_frame
+
+        cxi = tmp_path / "test.cxi"
+        with h5py.File(cxi, "w") as f:
+            f.create_dataset(
+                "entry_1/instrument_1/detector_1/description", data=b"AGIPD 1M"
+            )
+            f.create_dataset("entry_1/data_1/data", data=np.zeros((1, 16, 512, 128)))
+
+        def _raise(*_args, **_kwargs):
+            raise ValueError("boom")
+
+        monkeypatch.setattr("src.data.dataset.get_geometry", _raise)
+
+        with pytest.raises(ValueError, match="boom"):
+            _compute_gcn_frame(
+                path=cxi,
+                frame_idx=0,
+                desc="AGIPD 1M",
+                geom_cache={},
+                hitfinder=None,
+                last_geom_path_holder=[None],
+            )

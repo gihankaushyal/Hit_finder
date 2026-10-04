@@ -104,7 +104,7 @@ Cutout augmentation (3 holes, 32×32 px) respects a peak-protection zone of 8 px
 | Dataset | `src/data/dataset.py` → `AsymmetricCXIDataset` |
 | DataLoader | `src/data/dataloader.py` → `asymmetric_loader()` |
 | Model | `src/models/supervised.py` → `build_supervised_model()` |
-| Training entry point | `scripts/train_asymmetric.py` |
+| Training entry point | `src/training/train_asymmetric.py` |
 | Config | `configs/supervised/resnet18_asymmetric.yaml` |
 
 ---

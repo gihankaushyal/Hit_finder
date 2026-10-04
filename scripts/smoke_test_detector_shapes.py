@@ -3,8 +3,18 @@
 Reads frame 0 from one CXI file per detector, prints:
   - raw shape (detector-native, from read_frame)
   - assembled shape (intermediate 2D image before GCN/LCN/resize)
-  - output shape (should be 224×224 for all)
-  - which preprocessing path was taken (geometry-aware vs assembled)
+  - output shape (should be assembled shape + 2*PAD_BORDER_DEFAULT)
+
+Assembled shape and output shape are both derived from assemble_only(), the
+same function the production pipeline calls (src/preprocessing/pipeline.py) —
+this checks pad_border() adds the expected border, not a second,
+independently-computed assembly path. An earlier version of this script
+recomputed the assembled shape via a separate concat_data()+reshape() path
+(src/preprocessing/geometry.py::assemble_image()); that path diverges from
+assemble_only()'s PADAssembler-based assembly for AGIPD/ePix10k/Eiger4M
+(no gap pixels — PADAssembler places panels at lab-frame float positions,
+producing a different canvas than a plain reshape), which produced spurious
+FAILs unrelated to the pipeline itself.
 
 Usage:
     python scripts/smoke_test_detector_shapes.py
@@ -17,16 +27,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-import numpy as np
-
-from src.preprocessing.geometry import (
-    assemble_image,
-    extract_panels_from_canvas,
-    get_geometry,
-)
+from src.preprocessing.geometry import get_assembler, get_geometry
 from src.preprocessing.io import read_detector_description, read_frame
 from src.preprocessing.augment import PAD_BORDER_DEFAULT, pad_border
-from src.preprocessing.pipeline import _to_2d
+from src.preprocessing.pipeline import assemble_only
 
 DATA_ROOT = Path("/data/bioxfel/user/gihan/Resonet/production")
 
@@ -41,31 +45,10 @@ PASS = "\033[92mPASS\033[0m"
 FAIL = "\033[91mFAIL\033[0m"
 
 
-def _assemble_intermediate(raw: np.ndarray, desc: str) -> tuple[tuple[int, ...], str]:
-    """Return (assembled_shape, path_label) without running GCN/LCN/resize."""
-    if desc == "Jungfrau 4M":
-        assembled = _to_2d(raw)
-        return assembled.shape, "assembled"
-
-    pads = get_geometry(desc)
-    if desc == "AGIPD 1M":
-        panels = [
-            raw[m, a * 64 : (a + 1) * 64, :].astype(np.float32)
-            for m in range(16)
-            for a in range(8)
-        ]
-    else:
-        panels = extract_panels_from_canvas(raw.astype(np.float32), pads)
-
-    assembled = assemble_image(pads, panels)
-    assembled_2d = _to_2d(assembled)
-    return assembled_2d.shape, "geometry"
-
-
 def run():
     all_passed = True
 
-    header = f"\n{'Detector':<14}  {'Raw shape':<22}  {'Assembled shape':<18}  {'Output':<10}  {'Path':<10}  Result"
+    header = f"\n{'Detector':<14}  {'Raw shape':<22}  {'Assembled shape':<18}  {'Output':<10}  Result"
     print(header)
     print("-" * len(header))
 
@@ -76,17 +59,11 @@ def run():
 
             desc = read_detector_description(cxi_path)
 
-            assembled_shape, path_label = _assemble_intermediate(raw, desc)
+            pads = get_geometry(desc)
+            assembler = get_assembler(desc)
+            assembled_raw = assemble_only(raw, pads, desc, assembler=assembler)
+            assembled_shape = assembled_raw.shape
 
-            # Assembly + symmetric border padding (new pipeline: no resize to 224)
-            pads = get_geometry(desc) if desc != "Jungfrau 4M" else None
-            if pads is not None:
-                from src.preprocessing.geometry import get_assembler
-                from src.preprocessing.pipeline import assemble_only
-                assembler = get_assembler(desc)
-                assembled_raw = assemble_only(raw, pads, desc, assembler=assembler)
-            else:
-                assembled_raw = _to_2d(raw)
             padded = pad_border(assembled_raw)
             out_shape = padded.shape
             expected = (
@@ -100,14 +77,12 @@ def run():
 
             print(
                 f"{detector:<14}  {str(raw_shape):<22}  {str(assembled_shape):<18}  "
-                f"{str(out_shape):<10}  {path_label:<10}  {status}"
+                f"{str(out_shape):<10}  {status}"
             )
 
         except Exception as e:
             all_passed = False
-            print(
-                f"{detector:<14}  {'ERROR':<22}  {'—':<18}  {'—':<10}  {'—':<10}  {FAIL}  ({e})"
-            )
+            print(f"{detector:<14}  {'ERROR':<22}  {'—':<18}  {'—':<10}  {FAIL}  ({e})")
 
     print()
     if all_passed:

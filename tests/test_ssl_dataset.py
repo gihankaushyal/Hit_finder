@@ -8,7 +8,7 @@ import pytest
 import torch
 
 from src.data.dataset import SSLPretrainCXIDataset
-from src.data.dataloader import ssl_crop_loader
+from src.data.dataloader import _ssl_flatten_collate, ssl_crop_loader
 from src.hitfinders import MockHitfinder
 
 H, W = 512, 512
@@ -45,26 +45,35 @@ def _dataset(synthetic_cxi, **kwargs) -> SSLPretrainCXIDataset:
 
 
 class TestSSLPretrainDataset:
-    def test_len_is_frames_times_crops(self, synthetic_cxi):
-        ds = _dataset(synthetic_cxi, crops_per_frame=2)
-        assert len(ds) == N_FRAMES * 2
+    def test_len_is_frames_not_crops(self, synthetic_cxi):
+        """__len__ returns frame count regardless of crops_per_frame."""
+        ds1 = _dataset(synthetic_cxi, crops_per_frame=1)
+        ds2 = _dataset(synthetic_cxi, crops_per_frame=2)
+        assert len(ds1) == N_FRAMES
+        assert len(ds2) == N_FRAMES  # same: one item per frame
 
-    def test_item_shape_and_dtype(self, synthetic_cxi):
-        crop, peak_patches, valid_mask = _dataset(synthetic_cxi)[0]
-        assert crop.shape == (1, 224, 224)
-        assert crop.dtype == torch.float32
-        assert peak_patches.shape == (196,) and peak_patches.dtype == torch.bool
-        assert valid_mask.shape == (1, 224, 224)
+    def test_item_shape_and_dtype_single_crop(self, synthetic_cxi):
+        """crops_per_frame=1 returns (1,1,224,224), (1,196), (1,1,224,224)."""
+        crops, peak_patches, valid_mask = _dataset(synthetic_cxi, crops_per_frame=1)[0]
+        assert crops.shape == (1, 1, 224, 224)
+        assert crops.dtype == torch.float32
+        assert peak_patches.shape == (1, 196)
+        assert peak_patches.dtype == torch.bool
+        assert valid_mask.shape == (1, 1, 224, 224)
         assert valid_mask.dtype == torch.float32
 
+    def test_item_shape_and_dtype_multi_crop(self, synthetic_cxi):
+        """crops_per_frame=2 returns (2,1,224,224), (2,196), (2,1,224,224)."""
+        crops, peak_patches, valid_mask = _dataset(synthetic_cxi, crops_per_frame=2)[0]
+        assert crops.shape == (2, 1, 224, 224)
+        assert peak_patches.shape == (2, 196)
+        assert valid_mask.shape == (2, 1, 224, 224)
+
     def test_no_hitfinder_means_no_peak_patches(self, synthetic_cxi):
-        _, peak_patches, _ = _dataset(synthetic_cxi)[0]
+        _, peak_patches, _ = _dataset(synthetic_cxi, crops_per_frame=1)[0]
         assert not peak_patches.any()
 
     def test_hitfinder_centroids_map_to_patch_ids(self, synthetic_cxi):
-        # MockHitfinder returns a fixed centroid near the frame centre so a
-        # large fraction of random 224-crops contain it; with 16 crops/frame
-        # and a fixed seed the sweep below is deterministic.
         ds = _dataset(
             synthetic_cxi,
             crops_per_frame=16,
@@ -76,32 +85,80 @@ class TestSSLPretrainDataset:
             if peak_patches.any():
                 found = True
                 break
-        assert found  # some crop contains the centroid → mapped into a patch id
+        assert found
 
     def test_patch_id_mapping_helpers(self):
         from src.data.dataset import _centroid_map, _patch_ids_from_map
 
-        m = _centroid_map(np.array([[20.0, 35.0]]))  # x=20 → col 20, y=35 → row 35
+        m = _centroid_map(np.array([[20.0, 35.0]]))
         assert m[35, 20] == 1.0
         ids = _patch_ids_from_map(m > 0.5)
-        # 224/16 = 14-wide grid; row 35 → patch row 2, col 20 → patch col 1
         assert ids[2 * 14 + 1]
         assert ids.sum() == 1
 
     def test_deterministic_given_seed(self, synthetic_cxi):
-        a, _, _ = _dataset(synthetic_cxi)[3]
-        b, _, _ = _dataset(synthetic_cxi)[3]
+        a, _, _ = _dataset(synthetic_cxi, crops_per_frame=1)[3]
+        b, _, _ = _dataset(synthetic_cxi, crops_per_frame=1)[3]
         assert torch.equal(a, b)
 
-    def test_loader_batches(self, synthetic_cxi):
+    def test_multi_crops_differ_within_same_frame(self, synthetic_cxi):
+        """The two crops from the same frame are different random windows."""
+        crops, _, _ = _dataset(synthetic_cxi, crops_per_frame=2)[0]
+        assert not torch.equal(crops[0], crops[1])
+
+    def test_loader_batches_flatten_collate(self, synthetic_cxi):
+        """After flatten collate, batch shape is (batch_size, 1, 224, 224)."""
         dl = ssl_crop_loader(
             session_map={"s0": synthetic_cxi},
             session_ids=["s0"],
             batch_size=4,
             num_workers=0,
             shuffle=False,
+            crops_per_frame=1,
         )
         crops, peaks, vmasks = next(iter(dl))
         assert crops.shape == (4, 1, 224, 224)
         assert peaks.shape == (4, 196)
         assert vmasks.shape == (4, 1, 224, 224)
+
+    def test_getitem_returns_none_on_load_failure(self, synthetic_cxi, monkeypatch):
+        """A frame that fails to load must surface as None, not a disguised
+        all-zero sample — downstream collate relies on this to filter it out
+        rather than silently training on a degenerate crop/valid_mask."""
+        import src.data.dataset as dataset_mod
+
+        def _boom(*args, **kwargs):
+            raise RuntimeError("synthetic load failure")
+
+        monkeypatch.setattr(dataset_mod, "_load_gcn_frame", _boom)
+        ds = _dataset(synthetic_cxi, crops_per_frame=2)
+        with pytest.warns(UserWarning, match="skipping frame"):
+            item = ds[0]
+        assert item is None
+
+    def test_loader_multicrop_flatten(self, synthetic_cxi):
+        """crops_per_frame=2, batch_size=4: loader_batch=2 frames, flatten → 4 crops."""
+        dl = ssl_crop_loader(
+            session_map={"s0": synthetic_cxi},
+            session_ids=["s0"],
+            batch_size=4,
+            num_workers=0,
+            shuffle=False,
+            crops_per_frame=2,
+        )
+        crops, peaks, vmasks = next(iter(dl))
+        assert crops.shape == (4, 1, 224, 224)
+        assert peaks.shape == (4, 196)
+        assert vmasks.shape == (4, 1, 224, 224)
+
+
+class TestSSLFlattenCollate:
+    def test_filters_none_items(self, synthetic_cxi):
+        good = _dataset(synthetic_cxi, crops_per_frame=2)[0]
+        crops, peaks, vmasks = _ssl_flatten_collate([good, None, good])
+        assert crops.shape == (4, 1, 224, 224)
+        assert peaks.shape == (4, 196)
+        assert vmasks.shape == (4, 1, 224, 224)
+
+    def test_all_none_batch_returns_none(self):
+        assert _ssl_flatten_collate([None, None]) is None
