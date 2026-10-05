@@ -1,31 +1,34 @@
 #!/bin/bash
-# submit_ssl_pretrain_all.sh — Submit SSL MAE pretraining with shared NVMe staging.
+# submit_ssl_pretrain_all.sh — Orchestrate MAE SSL pretraining across LODO folds.
 #
-# Stages all four CXI detector directories to /tmp/sfx_stage_shared once, then
-# launches the requested fold training jobs in parallel. All jobs are pinned to
-# scg020 so they share the same /tmp NVMe filesystem (~336 GB). A cleanup job
-# removes the shared stage directory after all fold jobs finish (pass or fail).
+# Stages each fold's frame-cache working set to /tmp/sfx_frame_cache on NVMe,
+# runs that fold's pretraining job from NVMe, then cleans up before moving to
+# the next fold. Folds run sequentially because each fold's cache working set
+# fills the NVMe tier — they cannot overlap. All jobs are pinned to scg020 so
+# they share the same /tmp NVMe filesystem.
 #
 # Job chain (SLURM dependencies):
-#   stage_ssl_data.sh  →  [fold jobs in parallel]  →  cleanup_ssl_stage.sh
+#   stage(1) → pretrain(1) → cleanup(1)
+#                                ↓ afterany
+#                             stage(2) → pretrain(2) → cleanup(2) → …
 #
 # Usage:
-#   bash scripts/submit_ssl_pretrain_all.sh [OPTIONS] <fold_id> [fold_id ...]
-#
-# Arguments:
-#   fold_id   One or more fold IDs (1–4) to train. At least one required.
+#   bash scripts/submit_ssl_pretrain_all.sh [OPTIONS]
 #
 # Options:
-#   -h, --help   Show this help message and exit.
+#   --folds <1 2 3 4>   Space-separated fold IDs to run (default: 1 2 3 4).
+#   --epochs <N>        Optional epoch count override, passed to every fold.
+#   -h, --help          Show this help message and exit.
 #
 # Examples:
-#   bash scripts/submit_ssl_pretrain_all.sh 3 4       # rerun folds 3 and 4
-#   bash scripts/submit_ssl_pretrain_all.sh 1 2 3 4   # full 4-fold run
+#   bash scripts/submit_ssl_pretrain_all.sh                  # all 4 folds, full run
+#   bash scripts/submit_ssl_pretrain_all.sh --folds 3 4      # skip folds 1-2 (already done)
+#   bash scripts/submit_ssl_pretrain_all.sh --epochs 100     # smoke run, all folds
 #
 # See also:
-#   scripts/submit_ssl_pretrain.sh   single-fold submission (private staging)
-#   scripts/stage_ssl_data.sh        staging job (called automatically)
-#   scripts/cleanup_ssl_stage.sh     cleanup job (called automatically)
+#   scripts/submit_ssl_pretrain.sh    single-fold submission (reads CACHE_NVME env var)
+#   scripts/stage_frame_cache.sh      per-fold staging job (called automatically)
+#   scripts/cleanup_ssl_stage.sh      cleanup job (called automatically)
 
 set -euo pipefail
 
@@ -33,49 +36,57 @@ usage() {
     sed -n '2,/^set -/{ /^set -/d; s/^# \{0,1\}//; p }' "$0"
 }
 
-if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
-    usage
-    exit 0
-fi
+FOLDS=(1 2 3 4)
+EPOCHS=""
 
-FOLDS=("$@")
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -h|--help) usage; exit 0 ;;
+        --folds) shift; FOLDS=(); while [[ $# -gt 0 && "$1" =~ ^[1-4]$ ]]; do FOLDS+=("$1"); shift; done ;;
+        --epochs) shift; EPOCHS="${1:?--epochs requires a value}"; shift ;;
+        *) echo "Error: unknown option '$1'" >&2; echo "Run '$0 --help' for usage." >&2; exit 1 ;;
+    esac
+done
+
 if [ "${#FOLDS[@]}" -eq 0 ]; then
-    echo "Error: at least one fold_id required." >&2
-    echo "Run '$0 --help' for usage." >&2
-    exit 1
+    echo "Error: no valid fold IDs provided." >&2; exit 1
 fi
 
-# Validate all fold IDs before submitting anything.
 for fold in "${FOLDS[@]}"; do
     if [[ ! "${fold}" =~ ^[1-4]$ ]]; then
-        echo "Error: invalid fold_id '${fold}' — must be 1, 2, 3, or 4." >&2
-        exit 1
+        echo "Error: invalid fold_id '${fold}' — must be 1–4." >&2; exit 1
     fi
 done
 
-STAGE="/tmp/sfx_stage_shared"
+mkdir -p logs
+CACHE_NVME="/tmp/sfx_frame_cache"
+CONFIG="configs/ssl/mae_pretrain.yaml"
 
-# 1. Submit staging job.
-STAGE_JID=$(sbatch --parsable scripts/stage_ssl_data.sh)
-echo "Staging job:  ${STAGE_JID}"
-
-# 2. Submit fold training jobs, each dependent on staging succeeding.
-FOLD_JIDS=()
+# Sequential fold slots: stage(N) → pretrain(N) → cleanup(N) → stage(N+1) → …
+# Each fold's cache working set fills NVMe, so folds cannot overlap.
+PREV_DEP=""
 for fold in "${FOLDS[@]}"; do
-    JID=$(SHARED_STAGE="${STAGE}" sbatch --parsable \
-        --dependency=afterok:"${STAGE_JID}" \
-        --export=ALL,SHARED_STAGE="${STAGE}" \
-        scripts/submit_ssl_pretrain.sh "${fold}")
-    FOLD_JIDS+=("${JID}")
-    echo "Fold ${fold} job: ${JID} (depends on ${STAGE_JID})"
-done
+    if [ -n "${PREV_DEP}" ]; then
+        STAGE_JID=$(sbatch --parsable --dependency=afterany:"${PREV_DEP}" \
+            --export=ALL,CONFIG="${CONFIG}" \
+            scripts/stage_frame_cache.sh "${fold}")
+    else
+        STAGE_JID=$(sbatch --parsable \
+            --export=ALL,CONFIG="${CONFIG}" \
+            scripts/stage_frame_cache.sh "${fold}")
+    fi
+    echo "Stage fold ${fold}:    ${STAGE_JID}"
 
-# 3. Submit cleanup job, runs after all folds finish (pass or fail).
-DEPS=$(IFS=:; echo "${FOLD_JIDS[*]}")
-CLEANUP_JID=$(sbatch --parsable \
-    --dependency=afterany:"${DEPS}" \
-    scripts/cleanup_ssl_stage.sh)
-echo "Cleanup job:  ${CLEANUP_JID} (depends on ${DEPS})"
+    JID=$(sbatch --parsable --dependency=afterok:"${STAGE_JID}" \
+        --export=ALL,CACHE_NVME="${CACHE_NVME}" \
+        scripts/submit_ssl_pretrain.sh "${fold}" "${EPOCHS}")
+    echo "Pretrain fold ${fold}: ${JID} (after ${STAGE_JID})"
+
+    CLEAN_JID=$(sbatch --parsable --dependency=afterany:"${JID}" \
+        scripts/cleanup_ssl_stage.sh)
+    echo "Cleanup fold ${fold}:  ${CLEAN_JID} (after ${JID})"
+    PREV_DEP="${CLEAN_JID}"
+done
 
 echo ""
 echo "Watch queue:  squeue -u \$USER"
