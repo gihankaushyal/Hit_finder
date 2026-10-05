@@ -11,8 +11,10 @@ import json
 from collections.abc import Callable
 from pathlib import Path
 
+import h5py
 import numpy as np
 import torch
+import torch.nn as nn
 
 from src.data.dataloader import asymmetric_loader
 from src.data.frame_cache import FrameCache, verify_cache_or_raise
