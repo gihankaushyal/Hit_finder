@@ -1,0 +1,38 @@
+# crops_per_frame=4 variant of resnet18_epix_cache_smoketest.yaml — same
+# ePix10k intra-detector smoketest, same 3 epochs, 4 independently-augmented
+# crops drawn per cached frame per item. Compare val AP/F1 against the
+# crops_per_frame=1 baseline (resnet18_epix_cache_smoketest.yaml).
+# Run with: python -u -m src.training.train_asymmetric --config configs/supervised/resnet18_epix_cache_smoketest_crops4.yaml --intra
+model:
+  backbone: resnet18
+  pretrained: true
+  num_classes: 2
+
+training:
+  epochs: 3
+  learning_rate: 1.0e-4
+  early_stopping_patience: 5
+
+lodo:
+  detector_dirs:
+    ePix10k: /data/bioxfel/user/gihan/Resonet/production/epix10k_20k
+  cxi_pattern: "compressed*.cxi"
+  label_key: entry_1/labels/hit
+
+asymmetric:
+  hit_frac: 0.5
+  hard_neg_max_attempts: 50
+  n_cutout_holes: 3
+  cutout_hole_size: 32
+  crops_per_frame: 4
+
+benchmark:
+  aggregation: vote
+  min_hit_patches: 3
+  patch_stride: 224
+
+cache:
+  enabled: true
+
+wandb:
+  run_suffix: "-cache-smoketest-crops4"
