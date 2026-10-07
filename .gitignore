@@ -65,3 +65,9 @@ docs/progress_notes.md
 
 # VS Code
 .vscode/
+# Playwright CLI output (may contain credentials)
+.playwright-cli/
+.playwright/
+
+# Local kanban scratch file (synced to GitHub issues by the dashboard)
+phase-05-kanban.md
