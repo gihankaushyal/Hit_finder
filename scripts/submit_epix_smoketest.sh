@@ -18,5 +18,6 @@ source .secrets/wandb.env
 
 python -u -m src.training.train_asymmetric \
     --config configs/supervised/resnet18_epix_smoketest.yaml \
+    --run-name-prefix resnet18smoke-asymmetric-v1 \
     --intra \
     --tags supervised,resnet18,epix-smoketest
