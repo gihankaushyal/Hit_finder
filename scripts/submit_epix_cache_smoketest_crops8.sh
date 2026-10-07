@@ -20,5 +20,6 @@ source .secrets/wandb.env
 # which lacks torch/scipy/reborn/etc.) — invoke the env's python directly instead.
 /home/gketawal/.conda/envs/sfx-hitfinder/bin/python -u -m src.training.train_asymmetric \
     --config configs/supervised/resnet18_epix_cache_smoketest_crops8.yaml \
+    --run-name-prefix resnet18smokecrops8-asymmetric-v2 \
     --intra \
     --tags supervised,resnet18,epix-cache-smoketest,crops8

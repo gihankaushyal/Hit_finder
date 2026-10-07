@@ -23,7 +23,13 @@ import numpy as np
 
 DETECTOR_ORDER = {1: "AGIPD", 2: "JUNGFRAU_4M", 3: "ePix10k", 4: "Eiger4M"}
 
-_RUN_DIR_RE = re.compile(r"^(?P<prefix>.+)-fold\d+-seed\d+$")
+# Trailing ".*" tolerates an optional wandb.run_suffix appended after "-seed<S>"
+# (e.g. "vits16-mae-finetune-fold1-seed42-v2") — without it, those directories
+# are silently invisible to discover_prefixes(). Suffixed and unsuffixed runs
+# under the same base prefix still group together here, same as the existing
+# glob ambiguity in load_results() below; this is a known limitation, not a
+# new one introduced by this grouping.
+_RUN_DIR_RE = re.compile(r"^(?P<prefix>.+)-fold\d+-seed\d+.*$")
 
 # Doc-only generations that predate this checkpoint format or have since been
 # overwritten on disk. Source: docs/progress_notes.md. These never come from

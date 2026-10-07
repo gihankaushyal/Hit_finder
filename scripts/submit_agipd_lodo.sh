@@ -18,5 +18,6 @@ source .secrets/wandb.env
 
 python -u -m src.training.train_asymmetric \
     --config configs/supervised/resnet18_asymmetric.yaml \
+    --run-name-prefix legacy-asymmetric-v1 \
     --folds 1 \
     --tags supervised,resnet18,asymmetric-pipeline,agipd-lodo-rerun
