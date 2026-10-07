@@ -142,6 +142,21 @@ Hitfinder-guided cropping (Path A: centroid-centred, label=1 / Path B: hard-nega
 - **Variance collapsed 8×:** ±0.167 → ±0.021 — the pipeline is now consistently effective across all four detector types.
 - Full per-fold in-domain breakdown → [docs/detailed_notes.md](docs/detailed_notes.md)
 
+### Asymmetric Pipeline v2 — frame-cache-backed training
+
+Same preprocessing as the baseline above, now backed by the on-disk frame cache (bit-identical through GCN per the cache's bit-exactness gate) — the gain below comes from cheaper epochs under the same early-stopping budget, not a preprocessing change.
+
+| Fold | Held-out | Cross AP | Cross AUC | Cross F1 | Δ AP vs. v1 |
+|------|----------|----------|-----------|----------|------|
+| 1 | AGIPD | 0.7897 | 0.8473 | 0.7281 | −0.018 |
+| 2 | JUNGFRAU 4M | 0.8727 | 1.0000 | 0.7724 | +0.014 |
+| 3 | ePix10k | 0.9393 | 1.0000 | 0.8994 | +0.081 |
+| 4 | Eiger4M | 0.9980 | 0.9998 | 0.9921 | +0.165 |
+| **Mean** | | **0.900 ± 0.090** | | | **+0.061** |
+
+- **Mean cross AP improved to 0.900 ± 0.090**, but with higher fold-to-fold variance than v1 (±0.021 → ±0.090) — AGIPD is the only fold that regressed, while ePix10k and Eiger4M improved substantially.
+- Full details and discussion → [docs/progress_notes.md §21](docs/progress_notes.md)
+
 ## Setup
 
 **Compute:** ASU Sol HPC — dedicated H100 (scg020) + A100 pool · SLURM scheduler
