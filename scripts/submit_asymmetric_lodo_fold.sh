@@ -7,22 +7,37 @@
 # scripts/stage_frame_cache.sh); omit it to read from the default NVMe path
 # (empty unless staged beforehand).
 #
+# Run naming convention (--run-name-prefix, REQUIRED): <backbone>-asymmetric-v<N>
+# e.g. resnet18-asymmetric-v2. See src/training/train_asymmetric.py's module
+# docstring for the full rationale. If a checkpoint already exists for the
+# resolved run name (checkpoints/<prefix>-fold<N>-seed<S>/best.pt),
+# train_asymmetric.py exits with a collision error unless RESUME_FLAG below
+# resolves to --resume-training or --override-training. This script runs
+# non-interactively on the compute node (no tty) — the interactive "resume or
+# override?" prompt lives in submit_asymmetric_lodo_all.sh, which runs directly
+# in the user's terminal *before* calling sbatch, and passes its answer down
+# via the RESUME_FLAG environment variable (--export=ALL,RESUME_FLAG=...).
+#
 # Usage:
-#   sbatch scripts/submit_asymmetric_lodo_fold.sh <fold_id>
+#   sbatch scripts/submit_asymmetric_lodo_fold.sh <fold_id> <run_name_prefix>
 #   bash   scripts/submit_asymmetric_lodo_fold.sh --help
 #
 # Arguments:
-#   fold_id   LODO fold to train (1–4). Determines which detector is held out.
+#   fold_id           LODO fold to train (1–4). Determines which detector is held out.
+#   run_name_prefix   Required. <backbone>-asymmetric-v<N>, e.g. resnet18-asymmetric-v2.
 #
 # Options:
 #   -h, --help   Show this help message and exit.
 #
 # Examples:
-#   sbatch scripts/submit_asymmetric_lodo_fold.sh 3   # train fold 3
+#   sbatch scripts/submit_asymmetric_lodo_fold.sh 3 resnet18-asymmetric-v2
 #
 # Environment variables (set automatically by submit_asymmetric_lodo_all.sh):
-#   CACHE_NVME   Path to this fold's NVMe-staged frame-cache tier
-#                (default /tmp/sfx_frame_cache). See scripts/stage_frame_cache.sh.
+#   CACHE_NVME    Path to this fold's NVMe-staged frame-cache tier
+#                 (default /tmp/sfx_frame_cache). See scripts/stage_frame_cache.sh.
+#   RESUME_FLAG   --resume-training or --override-training, resolved by the
+#                 orchestrator's interactive prompt (default --resume-training
+#                 when running this script standalone and no checkpoint exists).
 #
 # See also:
 #   scripts/submit_asymmetric_lodo_all.sh   multi-fold submission with per-fold NVMe staging
@@ -53,6 +68,8 @@ if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
 fi
 
 FOLD="${1:?fold id required (1-4)}"
+RUN_NAME_PREFIX="${2:?run_name_prefix required, e.g. resnet18-asymmetric-v2}"
+RESUME_FLAG="${RESUME_FLAG:---resume-training}"
 
 module load mamba/latest
 source activate sfx-hitfinder
@@ -61,7 +78,8 @@ mkdir -p logs
 
 python -u -m src.training.train_asymmetric \
     --config configs/supervised/resnet18_asymmetric.yaml \
+    --run-name-prefix "${RUN_NAME_PREFIX}" \
     --folds "${FOLD}" \
     --cache-nvme "${CACHE_NVME:-/tmp/sfx_frame_cache}" \
-    --resume-training \
+    "${RESUME_FLAG}" \
     --tags supervised,resnet18,asymmetric-pipeline,lodo-cached
