@@ -10,7 +10,13 @@ export class EventBus {
   }
 
   emit(e: DashEvent): void {
-    for (const fn of [...this.listeners]) fn(e);
+    for (const fn of [...this.listeners]) {
+      try {
+        fn(e);
+      } catch (err) {
+        console.error("event listener failed", err);
+      }
+    }
   }
 
   subscribe(fn: Listener): () => void {

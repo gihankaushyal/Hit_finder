@@ -38,10 +38,17 @@ export function createApp(deps: Deps): Hono {
   const { config, token } = deps;
   const app = new Hono();
 
+  app.use("*", async (c, next) => {
+    await next();
+    c.header("X-Content-Type-Options", "nosniff");
+    if (c.res.status === 401 || c.res.status === 302) c.header("Cache-Control", "no-store");
+  });
+
   const api = new Hono();
   api.use("*", authMiddleware(token));
   api.get("/health", (c) => c.json({ ok: true }));
   deps.routes?.(api);
+  api.all("*", (c) => c.json({ error: "not found" }, 404));
   app.route("/api", api);
 
   app.get("*", (c) => {
@@ -57,7 +64,13 @@ export function createApp(deps: Deps): Hono {
     const root = path.resolve(config.webDist);
     if (!fs.existsSync(root)) return c.json({ error: "dashboard build not found (run npm run build)" }, 404);
 
-    const requested = path.resolve(root, "." + decodeURIComponent(c.req.path));
+    let decoded: string | null;
+    try {
+      decoded = decodeURIComponent(c.req.path);
+    } catch {
+      decoded = null; // malformed escape: fall back to the SPA index
+    }
+    const requested = decoded === null ? root : path.resolve(root, "." + decoded);
     const inRoot = requested === root || requested.startsWith(root + path.sep);
     const direct = inRoot ? readFileIfFile(requested) : null;
     const body = direct ?? readFileIfFile(path.join(root, "index.html"));

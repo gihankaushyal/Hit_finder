@@ -9,17 +9,37 @@ const TOKEN_BYTES = 32;
 const DIR_MODE = 0o700;
 const FILE_MODE = 0o600;
 
+const TOKEN_PATTERN = new RegExp(`^[0-9a-f]{${TOKEN_BYTES * 2}}$`);
+
+function readValidToken(file: string): string | null {
+  try {
+    const existing = fs.readFileSync(file, "utf8").trim();
+    if (!TOKEN_PATTERN.test(existing)) return null;
+    fs.chmodSync(file, FILE_MODE);
+    return existing;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+    return null;
+  }
+}
+
 export function loadOrCreateToken(stateDir: string): string {
   const file = path.join(stateDir, "token");
   fs.mkdirSync(stateDir, { recursive: true, mode: DIR_MODE });
-  try {
-    const existing = fs.readFileSync(file, "utf8").trim();
-    if (existing) return existing;
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
-  }
+  fs.chmodSync(stateDir, DIR_MODE);
+  const existing = readValidToken(file);
+  if (existing) return existing;
   const token = crypto.randomBytes(TOKEN_BYTES).toString("hex");
-  fs.writeFileSync(file, token, { mode: FILE_MODE });
+  try {
+    // Replace a malformed file; "wx" below then makes concurrent starters agree.
+    fs.rmSync(file, { force: true });
+    fs.writeFileSync(file, token, { mode: FILE_MODE, flag: "wx" });
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+    const winner = readValidToken(file);
+    if (winner) return winner;
+    throw err;
+  }
   fs.chmodSync(file, FILE_MODE);
   return token;
 }

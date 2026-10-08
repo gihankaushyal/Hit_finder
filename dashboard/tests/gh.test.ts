@@ -38,6 +38,14 @@ describe("createGh", () => {
     const err = (await createGh(runner, cfg).json(["x"]).catch((e: unknown) => e)) as GhError;
     expect(err).toBeInstanceOf(GhError);
     expect(err.message).toContain("invalid JSON");
+    expect(err.code).toBe(-1);
+    expect(err.publicMessage).toBe("GitHub CLI returned invalid JSON");
+  });
+  it("exposes a fixed publicMessage and truncates stderr in message", async () => {
+    const { runner } = fake({ stdout: "", stderr: "x".repeat(2000), code: 2 });
+    const err = (await createGh(runner, cfg).text(["a"]).catch((e: unknown) => e)) as GhError;
+    expect(err.publicMessage).toBe("GitHub CLI failed");
+    expect(err.message.length).toBeLessThan(700);
   });
   it("text trims stdout and throws on failure", async () => {
     const ok = fake({ stdout: "  hello\n", stderr: "", code: 0 });
