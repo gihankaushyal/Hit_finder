@@ -402,8 +402,13 @@ function writeAtomic(target: string, text: string): void {
   fs.renameSync(tmp, target);
 }
 
+/** Where the sync state lives; its existence marks that the first import has been done. */
+export function syncStatePath(config: Pick<Config, "stateDir">): string {
+  return path.join(config.stateDir, STATE_FILE);
+}
+
 export function fileSyncDeps(config: Config, gh: Gh): SyncDeps {
-  const statePath = path.join(config.stateDir, STATE_FILE);
+  const statePath = syncStatePath(config);
   // Write through a symlink instead of replacing it.
   const kanbanTarget = (): string => {
     try {

@@ -38,6 +38,8 @@ export interface Task {
 export interface Board {
   columns: Record<TaskStatus, Task[]>;
   conflicts: string[]; lastSyncAt: string | null; syncError: string | null;
+  /** False until the first import has been run from the CLI; the board is then read from the markdown only. */
+  imported: boolean;
 }
 
 export type DashEvent =

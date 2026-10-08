@@ -20,6 +20,12 @@ export class FakeGh implements Gh {
   /** Throw on the Nth create (1-based). */
   failCreateAt: number | null = null;
   failClose = false;
+  /** Throw on the next `json` call only. */
+  failNextJson = false;
+  /** Delay (ms) added to every call, for concurrency tests. */
+  delayMs = 0;
+  inFlight = 0;
+  maxInFlight = 0;
   /** Called after each successful create, with the new issue number. */
   onCreate: (n: number) => void = () => {};
   /** Output override for `issue create`. */
@@ -36,13 +42,26 @@ export class FakeGh implements Gh {
     return issue;
   }
 
+  private async track(): Promise<void> {
+    this.inFlight++;
+    this.maxInFlight = Math.max(this.maxInFlight, this.inFlight);
+    if (this.delayMs > 0) await new Promise((r) => setTimeout(r, this.delayMs));
+    this.inFlight--;
+  }
+
   async json<T>(args: string[]): Promise<T> {
     this.jsonCalls.push(args);
+    await this.track();
+    if (this.failNextJson) {
+      this.failNextJson = false;
+      throw new Error("gh list failed");
+    }
     return [...this.issues.values()].map((i) => ({ ...i, labels: i.labels.map((name) => ({ name })) })) as T;
   }
 
   async text(args: string[]): Promise<string> {
     this.writes.push(args);
+    await this.track();
     const [group, verb] = args;
     const flag = (name: string) => args.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3);
     if (group === "label") return "";
@@ -63,7 +82,12 @@ export class FakeGh implements Gh {
       if (this.failClose) throw new Error("gh close failed");
       issue.state = "CLOSED";
     } else if (verb === "reopen") issue.state = "OPEN";
-    else if (verb === "edit") issue.body = flag("body") ?? issue.body;
+    else if (verb === "edit") {
+      issue.body = flag("body") ?? issue.body;
+      const remove = args.filter((a) => a.startsWith("--remove-label=")).map((a) => a.slice(15));
+      const add = args.filter((a) => a.startsWith("--add-label=")).map((a) => a.slice(12));
+      issue.labels = [...issue.labels.filter((l) => !remove.includes(l)), ...add.filter((l) => !issue.labels.includes(l))];
+    }
     return "";
   }
 
