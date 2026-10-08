@@ -388,6 +388,105 @@ describe("runSync safety guarantees", () => {
   });
 });
 
+describe("runSync resumability", () => {
+  const ONE = "## A\n\n- [ ] one\n";
+
+  it("24. an issue orphaned by a file change during creation is adopted by the next run, not duplicated", async () => {
+    const { h, deps, gh } = mk(ONE);
+    const edited = ONE + "\n- [ ] user added this meanwhile\n";
+    gh.onCreate = () => {
+      h.file = edited;
+    };
+    const r1 = await sync(deps);
+    expect(r1.aborted).toBe(true);
+    expect(Object.keys(h.state.pending ?? {})).toEqual(["1"]);
+    gh.onCreate = () => {};
+    const r2 = await sync(deps);
+    expect(r2.aborted).toBe(false);
+    expect(r2.actions[0]).toEqual({ type: "link", issue: 1, title: "one" });
+    expect(gh.count("create")).toBe(2); // "one" once, the user's line once
+    expect([...gh.issues.values()].map((i) => i.title).sort()).toEqual(["one", "user added this meanwhile"]);
+    expect(h.file).toContain("- [ ] one <!-- gh:#1 -->");
+    expect(h.state.pending).toEqual({});
+    expect((await sync(deps)).actions).toEqual([]);
+  });
+
+  it("25. dry run reports the adoption and changes nothing", async () => {
+    const { h, deps, gh } = mk(ONE);
+    gh.onCreate = () => {
+      h.file = ONE + "\n";
+    };
+    await sync(deps);
+    const writes = gh.writes.length;
+    const stateBefore = JSON.stringify(h.state);
+    const fileBefore = h.file;
+    const r = await sync(deps, true);
+    expect(r.actions).toEqual([{ type: "link", issue: 1, title: "one" }]);
+    expect(gh.writes).toHaveLength(writes);
+    expect(JSON.stringify(h.state)).toBe(stateBefore);
+    expect(h.file).toBe(fileBefore);
+  });
+
+  it("26. a pending link whose item was deleted is reported under notInFile and not re-appended", async () => {
+    const { h, deps, gh } = mk(ONE);
+    gh.onCreate = () => {
+      h.file = "# nothing left\n";
+    };
+    await sync(deps);
+    gh.onCreate = () => {};
+    const r = await sync(deps);
+    expect(r.notInFile).toEqual([1]);
+    expect(r.actions).toEqual([]);
+    expect(h.file).toBe("# nothing left\n");
+    expect(gh.count("create")).toBe(1);
+  });
+
+  it("27. an edited item (different title or body) is not adopted into the orphan", async () => {
+    const { h, deps, gh } = mk(ONE);
+    gh.onCreate = () => {
+      h.file = "## A\n\n- [ ] one changed\n";
+    };
+    await sync(deps);
+    gh.onCreate = () => {};
+    const r = await sync(deps);
+    expect(r.actions.map((a) => a.type)).toEqual(["create"]);
+    expect(r.notInFile).toEqual([1]);
+  });
+
+  it("28. state is saved with the pending link before the marker is written", async () => {
+    const { h, deps } = mk(ONE);
+    const order: string[] = [];
+    const write = deps.writeFile;
+    deps.writeFile = (t) => {
+      order.push(`write:${Object.keys(h.state.pending ?? {}).join()}`);
+      write(t);
+    };
+    await sync(deps);
+    expect(order).toEqual(["write:1"]);
+    expect(h.state.pending).toEqual({});
+  });
+
+  it("29. a checked item whose issue is open and has no state record is closed, and the box stays ticked", async () => {
+    const { h, deps, gh } = mk("## A\n\n- [x] done <!-- gh:#1 -->\n");
+    gh.seed({ title: "done" });
+    const r = await sync(deps);
+    expect(r.actions).toEqual([{ type: "close", issue: 1 }]);
+    expect(gh.issues.get(1)!.state).toBe("CLOSED");
+    expect(h.file).toBe("## A\n\n- [x] done <!-- gh:#1 -->\n");
+    expect(h.fileWrites).toBe(0);
+    expect((await sync(deps)).actions).toEqual([]);
+  });
+
+  it("30. an unchecked item whose issue is closed and has no state record still follows GitHub", async () => {
+    const { h, deps, gh } = mk("## A\n\n- [ ] done <!-- gh:#1 -->\n");
+    gh.seed({ title: "done", state: "CLOSED" });
+    const r = await sync(deps);
+    expect(r.actions).toEqual([{ type: "md-check", issue: 1, checked: true }]);
+    expect(h.file).toBe("## A\n\n- [x] done <!-- gh:#1 -->\n");
+    expect(gh.count("reopen")).toBe(0);
+  });
+});
+
 describe("fileSyncDeps", () => {
   it("reads, atomically rewrites the kanban file and persists state under stateDir", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dash-ks-"));

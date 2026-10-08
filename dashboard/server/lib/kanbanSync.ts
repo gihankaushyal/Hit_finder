@@ -22,9 +22,15 @@ export interface SyncStateItem {
 export interface SyncState {
   labelsEnsured: boolean;
   items: Record<string, SyncStateItem>;
+  /**
+   * Issues created by a run that stopped before their marker reached the file, keyed by issue number.
+   * `hash` identifies the item (title plus body) so the next run adopts the issue instead of creating another.
+   */
+  pending?: Record<string, { hash: string }>;
 }
 export type SyncAction =
   | { type: "create"; title: string; labels: string[]; closed: boolean }
+  | { type: "link"; issue: number; title: string } // adopt an issue created by an interrupted run
   | { type: "close"; issue: number }
   | { type: "reopen"; issue: number }
   | { type: "update-body"; issue: number }
@@ -92,6 +98,7 @@ export async function listTasks(gh: Gh): Promise<GhTask[]> {
 const sha = (s: string): string => crypto.createHash("sha256").update(s).digest("hex");
 const footerFor = (section: string): string => `\n\n_Synced from phase-05-kanban.md, section: ${section}_`;
 const issueBody = (item: K.MdItem): string => (K.itemBody(item) + footerFor(item.section)).slice(0, BODY_MAX_CHARS);
+const createHash = (title: string, item: K.MdItem): string => sha(`${title}\0${issueBody(item)}`);
 const issueNumberFrom = (out: string): number | null => {
   const m = /\/issues\/(\d+)\s*$/.exec(out.trim());
   return m ? Number(m[1]) : null;
@@ -104,6 +111,12 @@ interface CreateOp {
   item: K.MdItem;
   title: string;
   labels: string[];
+  hash: string;
+}
+interface LinkOp {
+  item: K.MdItem;
+  title: string;
+  issue: number;
 }
 interface AppendOp {
   task: GhTask;
@@ -127,17 +140,25 @@ async function execute(d: SyncDeps, dryRun: boolean): Promise<SyncReport> {
   const startText = d.readFile();
   const doc = startText === null ? null : K.parseKanban(startText);
   const loaded = d.loadState();
-  const state: SyncState = { labelsEnsured: loaded.labelsEnsured === true, items: { ...(loaded.items ?? {}) } };
+  const state: SyncState = {
+    labelsEnsured: loaded.labelsEnsured === true,
+    items: { ...(loaded.items ?? {}) },
+    pending: { ...(loaded.pending ?? {}) },
+  };
   const savedSnapshot = JSON.stringify(state);
 
   // ---- plan (pure: no gh calls, no writes) ----
   const linkedOps: LinkedOp[] = [];
   const createOps: CreateOp[] = [];
+  const linkOps: LinkOp[] = [];
   const appendOps: AppendOp[] = [];
   const linkedItems: K.MdItem[] = [];
   const referenced = new Set<number>();
 
   if (doc) {
+    // A pending link whose issue is already marked in the file is resolved (the run died before saving state).
+    for (const item of K.items(doc)) if (item.issue !== null) delete state.pending![String(item.issue)];
+    const adopted = new Set<number>();
     for (const item of K.items(doc)) {
       if (item.issue === null) {
         const title = K.itemTitle(item).slice(0, TITLE_MAX_CHARS).trim();
@@ -147,7 +168,25 @@ async function execute(d: SyncDeps, dryRun: boolean): Promise<SyncReport> {
         } else if (title.includes("\0") || body.includes("\0")) {
           report.skipped.push({ title, section: item.section, reason: "contains a NUL character" });
         } else {
-          createOps.push({ item, title, labels: labelsForSection(item.section) });
+          const hash = createHash(title, item);
+          const pendingNumbers = Object.entries(state.pending!)
+            .filter(([n, p]) => p.hash === hash && !adopted.has(Number(n)))
+            .map(([n]) => Number(n))
+            .sort((a, b) => a - b);
+          if (pendingNumbers.length > 0) {
+            const n = pendingNumbers[0];
+            adopted.add(n);
+            if (byNumber.has(n)) linkOps.push({ item, title, issue: n });
+            else {
+              report.skipped.push({
+                title,
+                section: item.section,
+                reason: `#${n} was created for it by an interrupted run but is not visible on GitHub yet; not creating a duplicate`,
+              });
+            }
+          } else {
+            createOps.push({ item, title, labels: labelsForSection(item.section), hash });
+          }
         }
         continue;
       }
@@ -165,7 +204,10 @@ async function execute(d: SyncDeps, dryRun: boolean): Promise<SyncReport> {
       linkedItems.push(item);
       const closed = task.state === "CLOSED";
       const last = state.items[String(n)];
-      if (item.checked !== closed) {
+      if (!last && item.checked && !closed) {
+        // Marker present, no record: an import that stopped before closing the issue. Finish it.
+        linkedOps.push({ kind: "close", item, issue: n });
+      } else if (item.checked !== closed) {
         const mdChanged = last ? item.checked !== last.checked : false;
         const ghChanged = last ? closed !== last.closed : false;
         if (ghChanged || !last) {
@@ -181,7 +223,8 @@ async function execute(d: SyncDeps, dryRun: boolean): Promise<SyncReport> {
     }
     for (const task of [...tasks].sort((a, b) => a.number - b.number)) {
       if (referenced.has(task.number)) continue;
-      if (state.items[String(task.number)]) report.notInFile.push(task.number);
+      if (adopted.has(task.number)) continue;
+      if (state.items[String(task.number)] || state.pending![String(task.number)]) report.notInFile.push(task.number);
       else appendOps.push({ task, closed: task.state === "CLOSED" });
     }
   }
@@ -194,7 +237,11 @@ async function execute(d: SyncDeps, dryRun: boolean): Promise<SyncReport> {
   const appendAction = (op: AppendOp): SyncAction => ({ type: "md-append", issue: op.task.number, title: op.task.title });
 
   if (dryRun) {
-    report.actions.push(...linkedOps.map(toAction), ...createOps.map(createAction), ...appendOps.map(appendAction));
+    report.actions.push(
+      ...linkedOps.map(toAction),
+      ...linkOps.map((op): SyncAction => ({ type: "link", issue: op.issue, title: op.title })),
+      ...createOps.map(createAction), ...appendOps.map(appendAction),
+    );
     return report;
   }
 
@@ -240,8 +287,8 @@ async function execute(d: SyncDeps, dryRun: boolean): Promise<SyncReport> {
   if (!state.labelsEnsured) {
     for (const l of TASK_LABELS) await d.gh.text(["label", "create", l.name, flagArg("color", l.color), "--force"]);
     state.labelsEnsured = true;
-    saveIfChanged();
   }
+  saveIfChanged();
   if (!doc) return report;
 
   // Phase A: linked items. gh close/reopen/edit are idempotent, so a failure here is simply retried next run.
@@ -265,6 +312,28 @@ async function execute(d: SyncDeps, dryRun: boolean): Promise<SyncReport> {
   for (const item of linkedItems) record(item, bodyUpdated.has(item.issue!));
   saveIfChanged();
 
+  // Phase A2: adopt issues created by an interrupted run. The marker goes to disk, then state is saved.
+  for (const op of linkOps) {
+    K.setIssue(op.item, op.issue);
+    if (!flush()) return abort(FILE_CHANGED);
+    delete state.pending![String(op.issue)];
+    report.actions.push({ type: "link", issue: op.issue, title: op.title });
+    const wasClosed = closedNow.get(op.issue) ?? false;
+    if (op.item.checked === wasClosed) {
+      record(op.item, false);
+    } else if (op.item.checked) {
+      try {
+        await d.gh.text(["issue", "close", String(op.issue)]);
+        closedNow.set(op.issue, true);
+        record(op.item, false);
+      } catch (err) {
+        console.error(`could not close #${op.issue} after linking it`, err);
+        report.conflicts.push(`#${op.issue} was linked but closing it failed; the next sync will retry`);
+      }
+    } // else: closed on GitHub, box unticked: the next run follows GitHub
+    saveIfChanged();
+  }
+
   // Phase B: creates. After each one the marker is on disk and the state saved before the next begins.
   for (let i = 0; i < createOps.length; i++) {
     const op = createOps[i];
@@ -275,10 +344,14 @@ async function execute(d: SyncDeps, dryRun: boolean): Promise<SyncReport> {
     const n = issueNumberFrom(await d.gh.text(args));
     if (n === null) throw new Error(`could not read the issue number from gh output for "${op.title}"`);
     closedNow.set(n, false);
+    // Order: create, save state (pending), write marker, close if checked, save state.
+    state.pending![String(n)] = { hash: op.hash };
+    saveIfChanged();
     K.setIssue(op.item, n);
     if (!flush()) {
       return abort(`#${n} was created on GitHub but the kanban file changed before its marker could be written; ${FILE_CHANGED}`);
     }
+    delete state.pending![String(n)];
     // checked:false so that a checked item whose close fails below is closed by the next run.
     state.items[String(n)] = { checked: false, closed: false, bodyHash: sha(K.itemBody(op.item)) };
     saveIfChanged();
@@ -356,7 +429,8 @@ export function fileSyncDeps(config: Config, gh: Gh): SyncDeps {
       try {
         const raw = JSON.parse(fs.readFileSync(statePath, "utf8")) as Partial<SyncState>;
         if (raw && typeof raw === "object" && raw.items && typeof raw.items === "object") {
-          return { labelsEnsured: raw.labelsEnsured === true, items: raw.items };
+          const pending = raw.pending && typeof raw.pending === "object" ? raw.pending : {};
+          return { labelsEnsured: raw.labelsEnsured === true, items: raw.items, pending };
         }
       } catch {
         // missing or corrupt: start empty
