@@ -1,21 +1,21 @@
-import fs from "node:fs";
 import { pathToFileURL } from "node:url";
 import { loadConfig } from "../config";
 import { createGh } from "../lib/gh";
 import { execRunner } from "../runner";
-import { fileSyncDeps, runSync, syncStatePath, type SyncAction, type SyncDeps, type SyncReport } from "../lib/kanbanSync";
+import { fileSyncDeps, isImportCompleted, runSync, SyncLockedError, type SyncAction, type SyncDeps, type SyncReport } from "../lib/kanbanSync";
 
 export const USAGE = [
-  "Usage: npm run kanban:sync -- [--dry-run] [--yes]",
-  "  --dry-run  print what a sync would do; makes no gh write and writes no file",
-  "  --yes      confirm the first import (required when no sync state exists yet)",
+  "Usage: npm run kanban:sync -- [--dry-run] [--yes] [--rebuild-state]",
+  "  --dry-run        print what a sync would do; makes no gh write and writes no file",
+  "  --yes            confirm the first import (required until a run has completed the import)",
+  "  --rebuild-state  rebuild the sync state from the file and GitHub when it was lost; flips and closes nothing",
   "  --help     show this text",
 ].join("\n");
 
 export interface CliIo {
   sync: SyncDeps;
-  /** True once the sync state file exists, i.e. the first import has been done. */
-  stateExists(): boolean;
+  /** True once a real run has completed the first import (state.importCompletedAt). */
+  importCompleted(): boolean;
   out(line: string): void;
   err(line: string): void;
 }
@@ -68,7 +68,7 @@ function printReport(r: SyncReport, tense: Tense, out: (l: string) => void): voi
 const oneLine = (s: string): string => s.replace(/\s+/g, " ").trim();
 
 export async function main(argv: string[], io: CliIo): Promise<number> {
-  const known = new Set(["--dry-run", "--yes", "--help"]);
+  const known = new Set(["--dry-run", "--yes", "--rebuild-state", "--help"]);
   const bad = argv.filter((a) => !known.has(a));
   if (bad.length > 0) {
     io.err(`unknown argument: ${bad.join(" ")}`);
@@ -81,18 +81,19 @@ export async function main(argv: string[], io: CliIo): Promise<number> {
   }
   const dryRun = argv.includes("--dry-run");
   const yes = argv.includes("--yes");
-  const firstImport = !io.stateExists();
+  const rebuildState = argv.includes("--rebuild-state");
   try {
+    const firstImport = !io.importCompleted();
     if (dryRun || (firstImport && !yes)) {
-      const report = await runSync(io.sync, { dryRun: true });
+      const report = await runSync(io.sync, { dryRun: true, rebuildState });
       if (dryRun) io.out("Dry run: nothing was changed.");
       printReport(report, PLANNED, io.out);
       if (dryRun) return 0;
-      io.err("This is the first import: it will create GitHub issues and add markers to the kanban file.");
+      io.err("This is the first import (or an interrupted one): it will create GitHub issues and add markers to the kanban file.");
       io.err("Review the plan above, then run: npm run kanban:sync -- --yes");
       return 1;
     }
-    const report = await runSync(io.sync, { dryRun: false });
+    const report = await runSync(io.sync, { dryRun: false, rebuildState });
     printReport(report, DONE, io.out);
     if (report.aborted) {
       io.err(`sync aborted: ${oneLine(report.conflicts[report.conflicts.length - 1] ?? "the kanban file changed on disk")}; run it again`);
@@ -100,6 +101,10 @@ export async function main(argv: string[], io: CliIo): Promise<number> {
     }
     return 0;
   } catch (err) {
+    if (err instanceof SyncLockedError) {
+      io.err(oneLine(err.message));
+      return 1;
+    }
     io.err(`kanban sync failed: ${oneLine(err instanceof Error ? err.message : String(err))}`);
     return 1;
   }
@@ -110,7 +115,7 @@ async function cli(): Promise<void> {
   const gh = createGh(execRunner, config);
   const code = await main(process.argv.slice(2), {
     sync: fileSyncDeps(config, gh),
-    stateExists: () => fs.existsSync(syncStatePath(config)),
+    importCompleted: () => isImportCompleted(config),
     out: (l) => console.log(l),
     err: (l) => console.error(l),
   });

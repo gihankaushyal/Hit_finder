@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import type { Server } from "node:http";
 import { serve } from "@hono/node-server";
 import { loadOrCreateToken } from "./auth";
@@ -6,7 +5,7 @@ import { loadConfig, type Config } from "./config";
 import { EventBus } from "./events";
 import { createGh } from "./lib/gh";
 import { createKanbanService } from "./lib/kanbanService";
-import { fileSyncDeps, syncStatePath } from "./lib/kanbanSync";
+import { fileSyncDeps, isImportCompleted } from "./lib/kanbanSync";
 import { startKanbanTriggers } from "./lib/kanbanTriggers";
 import { createTestRunner, nodeSpawn } from "./lib/testRunner";
 import { execRunner } from "./runner";
@@ -36,11 +35,11 @@ const kanban = createKanbanService({
   gh,
   sync: fileSyncDeps(config, gh),
   bus,
-  imported: () => fs.existsSync(syncStatePath(config)),
+  imported: () => isImportCompleted(config),
 });
 const app = buildServer({ config, token, bus, gh, tests, kanban });
 
-if (!fs.existsSync(syncStatePath(config))) {
+if (!isImportCompleted(config)) {
   console.log("Kanban sync is off until you run the first import: npm run kanban:sync -- --dry-run, then -- --yes");
 }
 const triggers = startKanbanTriggers(kanban, config.kanbanPath);

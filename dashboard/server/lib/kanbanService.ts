@@ -2,7 +2,7 @@ import type { EventBus } from "../events";
 import { flagArg, type Gh } from "./gh";
 import * as K from "./kanbanMd";
 import {
-  labelsForSection, listTasks, runSync, type GhTask, type SyncDeps, type SyncReport,
+  escapeMentions, labelsForSection, listTasks, runSync, SyncLockedError, type GhTask, type SyncDeps, type SyncReport,
 } from "./kanbanSync";
 import type { Board, Task, TaskStatus } from "../../shared/types";
 
@@ -47,7 +47,7 @@ export interface KanbanServiceDeps {
   gh: Gh;
   sync: SyncDeps;
   bus: EventBus;
-  /** True once the sync state file exists, i.e. the user has done the first import by hand. */
+  /** True once a real run has completed the first import (the state's importCompletedAt), not merely once the state file exists. */
   imported: () => boolean;
   debounceMs?: number;
 }
@@ -98,6 +98,7 @@ export function createKanbanService(d: KanbanServiceDeps): KanbanService {
       lastSyncAt = new Date().toISOString();
       syncError = report.aborted ? SYNC_STOPPED : null;
     } catch (err) {
+      if (err instanceof SyncLockedError) return; // another process is syncing: a skipped run, not an error
       console.error("kanban sync failed:", err);
       syncError = SYNC_FAILED;
     }
@@ -180,7 +181,7 @@ export function createKanbanService(d: KanbanServiceDeps): KanbanService {
     sync,
     addTask: (title, body) =>
       mutate(async () => {
-        await d.gh.text(["issue", "create", flagArg("title", title), flagArg("body", body ?? ""), flagArg("label", "task"), flagArg("label", "status:todo")]);
+        await d.gh.text(["issue", "create", flagArg("title", escapeMentions(title)), flagArg("body", escapeMentions(body ?? "")), flagArg("label", "task"), flagArg("label", "status:todo")]);
       }),
     setStatus: (n, s) =>
       mutate(async () => {

@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { execFile } from "node:child_process";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -17,8 +18,7 @@ function setup(opts: { file?: string | null; stateExists?: boolean } = {}) {
   const gh = new FakeGh();
   const h = {
     file: (opts.file === undefined ? TEXT : opts.file) as string | null,
-    state: { labelsEnsured: false, items: {} } as SyncState,
-    stateExists: opts.stateExists ?? false,
+    state: { labelsEnsured: false, items: {}, ...(opts.stateExists ? { importCompletedAt: "2026-10-01T00:00:00.000Z" } : {}) } as SyncState,
     fileWrites: 0,
     stateSaves: 0,
     out: [] as string[],
@@ -35,11 +35,10 @@ function setup(opts: { file?: string | null; stateExists?: boolean } = {}) {
     saveState: (s) => {
       h.state = structuredClone(s);
       h.stateSaves++;
-      h.stateExists = true;
     },
     sleep: async () => {},
   };
-  const io = { sync, stateExists: () => h.stateExists, out: (l: string) => h.out.push(l), err: (l: string) => h.err.push(l) };
+  const io = { sync, importCompleted: () => Boolean(h.state.importCompletedAt), out: (l: string) => h.out.push(l), err: (l: string) => h.err.push(l) };
   return { gh, h, io, text: () => h.out.join("\n") };
 }
 
@@ -61,7 +60,8 @@ describe("kanban:sync CLI main()", () => {
   });
 
   it("--dry-run on an already-imported setup reports updates and appends", async () => {
-    const { gh, io, text } = setup({ stateExists: true, file: "## A\n\n- [ ] one <!-- gh:#1 -->\n" });
+    const { gh, h, io, text } = setup({ stateExists: true, file: "## A\n\n- [ ] one <!-- gh:#1 -->\n" });
+    h.state.items["1"] = { checked: false, closed: false, bodyHash: crypto.createHash("sha256").update("one").digest("hex") };
     gh.seed({ title: "one", state: "CLOSED" });
     gh.seed({ title: "from github" });
     await main(["--dry-run"], io);
@@ -111,7 +111,7 @@ describe("kanban:sync CLI main()", () => {
 
   it("exits non-zero with a one-line message when gh fails", async () => {
     const { gh, h, io } = setup({ stateExists: true });
-    gh.failCreateAt = 1;
+    gh.failNextJson = true; // the list call failing is a global failure that aborts the run
     expect(await main([], io)).toBe(1);
     expect(h.err.filter((l) => /failed/i.test(l))).toHaveLength(1);
   });
@@ -178,7 +178,7 @@ process.exit(0);
   it("dry run on a copy of the fixture: summary, no gh write, file and state untouched", async () => {
     const s = sandbox(fs.readFileSync(FIXTURE, "utf8"));
     const before = fs.readFileSync(s.md, "utf8");
-    const r = await s.cli("--dry-run");
+    const r = await s.cli("--dry-run", "--rebuild-state"); // the fixture has markers and there is no state yet
     expect(r.code).toBe(0);
     expect(r.stdout).toMatch(/to create: /);
     expect(s.ghCalls().every((c) => c[0] === "issue" && c[1] === "list")).toBe(true);
@@ -188,7 +188,7 @@ process.exit(0);
 
   it("refuses the first real import without --yes", async () => {
     const s = sandbox(fs.readFileSync(FIXTURE, "utf8"));
-    const r = await s.cli();
+    const r = await s.cli("--rebuild-state");
     expect(r.code).not.toBe(0);
     expect(r.stderr).toMatch(/--yes/);
     expect(s.ghCalls().every((c) => c[1] === "list")).toBe(true);

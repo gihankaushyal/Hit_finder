@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -223,7 +224,8 @@ describe("runSync", () => {
   });
 
   it("10. a marker pointing at a missing issue is a conflict with no mutation", async () => {
-    const { deps, gh } = mk("## S\n\n- [ ] Ghost <!-- gh:#99 -->\n");
+    const { h, deps, gh } = mk("## S\n\n- [ ] Ghost <!-- gh:#99 -->\n");
+    h.state.items["98"] = { checked: false, closed: false, bodyHash: "x" }; // state has records, so this is not a lost state file
     gh.next = 200;
     const r = await sync(deps);
     expect(r.conflicts).toEqual(["#99 is referenced in the file but was not found on GitHub"]);
@@ -263,18 +265,22 @@ const FIVE = ["## A", "", "- [ ] one", "- [ ] two", "- [ ] three", "- [x] four",
 describe("runSync safety guarantees", () => {
   it("14. an interrupted run resumes at the next item instead of recreating earlier ones", async () => {
     const { h, deps, gh } = mk(FIVE);
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     gh.failCreateAt = 3;
-    await expect(sync(deps)).rejects.toThrow("gh create failed");
-    expect(gh.issues.size).toBe(2);
+    const r1 = await sync(deps); // a failed create is isolated: the run goes on with the next item
+    spy.mockRestore();
+    expect(r1.conflicts.join()).toMatch(/creating "three" failed/);
+    expect(gh.issues.size).toBe(4);
     expect(h.file).toContain("- [ ] one <!-- gh:#1 -->");
     expect(h.file).toContain("- [ ] two <!-- gh:#2 -->");
     expect(h.file).not.toContain("three <!--");
-    expect(Object.keys(h.state.items).sort()).toEqual(["1", "2"]);
+    expect(h.state.importCompletedAt).toBeUndefined(); // a create is still left to do
     gh.failCreateAt = null;
     const r = await sync(deps);
-    expect(r.actions.map((a) => (a.type === "create" ? a.title : a.type))).toEqual(["three", "four", "five"]);
-    expect([...gh.issues.values()].map((i) => i.title)).toEqual(["one", "two", "three", "four", "five"]);
-    expect(gh.issues.get(4)!.state).toBe("CLOSED");
+    expect(r.actions.map((a) => (a.type === "create" ? a.title : a.type))).toEqual(["three"]);
+    expect([...gh.issues.values()].map((i) => i.title).sort()).toEqual(["five", "four", "one", "three", "two"]);
+    expect([...gh.issues.values()].find((i) => i.title === "four")!.state).toBe("CLOSED");
+    expect(h.state.importCompletedAt).toBeDefined();
     expect((await sync(deps)).actions).toEqual([]);
   });
 
@@ -298,7 +304,7 @@ describe("runSync safety guarantees", () => {
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     const r1 = await sync(deps);
     spy.mockRestore();
-    expect(r1.conflicts.join()).toMatch(/#1 was created but closing it failed/);
+    expect(r1.conflicts.join()).toMatch(/closing #1 after creating it failed/);
     expect(h.file).toContain("- [x] finished <!-- gh:#1 -->");
     expect(gh.issues.get(1)!.state).toBe("OPEN");
     gh.failClose = false;
@@ -467,22 +473,26 @@ describe("runSync resumability", () => {
   });
 
   it("29. a checked item whose issue is open and has no state record is closed, and the box stays ticked", async () => {
-    const { h, deps, gh } = mk("## A\n\n- [x] done <!-- gh:#1 -->\n");
+    const { h, deps, gh } = mk("## A\n\n- [x] done <!-- gh:#1 -->\n- [ ] other <!-- gh:#2 -->\n");
     gh.seed({ title: "done" });
+    gh.seed({ title: "other" });
+    h.state.items["2"] = { checked: false, closed: false, bodyHash: crypto.createHash("sha256").update("other").digest("hex") };
     const r = await sync(deps);
     expect(r.actions).toEqual([{ type: "close", issue: 1 }]);
     expect(gh.issues.get(1)!.state).toBe("CLOSED");
-    expect(h.file).toBe("## A\n\n- [x] done <!-- gh:#1 -->\n");
+    expect(h.file).toBe("## A\n\n- [x] done <!-- gh:#1 -->\n- [ ] other <!-- gh:#2 -->\n");
     expect(h.fileWrites).toBe(0);
     expect((await sync(deps)).actions).toEqual([]);
   });
 
   it("30. an unchecked item whose issue is closed and has no state record still follows GitHub", async () => {
-    const { h, deps, gh } = mk("## A\n\n- [ ] done <!-- gh:#1 -->\n");
+    const { h, deps, gh } = mk("## A\n\n- [ ] done <!-- gh:#1 -->\n- [ ] other <!-- gh:#2 -->\n");
     gh.seed({ title: "done", state: "CLOSED" });
+    gh.seed({ title: "other" });
+    h.state.items["2"] = { checked: false, closed: false, bodyHash: crypto.createHash("sha256").update("other").digest("hex") };
     const r = await sync(deps);
     expect(r.actions).toEqual([{ type: "md-check", issue: 1, checked: true }]);
-    expect(h.file).toBe("## A\n\n- [x] done <!-- gh:#1 -->\n");
+    expect(h.file).toBe("## A\n\n- [x] done <!-- gh:#1 -->\n- [ ] other <!-- gh:#2 -->\n");
     expect(gh.count("reopen")).toBe(0);
   });
 });

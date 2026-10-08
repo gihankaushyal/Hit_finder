@@ -19,14 +19,19 @@ export interface SyncStateItem {
   closed: boolean;
   bodyHash: string;
 }
+export interface PendingLink {
+  /** Identifies the item (title plus body) the issue was created for. */
+  hash: string;
+  /** When the issue was created (ms since epoch); used to give up waiting for it to appear in the list. */
+  at?: number;
+}
 export interface SyncState {
   labelsEnsured: boolean;
   items: Record<string, SyncStateItem>;
-  /**
-   * Issues created by a run that stopped before their marker reached the file, keyed by issue number.
-   * `hash` identifies the item (title plus body) so the next run adopts the issue instead of creating another.
-   */
-  pending?: Record<string, { hash: string }>;
+  /** Issues created by a run that stopped before their marker reached the file, keyed by issue number. */
+  pending?: Record<string, PendingLink>;
+  /** ISO time at which a real run first finished a complete import. Gates every background trigger. */
+  importCompletedAt?: string;
 }
 export type SyncAction =
   | { type: "create"; title: string; labels: string[]; closed: boolean }
@@ -48,14 +53,38 @@ export interface SyncReport {
   skipped: SyncSkipped[]; // items that were deliberately not created
   aborted: boolean; // true when the run stopped early (the file changed on disk)
 }
+export interface SyncOptions {
+  dryRun: boolean;
+  /** Rebuild the state records from the current file and GitHub, flipping and closing nothing. */
+  rebuildState?: boolean;
+}
 
 export interface SyncDeps {
   gh: Gh;
-  readFile(): string | null; // kanban file text, null if missing
+  readFile(): string | null; // kanban file text, null if missing; throws on invalid UTF-8
   writeFile(text: string): void; // atomic: temp file in the same directory, then rename
-  loadState(): SyncState;
+  loadState(): SyncState; // missing file: fresh state; unreadable or wrong shape: throws SyncStateError
   saveState(s: SyncState): void;
   sleep(ms: number): Promise<void>;
+  /** Exclusive cross-process lock for a real run; throws SyncLockedError when another sync holds it. */
+  acquireLock?(): () => void;
+  /** Clock in ms since epoch (injectable for tests). */
+  now?(): number;
+}
+
+/** Another sync (CLI or server) is running; this run did not start. */
+export class SyncLockedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SyncLockedError";
+  }
+}
+/** The sync state file is unreadable, malformed, or inconsistent with the file; nothing was changed. */
+export class SyncStateError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SyncStateError";
+  }
 }
 
 export const TASK_LABELS: { name: string; color: string }[] = [
@@ -76,6 +105,16 @@ const TITLE_MAX_CHARS = 256; // GitHub's issue title limit
 const BODY_MAX_CHARS = 60_000; // GitHub's limit is 65,536
 const CREATE_PAUSE_MS = 1000;
 const STATE_FILE = "kanban-sync.json";
+const LOCK_FILE = "kanban-sync.lock";
+const BACKUP_SUFFIX = ".pre-sync.bak";
+/** A pending issue that is still absent from the list after this long is reported as a conflict. */
+export const PENDING_MAX_AGE_MS = 10 * 60 * 1000;
+/** An unparsable lock file younger than this may still be being written by its owner. */
+const LOCK_UNPARSABLE_GRACE_MS = 10_000;
+const ZERO_WIDTH_JOINER = "\u200D";
+/** gh failures that affect every item, so the run stops instead of isolating them. */
+const GLOBAL_GH_FAILURE =
+  /auth|credential|token|log ?in|\b40[13]\b|rate limit|abuse|could not resolve|network|connection|timed? ?out|ENOTFOUND|ECONN/i;
 const FILE_CHANGED = "the kanban file changed on disk during the sync; stopped without overwriting it";
 
 export function labelsForSection(section: string): string[] {
@@ -95,14 +134,23 @@ export async function listTasks(gh: Gh): Promise<GhTask[]> {
   return raw.map((t) => ({ ...t, labels: t.labels.map((l) => l.name) }));
 }
 
+
 const sha = (s: string): string => crypto.createHash("sha256").update(s).digest("hex");
+/** Stops `@name` text from notifying a real GitHub user. Idempotent. */
+export function escapeMentions(s: string): string {
+  return s.replace(/@(?!‍)/g, `@${ZERO_WIDTH_JOINER}`);
+}
+const unescapeMentions = (s: string): string => s.replaceAll(`@${ZERO_WIDTH_JOINER}`, "@");
+const normEol = (s: string): string => s.replace(/\r\n/g, "\n");
 const footerFor = (section: string): string => `\n\n_Synced from phase-05-kanban.md, section: ${section}_`;
-const issueBody = (item: K.MdItem): string => (K.itemBody(item) + footerFor(item.section)).slice(0, BODY_MAX_CHARS);
+const issueBody = (item: K.MdItem): string => escapeMentions(K.itemBody(item) + footerFor(item.section)).slice(0, BODY_MAX_CHARS);
+const issueTitle = (item: K.MdItem): string => escapeMentions(K.itemTitle(item)).slice(0, TITLE_MAX_CHARS).trim();
 const createHash = (title: string, item: K.MdItem): string => sha(`${title}\0${issueBody(item)}`);
 const issueNumberFrom = (out: string): number | null => {
   const m = /\/issues\/(\d+)\s*$/.exec(out.trim());
   return m ? Number(m[1]) : null;
 };
+const isGlobalFailure = (err: unknown): boolean => GLOBAL_GH_FAILURE.test(err instanceof Error ? err.message : String(err));
 
 type LinkedOp =
   | { kind: "md-check"; item: K.MdItem; issue: number; checked: boolean }
@@ -126,26 +174,39 @@ interface AppendOp {
 // Runs are serialised per process: a second call waits for the first to finish.
 let queue: Promise<unknown> = Promise.resolve();
 
-export function runSync(d: SyncDeps, opts: { dryRun: boolean }): Promise<SyncReport> {
-  const result = queue.catch(() => undefined).then(() => execute(d, opts.dryRun));
+export function runSync(d: SyncDeps, opts: SyncOptions): Promise<SyncReport> {
+  const result = queue.catch(() => undefined).then(async () => {
+    const release = !opts.dryRun && d.acquireLock ? d.acquireLock() : null;
+    try {
+      return await execute(d, opts);
+    } finally {
+      release?.();
+    }
+  });
   queue = result;
   return result;
 }
 
-async function execute(d: SyncDeps, dryRun: boolean): Promise<SyncReport> {
+async function execute(d: SyncDeps, opts: SyncOptions): Promise<SyncReport> {
+  const dryRun = opts.dryRun;
+  const rebuild = opts.rebuildState === true;
+  const nowMs = (): number => (d.now ?? Date.now)();
   const report: SyncReport = { actions: [], conflicts: [], notInFile: [], skipped: [], aborted: false };
+  // State and file first: a corrupt state file or invalid UTF-8 stops the run before any gh call.
+  const loaded = d.loadState();
+  const startText = d.readFile();
   const tasks = await listTasks(d.gh);
   const byNumber = new Map(tasks.map((t) => [t.number, t]));
   const closedNow = new Map(tasks.map((t) => [t.number, t.state === "CLOSED"]));
-  const startText = d.readFile();
   const doc = startText === null ? null : K.parseKanban(startText);
-  const loaded = d.loadState();
   const state: SyncState = {
     labelsEnsured: loaded.labelsEnsured === true,
     items: { ...(loaded.items ?? {}) },
     pending: { ...(loaded.pending ?? {}) },
+    ...(loaded.importCompletedAt ? { importCompletedAt: loaded.importCompletedAt } : {}),
   };
   const savedSnapshot = JSON.stringify(state);
+  const hadRecords = Object.keys(state.items).length > 0 || Object.keys(state.pending!).length > 0;
 
   // ---- plan (pure: no gh calls, no writes) ----
   const linkedOps: LinkedOp[] = [];
@@ -154,14 +215,25 @@ async function execute(d: SyncDeps, dryRun: boolean): Promise<SyncReport> {
   const appendOps: AppendOp[] = [];
   const linkedItems: K.MdItem[] = [];
   const referenced = new Set<number>();
+  let incomplete = false; // something that a first import must still do remains undone
 
   if (doc) {
+    const allItems = K.items(doc);
+    const markered = allItems.filter((it) => it.issue !== null);
+    if (markered.length > 0 && !hadRecords && !rebuild) {
+      throw new SyncStateError(
+        "the kanban file has issue markers but the sync state has no records, which usually means the state file was lost; " +
+          "nothing was changed. If that is expected, run again with --rebuild-state to rebuild the records from the file and GitHub without flipping or closing anything",
+      );
+    }
     // A pending link whose issue is already marked in the file is resolved (the run died before saving state).
-    for (const item of K.items(doc)) if (item.issue !== null) delete state.pending![String(item.issue)];
-    const adopted = new Set<number>();
-    for (const item of K.items(doc)) {
+    for (const item of markered) delete state.pending![String(item.issue)];
+    const markedNumbers = new Set(markered.map((it) => it.issue!));
+    const claimed = new Set<number>(); // issues taken by an unmarked item in this run
+    const candidates = tasks.filter((t) => !markedNumbers.has(t.number)).sort((a, b) => a.number - b.number);
+    for (const item of allItems) {
       if (item.issue === null) {
-        const title = K.itemTitle(item).slice(0, TITLE_MAX_CHARS).trim();
+        const title = issueTitle(item);
         const body = issueBody(item);
         if (title === "") {
           report.skipped.push({ title: "", section: item.section, reason: "empty title" });
@@ -170,20 +242,35 @@ async function execute(d: SyncDeps, dryRun: boolean): Promise<SyncReport> {
         } else {
           const hash = createHash(title, item);
           const pendingNumbers = Object.entries(state.pending!)
-            .filter(([n, p]) => p.hash === hash && !adopted.has(Number(n)))
+            .filter(([n, p]) => p.hash === hash && !claimed.has(Number(n)))
             .map(([n]) => Number(n))
             .sort((a, b) => a - b);
-          if (pendingNumbers.length > 0) {
-            const n = pendingNumbers[0];
-            adopted.add(n);
-            if (byNumber.has(n)) linkOps.push({ item, title, issue: n });
-            else {
+          const pendingNumber = pendingNumbers[0];
+          const stateless = candidates.find(
+            (t) => !claimed.has(t.number) && t.title === title && normEol(t.body) === normEol(body),
+          );
+          if (pendingNumber !== undefined && byNumber.has(pendingNumber)) {
+            claimed.add(pendingNumber);
+            linkOps.push({ item, title, issue: pendingNumber });
+          } else if (pendingNumber !== undefined) {
+            claimed.add(pendingNumber);
+            const age = nowMs() - (state.pending![String(pendingNumber)].at ?? nowMs());
+            if (age >= PENDING_MAX_AGE_MS) {
+              report.conflicts.push(
+                `#${pendingNumber} was created for "${title}" by an interrupted run but has still not appeared on GitHub after ${Math.round(PENDING_MAX_AGE_MS / 60000)} minutes; ` +
+                  "not creating it again automatically. Check the repository's issues, then add the marker by hand or remove the entry from the sync state",
+              );
+            } else {
+              incomplete = true;
               report.skipped.push({
                 title,
                 section: item.section,
-                reason: `#${n} was created for it by an interrupted run but is not visible on GitHub yet; not creating a duplicate`,
+                reason: `#${pendingNumber} was created for it by an interrupted run but is not visible on GitHub yet; not creating a duplicate`,
               });
             }
+          } else if (stateless) {
+            claimed.add(stateless.number);
+            linkOps.push({ item, title, issue: stateless.number });
           } else {
             createOps.push({ item, title, labels: labelsForSection(item.section), hash });
           }
@@ -203,6 +290,10 @@ async function execute(d: SyncDeps, dryRun: boolean): Promise<SyncReport> {
       }
       linkedItems.push(item);
       const closed = task.state === "CLOSED";
+      if (rebuild) {
+        // Record reality; flip nothing. A disagreement is left for the user.
+        state.items[String(n)] = { checked: item.checked, closed, bodyHash: sha(K.itemBody(item)) };
+      }
       const last = state.items[String(n)];
       if (!last && item.checked && !closed) {
         // Marker present, no record: an import that stopped before closing the issue. Finish it.
@@ -222,8 +313,7 @@ async function execute(d: SyncDeps, dryRun: boolean): Promise<SyncReport> {
       if (last && sha(K.itemBody(item)) !== last.bodyHash) linkedOps.push({ kind: "update-body", item, issue: n });
     }
     for (const task of [...tasks].sort((a, b) => a.number - b.number)) {
-      if (referenced.has(task.number)) continue;
-      if (adopted.has(task.number)) continue;
+      if (referenced.has(task.number) || claimed.has(task.number)) continue;
       if (state.items[String(task.number)] || state.pending![String(task.number)]) report.notInFile.push(task.number);
       else appendOps.push({ task, closed: task.state === "CLOSED" });
     }
@@ -272,16 +362,33 @@ async function execute(d: SyncDeps, dryRun: boolean): Promise<SyncReport> {
     known = out;
     return true;
   };
+  /**
+   * Runs one gh write for one item. A failure that is specific to the item becomes a conflict and the run
+   * goes on; a failure that would hit every item (auth, network, rate limit) is rethrown to abort the run.
+   */
+  const attempt = async (what: string, fn: () => Promise<void>): Promise<boolean> => {
+    try {
+      await fn();
+      return true;
+    } catch (err) {
+      if (isGlobalFailure(err)) throw err;
+      console.error(`${what} failed:`, err);
+      report.conflicts.push(`${what} failed; the next sync will retry`);
+      return false;
+    }
+  };
   const record = (item: K.MdItem, bodyUpdated: boolean) => {
     const n = item.issue!;
     const closed = closedNow.get(n) ?? false;
     const prev = state.items[String(n)];
-    if (item.checked !== closed) return; // unresolved mismatch: keep the previous record so it stays detectable
-    state.items[String(n)] = {
-      checked: item.checked,
-      closed,
-      bodyHash: !prev || bodyUpdated ? sha(K.itemBody(item)) : prev.bodyHash,
-    };
+    const bodyHash = !prev || bodyUpdated ? sha(K.itemBody(item)) : prev.bodyHash;
+    if (item.checked !== closed) {
+      // Unresolved mismatch: keep the previous checkbox/closed record so it stays detectable, but remember
+      // that the body was pushed so the same body is not pushed again on every sync.
+      if (prev && bodyUpdated) state.items[String(n)] = { ...prev, bodyHash };
+      return;
+    }
+    state.items[String(n)] = { checked: item.checked, closed, bodyHash };
   };
 
   if (!state.labelsEnsured) {
@@ -294,43 +401,58 @@ async function execute(d: SyncDeps, dryRun: boolean): Promise<SyncReport> {
   // Phase A: linked items. gh close/reopen/edit are idempotent, so a failure here is simply retried next run.
   const bodyUpdated = new Set<number>();
   for (const op of linkedOps) {
+    let ok = true;
     if (op.kind === "md-check") {
       K.setChecked(op.item, op.checked);
     } else if (op.kind === "close") {
-      await d.gh.text(["issue", "close", String(op.issue)]);
-      closedNow.set(op.issue, true);
+      ok = await attempt(`closing #${op.issue}`, async () => {
+        await d.gh.text(["issue", "close", String(op.issue)]);
+        closedNow.set(op.issue, true);
+      });
     } else if (op.kind === "reopen") {
-      await d.gh.text(["issue", "reopen", String(op.issue)]);
-      closedNow.set(op.issue, false);
+      ok = await attempt(`reopening #${op.issue}`, async () => {
+        await d.gh.text(["issue", "reopen", String(op.issue)]);
+        closedNow.set(op.issue, false);
+      });
     } else {
-      await d.gh.text(["issue", "edit", String(op.issue), flagArg("body", issueBody(op.item))]);
-      bodyUpdated.add(op.issue);
+      ok = await attempt(`updating the body of #${op.issue}`, async () => {
+        await d.gh.text(["issue", "edit", String(op.issue), flagArg("body", issueBody(op.item))]);
+        bodyUpdated.add(op.issue);
+      });
     }
-    report.actions.push(toAction(op));
+    if (ok) report.actions.push(toAction(op));
   }
   if (!flush()) return abort(FILE_CHANGED);
   for (const item of linkedItems) record(item, bodyUpdated.has(item.issue!));
   saveIfChanged();
 
-  // Phase A2: adopt issues created by an interrupted run. The marker goes to disk, then state is saved.
+  // Phase A2: adopt issues that already exist for an unmarked item (an interrupted run, a stripped marker).
+  // The marker goes to disk first, then state is saved. Nothing is ever unticked.
   for (const op of linkOps) {
     K.setIssue(op.item, op.issue);
-    if (!flush()) return abort(FILE_CHANGED);
     delete state.pending![String(op.issue)];
-    report.actions.push({ type: "link", issue: op.issue, title: op.title });
     const wasClosed = closedNow.get(op.issue) ?? false;
-    if (op.item.checked === wasClosed) {
-      record(op.item, false);
-    } else if (op.item.checked) {
-      try {
-        await d.gh.text(["issue", "close", String(op.issue)]);
-        closedNow.set(op.issue, true);
+    const bodyHash = sha(K.itemBody(op.item));
+    if (rebuild) {
+      state.items[String(op.issue)] = { checked: op.item.checked, closed: wasClosed, bodyHash };
+    } else if (!op.item.checked && wasClosed) {
+      K.setChecked(op.item, true); // GitHub says done: follow it
+    }
+    if (!flush()) return abort(FILE_CHANGED);
+    report.actions.push({ type: "link", issue: op.issue, title: op.title });
+    if (!rebuild) {
+      if (op.item.checked === wasClosed) {
         record(op.item, false);
-      } catch (err) {
-        console.error(`could not close #${op.issue} after linking it`, err);
-        report.conflicts.push(`#${op.issue} was linked but closing it failed; the next sync will retry`);
+      } else {
+        // Ticked item, open issue: close it. checked:false in the record so a failed close is retried.
+        state.items[String(op.issue)] = { checked: false, closed: false, bodyHash };
+        const closedOk = await attempt(`closing #${op.issue} after linking it`, async () => {
+          await d.gh.text(["issue", "close", String(op.issue)]);
+          closedNow.set(op.issue, true);
+        });
+        if (closedOk) state.items[String(op.issue)] = { checked: true, closed: true, bodyHash };
       }
-    } // else: closed on GitHub, box unticked: the next run follows GitHub
+    }
     saveIfChanged();
   }
 
@@ -341,11 +463,19 @@ async function execute(d: SyncDeps, dryRun: boolean): Promise<SyncReport> {
     if (!fileUnchanged()) return abort(FILE_CHANGED);
     const args = ["issue", "create", flagArg("title", op.title), flagArg("body", issueBody(op.item))];
     for (const l of op.labels) args.push(flagArg("label", l));
-    const n = issueNumberFrom(await d.gh.text(args));
+    let out = "";
+    const created = await attempt(`creating "${op.title}"`, async () => {
+      out = await d.gh.text(args);
+    });
+    if (!created) {
+      incomplete = true;
+      continue;
+    }
+    const n = issueNumberFrom(out);
     if (n === null) throw new Error(`could not read the issue number from gh output for "${op.title}"`);
     closedNow.set(n, false);
     // Order: create, save state (pending), write marker, close if checked, save state.
-    state.pending![String(n)] = { hash: op.hash };
+    state.pending![String(n)] = { hash: op.hash, at: nowMs() };
     saveIfChanged();
     K.setIssue(op.item, n);
     if (!flush()) {
@@ -357,21 +487,20 @@ async function execute(d: SyncDeps, dryRun: boolean): Promise<SyncReport> {
     saveIfChanged();
     report.actions.push(createAction(op));
     if (op.item.checked) {
-      try {
+      const closedOk = await attempt(`closing #${n} after creating it`, async () => {
         await d.gh.text(["issue", "close", String(n)]);
         closedNow.set(n, true);
+      });
+      if (closedOk) {
         state.items[String(n)] = { ...state.items[String(n)], checked: true, closed: true };
         saveIfChanged();
-      } catch (err) {
-        console.error(`could not close #${n} after creating it`, err);
-        report.conflicts.push(`#${n} was created but closing it failed; the next sync will retry`);
       }
     }
   }
 
   // Phase C: issues that exist on GitHub but not in the file.
   if (appendOps.length > 0) {
-    for (const op of appendOps) K.appendToInbox(doc, op.task.title, op.task.number, op.closed);
+    for (const op of appendOps) K.appendToInbox(doc, unescapeMentions(op.task.title), op.task.number, op.closed);
     if (!flush()) return abort(FILE_CHANGED);
     for (const op of appendOps) {
       const item = K.items(doc).find((it) => it.issue === op.task.number);
@@ -383,28 +512,192 @@ async function execute(d: SyncDeps, dryRun: boolean): Promise<SyncReport> {
     }
     saveIfChanged();
   }
+
+  // The import is complete once a real run got to the end with no create left to do.
+  if (!incomplete && !state.importCompletedAt) state.importCompletedAt = new Date(nowMs()).toISOString();
+  saveIfChanged();
   return report;
 }
 
 // ---- real file and state ----
 
+function fsyncDirBestEffort(dir: string): void {
+  try {
+    const fd = fs.openSync(dir, "r");
+    try {
+      fs.fsyncSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    // some filesystems cannot fsync a directory
+  }
+}
+
+/** Temp file in the same directory, original mode restored (umask must not narrow it), fsync, rename. */
 function writeAtomic(target: string, text: string): void {
   const dir = path.dirname(target);
   fs.mkdirSync(dir, { recursive: true });
   const tmp = path.join(dir, `.${path.basename(target)}.${process.pid}.tmp`);
   let mode: number | undefined;
   try {
-    mode = fs.statSync(target).mode & 0o777;
+    mode = fs.statSync(target).mode & 0o7777;
   } catch {
     mode = undefined;
   }
-  fs.writeFileSync(tmp, text, mode === undefined ? undefined : { mode });
-  fs.renameSync(tmp, target);
+  try {
+    const fd = fs.openSync(tmp, "w");
+    try {
+      fs.writeFileSync(fd, text);
+      if (mode !== undefined) fs.fchmodSync(fd, mode);
+      fs.fsyncSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
+    fs.renameSync(tmp, target);
+    fsyncDirBestEffort(dir);
+  } finally {
+    fs.rmSync(tmp, { force: true });
+  }
 }
 
-/** Where the sync state lives; its existence marks that the first import has been done. */
+/** Copies the file to `<name>.pre-sync.bak` once, with the same mode. An existing backup is never replaced. */
+function backupOnce(target: string): void {
+  const bak = target + BACKUP_SUFFIX;
+  if (fs.existsSync(bak) || !fs.existsSync(target)) return;
+  const tmp = path.join(path.dirname(bak), `.${path.basename(bak)}.${process.pid}.tmp`);
+  try {
+    fs.copyFileSync(target, tmp);
+    fs.chmodSync(tmp, fs.statSync(target).mode & 0o7777);
+    const fd = fs.openSync(tmp, "r");
+    try {
+      fs.fsyncSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
+    if (!fs.existsSync(bak)) fs.renameSync(tmp, bak);
+  } finally {
+    fs.rmSync(tmp, { force: true });
+  }
+}
+
+/** Where the sync state lives. */
 export function syncStatePath(config: Pick<Config, "stateDir">): string {
   return path.join(config.stateDir, STATE_FILE);
+}
+
+const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+
+/** Validates parsed state; throws SyncStateError naming the problem. */
+export function parseSyncState(raw: unknown, where: string): SyncState {
+  const bad = (why: string): never => {
+    throw new SyncStateError(`the sync state file ${where} is not usable (${why}); nothing was changed. Fix or remove that file by hand`);
+  };
+  if (!isRecord(raw)) return bad("not a JSON object");
+  if (!isRecord(raw.items)) return bad("missing items");
+  if (raw.labelsEnsured !== undefined && typeof raw.labelsEnsured !== "boolean") return bad("labelsEnsured is not a boolean");
+  for (const [n, it] of Object.entries(raw.items)) {
+    if (!/^\d+$/.test(n) || !isRecord(it) || typeof it.checked !== "boolean" || typeof it.closed !== "boolean" || typeof it.bodyHash !== "string") {
+      return bad(`bad record for item ${n}`);
+    }
+  }
+  if (raw.pending !== undefined) {
+    if (!isRecord(raw.pending)) return bad("pending is not an object");
+    for (const [n, p] of Object.entries(raw.pending)) {
+      if (!/^\d+$/.test(n) || !isRecord(p) || typeof p.hash !== "string" || (p.at !== undefined && typeof p.at !== "number")) {
+        return bad(`bad pending entry ${n}`);
+      }
+    }
+  }
+  if (raw.importCompletedAt !== undefined && typeof raw.importCompletedAt !== "string") return bad("importCompletedAt is not a string");
+  return {
+    labelsEnsured: raw.labelsEnsured === true,
+    items: raw.items as SyncState["items"],
+    ...(raw.pending ? { pending: raw.pending as SyncState["pending"] } : {}),
+    ...(raw.importCompletedAt ? { importCompletedAt: raw.importCompletedAt as string } : {}),
+  };
+}
+
+function readStateFile(statePath: string): SyncState {
+  let text: string;
+  try {
+    text = fs.readFileSync(statePath, "utf8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return { labelsEnsured: false, items: {} };
+    throw new SyncStateError(`the sync state file ${statePath} could not be read; nothing was changed`);
+  }
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch {
+    throw new SyncStateError(`the sync state file ${statePath} is not valid JSON; nothing was changed. Fix or remove that file by hand`);
+  }
+  return parseSyncState(raw, statePath);
+}
+
+/** True once a real run has completed the first import. Any unreadable state counts as not imported. */
+export function isImportCompleted(config: Pick<Config, "stateDir">): boolean {
+  try {
+    return Boolean(readStateFile(syncStatePath(config)).importCompletedAt);
+  } catch {
+    return false;
+  }
+}
+
+function pidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+function acquireFileLock(stateDir: string): () => void {
+  fs.mkdirSync(stateDir, { recursive: true });
+  const lockPath = path.join(stateDir, LOCK_FILE);
+  const payload = JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() });
+  const held = (who: string): SyncLockedError =>
+    new SyncLockedError(`another kanban sync is in progress (${who}); not starting a second one. Lock file: ${lockPath}`);
+  for (let tries = 0; tries < 3; tries++) {
+    let fd: number;
+    try {
+      fd = fs.openSync(lockPath, "wx", 0o600);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+      let holder: { pid?: unknown; startedAt?: unknown } | null = null;
+      let ageMs = Infinity;
+      try {
+        ageMs = Date.now() - fs.statSync(lockPath).mtimeMs;
+        holder = JSON.parse(fs.readFileSync(lockPath, "utf8")) as { pid?: unknown; startedAt?: unknown };
+      } catch (readErr) {
+        if ((readErr as NodeJS.ErrnoException).code === "ENOENT") continue; // released meanwhile
+      }
+      const pid = holder && typeof holder.pid === "number" ? holder.pid : null;
+      if (pid !== null ? pidAlive(pid) : ageMs < LOCK_UNPARSABLE_GRACE_MS) {
+        throw held(pid !== null ? `pid ${pid}, started ${String(holder?.startedAt ?? "unknown")}` : "lock being created");
+      }
+      fs.rmSync(lockPath, { force: true }); // stale: its owner is gone
+      continue;
+    }
+    try {
+      fs.writeFileSync(fd, payload);
+      fs.fsyncSync(fd);
+    } catch (err) {
+      fs.rmSync(lockPath, { force: true });
+      throw err;
+    } finally {
+      fs.closeSync(fd);
+    }
+    return () => {
+      try {
+        if (fs.readFileSync(lockPath, "utf8") === payload) fs.unlinkSync(lockPath);
+      } catch {
+        // already gone
+      }
+    };
+  }
+  throw held("lost a race for the lock");
 }
 
 export function fileSyncDeps(config: Config, gh: Gh): SyncDeps {
@@ -417,34 +710,33 @@ export function fileSyncDeps(config: Config, gh: Gh): SyncDeps {
       return config.kanbanPath;
     }
   };
+  const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
   return {
     gh,
     readFile() {
+      let buf: Buffer;
       try {
-        return fs.readFileSync(config.kanbanPath, "utf8");
+        buf = fs.readFileSync(config.kanbanPath);
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
         throw err;
       }
+      try {
+        return decoder.decode(buf);
+      } catch {
+        throw new Error(`the kanban file ${config.kanbanPath} is not valid UTF-8; stopped without changing anything`);
+      }
     },
     writeFile(text) {
-      writeAtomic(kanbanTarget(), text);
+      const target = kanbanTarget();
+      backupOnce(target);
+      writeAtomic(target, text);
     },
-    loadState() {
-      try {
-        const raw = JSON.parse(fs.readFileSync(statePath, "utf8")) as Partial<SyncState>;
-        if (raw && typeof raw === "object" && raw.items && typeof raw.items === "object") {
-          const pending = raw.pending && typeof raw.pending === "object" ? raw.pending : {};
-          return { labelsEnsured: raw.labelsEnsured === true, items: raw.items, pending };
-        }
-      } catch {
-        // missing or corrupt: start empty
-      }
-      return { labelsEnsured: false, items: {} };
-    },
+    loadState: () => readStateFile(statePath),
     saveState(s) {
       writeAtomic(statePath, JSON.stringify(s, null, 2));
     },
     sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+    acquireLock: () => acquireFileLock(config.stateDir),
   };
 }
