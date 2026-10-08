@@ -1,15 +1,15 @@
 import { PanelFrame } from "./components/PanelFrame";
 import { useResource } from "./lib/useResource";
+import { Issues } from "./panels/Issues";
+import { LatestPr } from "./panels/LatestPr";
 import { RightRail } from "./panels/RightRail";
 import { TerminalDrawer } from "./panels/TerminalDrawer";
+import { TestStatus } from "./panels/TestStatus";
 import { TopBar } from "./panels/TopBar";
 
-const PENDING_PANELS_LEFT = ["Latest pull request", "Kanban"];
-const PENDING_PANELS_MIDDLE = ["Tests", "Issues"];
-
-function Pending({ title }: { title: string }) {
+function KanbanPending() {
   return (
-    <PanelFrame title={title} state="ready">
+    <PanelFrame title="Kanban" state="ready">
       <p className="dim">Not connected yet.</p>
     </PanelFrame>
   );
@@ -33,8 +33,10 @@ export function App() {
       <a className="skip-link" href="#main">Skip to status panels</a>
       <TopBar />
       <main id="main" className="main" tabIndex={-1}>
-        <div className="col col--left">{PENDING_PANELS_LEFT.map((t) => <Pending key={t} title={t} />)}</div>
-        <div className="col col--middle">{PENDING_PANELS_MIDDLE.map((t) => <Pending key={t} title={t} />)}</div>
+        <div className="col col--left"><LatestPr />
+          <KanbanPending /></div>
+        <div className="col col--middle"><TestStatus />
+          <Issues /></div>
         <RightRail />
       </main>
       <TerminalDrawer />

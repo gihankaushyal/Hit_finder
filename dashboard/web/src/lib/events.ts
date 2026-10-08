@@ -10,6 +10,8 @@ export interface Subscriber {
   resource: string;
   /** Called when the resource was invalidated, or when the stream came back after a drop. */
   reload: () => void;
+  /** Called with each line of local test output streamed while a run is active. */
+  onLine?: (line: string) => void;
 }
 
 // One EventSource shared by every hook; opened for the first subscriber, closed after the last.
@@ -24,6 +26,10 @@ function handleMessage(e: MessageEvent<string> | { data: string }): void {
   try {
     ev = JSON.parse(e.data) as DashEvent;
   } catch {
+    return;
+  }
+  if (ev.type === "tests-line") {
+    for (const s of [...subscribers]) s.onLine?.(ev.line);
     return;
   }
   if (ev.type !== "invalidate") return;
