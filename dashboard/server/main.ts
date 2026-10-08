@@ -5,7 +5,7 @@ import { loadConfig, type Config } from "./config";
 import { EventBus } from "./events";
 import { createGh } from "./lib/gh";
 import { createKanbanService } from "./lib/kanbanService";
-import { fileSyncDeps, isImportCompleted } from "./lib/kanbanSync";
+import { fileSyncDeps, isImportCompleted, removeStaleTempFiles } from "./lib/kanbanSync";
 import { startKanbanTriggers } from "./lib/kanbanTriggers";
 import { createTestRunner, nodeSpawn } from "./lib/testRunner";
 import { execRunner } from "./runner";
@@ -27,6 +27,7 @@ try {
   fail(`dashboard: ${err instanceof Error ? err.message : "invalid configuration"}`);
 }
 
+removeStaleTempFiles(config);
 const token = loadOrCreateToken(config.stateDir);
 const bus = new EventBus();
 const gh = createGh(execRunner, config);

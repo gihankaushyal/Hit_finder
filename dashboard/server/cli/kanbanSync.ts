@@ -2,14 +2,14 @@ import { pathToFileURL } from "node:url";
 import { loadConfig } from "../config";
 import { createGh } from "../lib/gh";
 import { execRunner } from "../runner";
-import { fileSyncDeps, isImportCompleted, runSync, SyncLockedError, type SyncAction, type SyncDeps, type SyncReport } from "../lib/kanbanSync";
+import { fileSyncDeps, isImportCompleted, removeStaleTempFiles, runSync, SyncLockedError, type SyncAction, type SyncDeps, type SyncReport } from "../lib/kanbanSync";
 
 export const USAGE = [
   "Usage: npm run kanban:sync -- [--dry-run] [--yes] [--rebuild-state]",
   "  --dry-run        print what a sync would do; makes no gh write and writes no file",
   "  --yes            confirm the first import (required until a run has completed the import)",
   "  --rebuild-state  rebuild the sync state from the file and GitHub when it was lost; flips and closes nothing",
-  "  --help     show this text",
+  "  --help           show this text",
 ].join("\n");
 
 export interface CliIo {
@@ -99,6 +99,13 @@ export async function main(argv: string[], io: CliIo): Promise<number> {
       io.err(`sync aborted: ${oneLine(report.conflicts[report.conflicts.length - 1] ?? "the kanban file changed on disk")}; run it again`);
       return 1;
     }
+    if (!io.importCompleted()) {
+      io.err(
+        "the import is not complete: some items could not be created or linked (see the conflicts and skipped items above), " +
+          "so the server's background sync stays off; fix them and re-run: npm run kanban:sync -- --yes",
+      );
+      return 1;
+    }
     return 0;
   } catch (err) {
     if (err instanceof SyncLockedError) {
@@ -113,6 +120,7 @@ export async function main(argv: string[], io: CliIo): Promise<number> {
 async function cli(): Promise<void> {
   const config = loadConfig(process.env);
   const gh = createGh(execRunner, config);
+  if (!process.argv.includes("--dry-run") && !process.argv.includes("--help")) removeStaleTempFiles(config);
   const code = await main(process.argv.slice(2), {
     sync: fileSyncDeps(config, gh),
     importCompleted: () => isImportCompleted(config),

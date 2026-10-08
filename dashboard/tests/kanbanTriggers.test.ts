@@ -17,12 +17,21 @@ function fakes() {
     },
   };
   const calls = { fileChanged: 0, poll: 0, dispose: 0 };
+  const order: string[] = [];
   const service = {
     fileChanged: () => calls.fileChanged++,
     poll: () => calls.poll++,
-    dispose: () => calls.dispose++,
+    dispose: () => {
+      order.push("dispose");
+      calls.dispose++;
+    },
   } as unknown as KanbanService;
-  return { handlers, watcher, service, calls, isClosed: () => closed };
+  const origClose = watcher.close.bind(watcher);
+  watcher.close = () => {
+    order.push("watcher.close");
+    return origClose();
+  };
+  return { handlers, watcher, service, calls, order, isClosed: () => closed };
 }
 
 describe("startKanbanTriggers", () => {
@@ -46,5 +55,20 @@ describe("startKanbanTriggers", () => {
     expect(f.calls.poll).toBe(0);
     expect(f.calls.dispose).toBe(1);
     expect(f.isClosed()).toBe(true);
+  });
+
+  it("closes the watcher and stops the poll before the service is disposed", async () => {
+    vi.useFakeTimers();
+    const f = fakes();
+    const t = startKanbanTriggers(f.service, "/x/kanban.md", { watch: () => f.watcher, pollMs: 1000 });
+    const pollWhenDisposed: number[] = [];
+    const dispose = f.service.dispose.bind(f.service);
+    f.service.dispose = () => {
+      pollWhenDisposed.push(vi.getTimerCount());
+      dispose();
+    };
+    await t.close();
+    expect(f.order).toEqual(["watcher.close", "dispose"]);
+    expect(pollWhenDisposed).toEqual([0]); // the poll timer was already cleared
   });
 });

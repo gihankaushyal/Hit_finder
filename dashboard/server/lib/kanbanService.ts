@@ -71,6 +71,7 @@ export function createKanbanService(d: KanbanServiceDeps): KanbanService {
   let syncError: string | null = null;
   let lastWritten: string | null = null;
   let timer: ReturnType<typeof setTimeout> | null = null;
+  let disposed = false;
 
   // Every write path (HTTP mutation, watcher, poll, manual sync) goes through this one queue.
   const exclusive = <T>(fn: () => Promise<T>): Promise<T> => {
@@ -204,6 +205,7 @@ export function createKanbanService(d: KanbanServiceDeps): KanbanService {
         }
       }),
     fileChanged() {
+      if (disposed) return;
       if (timer) clearTimeout(timer);
       timer = setTimeout(() => {
         timer = null;
@@ -220,9 +222,10 @@ export function createKanbanService(d: KanbanServiceDeps): KanbanService {
       timer.unref?.();
     },
     poll() {
-      if (d.imported()) fireAndLog("poll");
+      if (!disposed && d.imported()) fireAndLog("poll");
     },
     dispose() {
+      disposed = true;
       if (timer) clearTimeout(timer);
       timer = null;
     },

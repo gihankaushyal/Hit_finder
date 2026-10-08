@@ -27,9 +27,10 @@ export function startKanbanTriggers(
   timer.unref();
   return {
     async close() {
+      // Stop everything that can call into the service first, then dispose it.
+      await watcher.close();
       clearInterval(timer);
       service.dispose();
-      await watcher.close();
     },
   };
 }

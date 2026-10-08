@@ -7,10 +7,10 @@ import path from "node:path";
 import { FakeGh } from "./helpers/fakeGh";
 import { GhError, createGh, classifyGhFailure } from "../server/lib/gh";
 import { EventBus } from "../server/events";
-import { main } from "../server/cli/kanbanSync";
+import { main, USAGE } from "../server/cli/kanbanSync";
 import { createKanbanService, NotImportedError } from "../server/lib/kanbanService";
 import {
-  runSync, fileSyncDeps, acquireFileLock, type LockEnv, type LockFs, isImportCompleted, escapeMentions, PENDING_MAX_AGE_MS, MAX_UNATTENDED_CREATES, SyncLockedError, SyncStateError,
+  runSync, fileSyncDeps, acquireFileLock, removeStaleTempFiles, type LockEnv, type LockFs, isImportCompleted, escapeMentions, PENDING_MAX_AGE_MS, MAX_UNATTENDED_CREATES, SyncLockedError, SyncStateError,
   type SyncDeps, type SyncState,
 } from "../server/lib/kanbanSync";
 import type { Config } from "../server/config";
@@ -399,22 +399,31 @@ describe("5. safe writes", () => {
     expect(fs.readFileSync(kanbanPath, "utf8")).toContain("<!-- gh:#1 -->");
   });
 
-  it("fsyncs the temp file before the rename", () => {
-    const { deps } = setup("x\n");
-    const order: string[] = [];
+  it("fsyncs the temp file before it is renamed over the target", () => {
+    const { deps, kanbanPath } = setup("x\n");
+    deps.writeFile("warm\n"); // creates the one-time backup, so only the real write is traced below
+    const paths = new Map<number, string>();
+    const events: string[] = [];
+    const open = fs.openSync;
     const fsync = fs.fsyncSync;
     const rename = fs.renameSync;
+    vi.spyOn(fs, "openSync").mockImplementation(((p: fs.PathLike, ...rest: unknown[]) => {
+      const fd = (open as (...a: unknown[]) => number)(p, ...rest);
+      paths.set(fd, String(p));
+      return fd;
+    }) as typeof fs.openSync);
     vi.spyOn(fs, "fsyncSync").mockImplementation((fd) => {
-      order.push("fsync");
+      events.push(`fsync ${path.basename(paths.get(fd) ?? "?")}`);
       return fsync(fd);
     });
     vi.spyOn(fs, "renameSync").mockImplementation((a, b) => {
-      order.push("rename");
+      events.push(`rename ${path.basename(String(a))}`);
       return rename(a, b);
     });
     deps.writeFile("y\n");
-    expect(order.indexOf("fsync")).toBeGreaterThanOrEqual(0);
-    expect(order.indexOf("fsync")).toBeLessThan(order.indexOf("rename"));
+    const tmp = `.${path.basename(kanbanPath)}.${process.pid}.tmp`;
+    expect(events.indexOf(`fsync ${tmp}`)).toBeGreaterThanOrEqual(0);
+    expect(events.indexOf(`fsync ${tmp}`)).toBeLessThan(events.indexOf(`rename ${tmp}`));
   });
 
   it("removes the temp file and leaves the original intact when the write fails", () => {
@@ -1122,5 +1131,109 @@ describe("16. cap on unattended creates", () => {
     expect(b.syncError).toMatch(/GitHub/);
     expect(b.syncError).not.toMatch(/file changed/);
     service.dispose();
+  });
+});
+
+describe("17. incomplete imports and the CLI", () => {
+  afterEach(() => vi.restoreAllMocks());
+  const ONE = "## A\n\n- [ ] one\n";
+
+  it("a stale pending conflict leaves the import incomplete", async () => {
+    const m = mk(ONE);
+    m.gh.onCreate = () => {
+      m.h.file = ONE + "\n";
+    };
+    await sync(m.deps);
+    m.gh.onCreate = () => {};
+    m.gh.issues.delete(1);
+    m.h.file = ONE;
+    delete m.h.state.importCompletedAt;
+    m.h.now += PENDING_MAX_AGE_MS;
+    const r = await sync(m.deps);
+    expect(r.conflicts.join()).toMatch(/not appeared/);
+    expect(m.h.state.importCompletedAt).toBeUndefined();
+  });
+
+  it("the CLI exits non-zero and says the import is not complete when a real run did not finish it", async () => {
+    const m = mk(ONE);
+    m.gh.onCreate = () => {
+      m.h.file = ONE + "\n";
+    };
+    await sync(m.deps);
+    m.gh.onCreate = () => {};
+    m.gh.issues.delete(1);
+    m.h.file = ONE;
+    delete m.h.state.importCompletedAt;
+    m.h.now += PENDING_MAX_AGE_MS;
+    const err: string[] = [];
+    const code = await main(["--yes"], { sync: m.deps, importCompleted: () => Boolean(m.h.state.importCompletedAt), out: () => {}, err: (l) => err.push(l) });
+    expect(code).toBe(1);
+    const line = err.filter((l) => /import is not complete/.test(l));
+    expect(line).toHaveLength(1);
+    expect(line[0]).toMatch(/background sync stays off/);
+    expect(line[0]).toMatch(/re-run|run it again/i);
+  });
+
+  it("the CLI exits 0 and prints no such line when the import completed", async () => {
+    const m = mk(ONE);
+    const err: string[] = [];
+    const code = await main(["--yes"], { sync: m.deps, importCompleted: () => Boolean(m.h.state.importCompletedAt), out: () => {}, err: (l) => err.push(l) });
+    expect(code).toBe(0);
+    expect(err).toEqual([]);
+  });
+
+  it("every option in the usage text lines up", () => {
+    const rows = USAGE.split("\n").filter((l) => l.startsWith("  --"));
+    const descStart = rows.map((r) => r.search(/\S\s{2,}\S/) + 1 + r.slice(r.search(/\S\s{2,}\S/) + 1).search(/\S/));
+    expect(new Set(descStart).size).toBe(1);
+  });
+});
+
+describe("18. shutdown and leftover temp files", () => {
+  let dir: string | undefined;
+  afterEach(() => {
+    if (dir) fs.rmSync(dir, { recursive: true, force: true });
+    dir = undefined;
+  });
+
+  it("a disposed service ignores later file events and polls (nothing re-arms a timer)", async () => {
+    const { deps, gh } = mk("## A\n\n- [ ] one\n");
+    await sync(deps);
+    gh.writes = [];
+    gh.jsonCalls = [];
+    const service = createKanbanService({ gh, sync: deps, bus: new EventBus(), imported: () => true, debounceMs: 1 });
+    service.dispose();
+    service.fileChanged();
+    service.poll();
+    await new Promise((r) => setTimeout(r, 30));
+    expect(gh.jsonCalls).toEqual([]);
+  });
+
+  it("removes leftover temp files of dead pids next to the kanban and state files, and nothing else", () => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), "dash-tmp-"));
+    const kanbanPath = path.join(dir, "k.md");
+    const stateDir = path.join(dir, "state");
+    fs.mkdirSync(stateDir);
+    fs.writeFileSync(kanbanPath, "x");
+    const dead = spawnSync(process.execPath, ["-e", ""]).pid!;
+    const touch = (d: string, n: string) => {
+      fs.writeFileSync(path.join(d, n), "t");
+      return path.join(d, n);
+    };
+    const gone = [
+      touch(dir, `.k.md.${dead}.tmp`),
+      touch(dir, `.k.md.pre-sync.bak.${dead}.tmp`),
+      touch(stateDir, `.kanban-sync.json.${dead}.tmp`),
+    ];
+    const keep = [
+      touch(dir, `.k.md.${process.pid}.tmp`), // owner alive
+      touch(dir, `.unrelated.${dead}.tmp`), // not one of ours
+      touch(dir, "notes.tmp"),
+      touch(stateDir, "kanban-sync.lock"),
+    ];
+    const removed = removeStaleTempFiles({ kanbanPath, stateDir } as Config);
+    for (const f of gone) expect(fs.existsSync(f)).toBe(false);
+    for (const f of keep) expect(fs.existsSync(f)).toBe(true);
+    expect(removed).toBe(3);
   });
 });

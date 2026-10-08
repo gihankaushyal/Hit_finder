@@ -307,6 +307,7 @@ async function executeInner(d: SyncDeps, opts: SyncOptions, report: SyncReport):
             claimed.add(pendingNumber);
             const age = nowMs() - (state.pending![String(pendingNumber)].at ?? nowMs());
             if (age >= PENDING_MAX_AGE_MS) {
+              incomplete = true; // an issue is unaccounted for, so the import is not finished
               report.conflicts.push(
                 `#${pendingNumber} was created for "${title}" by an interrupted run but has still not appeared on GitHub after ${Math.round(PENDING_MAX_AGE_MS / 60000)} minutes; ` +
                   "not creating it again automatically. Check the repository's issues, then add the marker by hand or remove the entry from the sync state",
@@ -861,6 +862,46 @@ export function acquireFileLock(stateDir: string, env: LockEnv = realLockEnv()):
     };
   }
   throw held("lost a race for the lock");
+}
+
+const TEMP_FILE_RE = /^\.(.+)\.(\d+)\.tmp$/;
+
+/**
+ * Removes `.<name>.<pid>.tmp` files that a killed process left next to the kanban file and the state file.
+ * Only files named after those two files (and the one-time backup) whose pid is no longer alive are touched.
+ * Returns how many were removed.
+ */
+export function removeStaleTempFiles(config: Pick<Config, "kanbanPath" | "stateDir">): number {
+  let kanbanReal = config.kanbanPath;
+  try {
+    kanbanReal = fs.realpathSync(config.kanbanPath);
+  } catch {
+    // missing file: use the configured path
+  }
+  const targets: { dir: string; names: Set<string> }[] = [
+    { dir: path.dirname(kanbanReal), names: new Set([path.basename(kanbanReal), path.basename(kanbanReal) + BACKUP_SUFFIX]) },
+    { dir: config.stateDir, names: new Set([STATE_FILE]) },
+  ];
+  let removed = 0;
+  for (const { dir, names } of targets) {
+    let entries: string[];
+    try {
+      entries = fs.readdirSync(dir);
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      const m = TEMP_FILE_RE.exec(entry);
+      if (!m || !names.has(m[1]) || pidAlive(Number(m[2]))) continue;
+      try {
+        fs.rmSync(path.join(dir, entry), { force: true });
+        removed++;
+      } catch {
+        // leave it for the next start
+      }
+    }
+  }
+  return removed;
 }
 
 export function fileSyncDeps(config: Config, gh: Gh): SyncDeps {
