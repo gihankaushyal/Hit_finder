@@ -141,7 +141,8 @@ export function escapeMentions(s: string): string {
   return s.replace(/@(?!‍)/g, `@${ZERO_WIDTH_JOINER}`);
 }
 const unescapeMentions = (s: string): string => s.replaceAll(`@${ZERO_WIDTH_JOINER}`, "@");
-const normEol = (s: string): string => s.replace(/\r\n/g, "\n");
+/** Line endings and trailing whitespace are not significant when matching a body GitHub returned. */
+const normBody = (s: string): string => s.replace(/\r\n/g, "\n").trimEnd();
 const footerFor = (section: string): string => `\n\n_Synced from phase-05-kanban.md, section: ${section}_`;
 const issueBody = (item: K.MdItem): string => escapeMentions(K.itemBody(item) + footerFor(item.section)).slice(0, BODY_MAX_CHARS);
 const issueTitle = (item: K.MdItem): string => escapeMentions(K.itemTitle(item)).slice(0, TITLE_MAX_CHARS).trim();
@@ -165,6 +166,7 @@ interface LinkOp {
   item: K.MdItem;
   title: string;
   issue: number;
+  hash: string;
 }
 interface AppendOp {
   task: GhTask;
@@ -227,10 +229,39 @@ async function execute(d: SyncDeps, opts: SyncOptions): Promise<SyncReport> {
       );
     }
     // A pending link whose issue is already marked in the file is resolved (the run died before saving state).
-    for (const item of markered) delete state.pending![String(item.issue)];
+    // If that issue is closed behind an unticked box and has no record yet, record the disagreement so the
+    // next step reports it instead of ticking the box.
+    for (const item of markered) {
+      const key = String(item.issue);
+      if (state.pending![key] && !state.items[key] && !item.checked && byNumber.get(item.issue!)?.state === "CLOSED") {
+        state.items[key] = { checked: false, closed: true, bodyHash: sha(K.itemBody(item)) };
+      }
+      delete state.pending![key];
+    }
     const markedNumbers = new Set(markered.map((it) => it.issue!));
     const claimed = new Set<number>(); // issues taken by an unmarked item in this run
-    const candidates = tasks.filter((t) => !markedNumbers.has(t.number)).sort((a, b) => a.number - b.number);
+    // Stateless adoption only considers issues the sync has no record of. The exception is a file in which
+    // every marker is gone while the state has records (a stale editor buffer): then recorded issues are
+    // candidates too, and an item is re-linked only on an exact title and body match.
+    const allMarkersGone = markered.length === 0 && Object.keys(state.items).length > 0;
+    const candidates = tasks
+      .filter((t) => !markedNumbers.has(t.number) && (allMarkersGone || !state.items[String(t.number)]))
+      .sort((a, b) => a.number - b.number);
+    // Ticked items pick first and prefer closed issues; unticked items prefer open ones.
+    const adoptable = new Map<K.MdItem, GhTask>();
+    const pendingHashes = new Set(Object.values(state.pending!).map((p) => p.hash));
+    const taken = new Set<number>();
+    for (const item of [...allItems.filter((it) => it.issue === null && it.checked), ...allItems.filter((it) => it.issue === null && !it.checked)]) {
+      const title = issueTitle(item);
+      const body = issueBody(item);
+      if (title === "" || title.includes("\0") || body.includes("\0") || pendingHashes.has(createHash(title, item))) continue;
+      const matches = candidates.filter((t) => !taken.has(t.number) && t.title === title && normBody(t.body) === normBody(body));
+      const preferred = matches.find((t) => (t.state === "CLOSED") === item.checked) ?? matches[0];
+      if (preferred) {
+        taken.add(preferred.number);
+        adoptable.set(item, preferred);
+      }
+    }
     for (const item of allItems) {
       if (item.issue === null) {
         const title = issueTitle(item);
@@ -246,12 +277,10 @@ async function execute(d: SyncDeps, opts: SyncOptions): Promise<SyncReport> {
             .map(([n]) => Number(n))
             .sort((a, b) => a - b);
           const pendingNumber = pendingNumbers[0];
-          const stateless = candidates.find(
-            (t) => !claimed.has(t.number) && t.title === title && normEol(t.body) === normEol(body),
-          );
+          const stateless = adoptable.get(item);
           if (pendingNumber !== undefined && byNumber.has(pendingNumber)) {
             claimed.add(pendingNumber);
-            linkOps.push({ item, title, issue: pendingNumber });
+            linkOps.push({ item, title, issue: pendingNumber, hash });
           } else if (pendingNumber !== undefined) {
             claimed.add(pendingNumber);
             const age = nowMs() - (state.pending![String(pendingNumber)].at ?? nowMs());
@@ -270,7 +299,7 @@ async function execute(d: SyncDeps, opts: SyncOptions): Promise<SyncReport> {
             }
           } else if (stateless) {
             claimed.add(stateless.number);
-            linkOps.push({ item, title, issue: stateless.number });
+            linkOps.push({ item, title, issue: stateless.number, hash });
           } else {
             createOps.push({ item, title, labels: labelsForSection(item.section), hash });
           }
@@ -427,33 +456,41 @@ async function execute(d: SyncDeps, opts: SyncOptions): Promise<SyncReport> {
   saveIfChanged();
 
   // Phase A2: adopt issues that already exist for an unmarked item (an interrupted run, a stripped marker).
-  // The marker goes to disk first, then state is saved. Nothing is ever unticked.
+  // Same order as a create: pending is saved, then the marker goes to disk, then the item record is saved,
+  // and only then is pending cleared. Adoption never ticks or unticks a box.
   for (const op of linkOps) {
+    const key = String(op.issue);
+    if (!state.pending![key]) state.pending![key] = { hash: op.hash, at: nowMs() };
+    saveIfChanged();
     K.setIssue(op.item, op.issue);
-    delete state.pending![String(op.issue)];
+    if (!flush()) return abort(FILE_CHANGED);
     const wasClosed = closedNow.get(op.issue) ?? false;
     const bodyHash = sha(K.itemBody(op.item));
-    if (rebuild) {
-      state.items[String(op.issue)] = { checked: op.item.checked, closed: wasClosed, bodyHash };
-    } else if (!op.item.checked && wasClosed) {
-      K.setChecked(op.item, true); // GitHub says done: follow it
-    }
-    if (!flush()) return abort(FILE_CHANGED);
     report.actions.push({ type: "link", issue: op.issue, title: op.title });
-    if (!rebuild) {
-      if (op.item.checked === wasClosed) {
-        record(op.item, false);
-      } else {
-        // Ticked item, open issue: close it. checked:false in the record so a failed close is retried.
-        state.items[String(op.issue)] = { checked: false, closed: false, bodyHash };
-        const closedOk = await attempt(`closing #${op.issue} after linking it`, async () => {
-          await d.gh.text(["issue", "close", String(op.issue)]);
-          closedNow.set(op.issue, true);
-        });
-        if (closedOk) state.items[String(op.issue)] = { checked: true, closed: true, bodyHash };
-      }
+    let closeAfter = false;
+    if (rebuild) {
+      state.items[key] = { checked: op.item.checked, closed: wasClosed, bodyHash };
+    } else if (op.item.checked === wasClosed) {
+      record(op.item, false);
+    } else if (!op.item.checked) {
+      // Closed on GitHub behind an unticked box: record the disagreement and leave the choice to the user.
+      state.items[key] = { checked: false, closed: true, bodyHash };
+      report.conflicts.push(`#${op.issue} is closed on GitHub but its item in the file is not ticked; linked them and left both as they are. Tick the box or reopen the issue`);
+    } else {
+      // Ticked item, open issue: close it. checked:false in the record so a failed close is retried.
+      state.items[key] = { checked: false, closed: false, bodyHash };
+      closeAfter = true;
     }
+    delete state.pending![key];
     saveIfChanged();
+    if (closeAfter) {
+      const closedOk = await attempt(`closing #${op.issue} after linking it`, async () => {
+        await d.gh.text(["issue", "close", String(op.issue)]);
+        closedNow.set(op.issue, true);
+      });
+      if (closedOk) state.items[key] = { checked: true, closed: true, bodyHash };
+      saveIfChanged();
+    }
   }
 
   // Phase B: creates. After each one the marker is on disk and the state saved before the next begins.

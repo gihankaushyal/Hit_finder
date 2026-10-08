@@ -28,6 +28,10 @@ export class FakeGh implements Gh {
   maxInFlight = 0;
   /** Called after each successful create, with the new issue number. */
   onCreate: (n: number) => void = () => {};
+  /** How `json` renders issue bodies: GitHub can return CRLF line endings and may trim a trailing newline. */
+  bodyStyle: "exact" | "crlf" | "trimmed" | "padded" = "exact";
+  /** Return an error to throw for a write call (before it takes effect), or null to let it through. */
+  failWith: ((args: string[]) => Error | null) | null = null;
   /** Output override for `issue create`. */
   createOutput: ((n: number) => string) | null = null;
 
@@ -56,13 +60,17 @@ export class FakeGh implements Gh {
       this.failNextJson = false;
       throw new Error("gh list failed");
     }
-    return [...this.issues.values()].map((i) => ({ ...i, labels: i.labels.map((name) => ({ name })) })) as T;
+    const render = (b: string): string =>
+      this.bodyStyle === "crlf" ? b.replace(/\n/g, "\r\n") : this.bodyStyle === "trimmed" ? b.replace(/\s+$/, "") : this.bodyStyle === "padded" ? `${b}\n` : b;
+    return [...this.issues.values()].map((i) => ({ ...i, body: render(i.body), labels: i.labels.map((name) => ({ name })) })) as T;
   }
 
   async text(args: string[]): Promise<string> {
     this.writes.push(args);
     await this.track();
     const [group, verb] = args;
+    const injected = this.failWith?.(args) ?? null;
+    if (injected) throw injected;
     const flag = (name: string) => args.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3);
     if (group === "label") return "";
     if (verb === "create") {

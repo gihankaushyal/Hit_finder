@@ -133,13 +133,14 @@ describe("1. stateless adoption", () => {
     expect(gh.count("reopen")).toBe(0);
   });
 
-  it("a closed adopted issue ticks an unticked box and never unticks a ticked one", async () => {
+  it("a closed adopted issue never changes a box: it is linked and reported", async () => {
     const { h, deps, gh } = mk("## A\n\n- [ ] alpha\n");
     await sync(deps);
     gh.issues.get(1)!.state = "CLOSED";
     h.file = strip(h.file!);
-    await sync(deps);
-    expect(h.file).toContain("- [x] alpha <!-- gh:#1 -->");
+    const r = await sync(deps);
+    expect(h.file).toContain("- [ ] alpha <!-- gh:#1 -->");
+    expect(r.conflicts.join()).toMatch(/#1/);
     expect(gh.count("create")).toBe(1);
   });
 
@@ -715,5 +716,105 @@ describe("10. body update path updates the hash even when checkbox and issue dis
     const r2 = await sync(deps);
     expect(r2.actions).toEqual([]);
     expect(gh.count("edit")).toBe(1);
+  });
+});
+
+describe("11. adoption considers only issues without a record", () => {
+  afterEach(() => vi.restoreAllMocks());
+  const body = (section: string, text: string): string => `${text}\n\n_Synced from phase-05-kanban.md, section: ${section}_`;
+
+  it("a deleted finished item and a later identical item do not get linked to the old closed issue", async () => {
+    const { h, deps, gh } = mk("## A\n\n- [ ] keep\n- [x] recurring\n");
+    await sync(deps);
+    expect(gh.issues.get(2)!.state).toBe("CLOSED");
+    h.file = h.file!.replace(/- \[x\] recurring.*\n/, "") + "- [ ] recurring\n";
+    await sync(deps);
+    expect(gh.count("create")).toBe(3); // a new issue was created for the new item
+    expect(h.file).toContain("- [ ] recurring <!-- gh:#3 -->");
+    expect(gh.issues.get(2)!.state).toBe("CLOSED"); // the old one is untouched
+    expect(gh.count("reopen")).toBe(0);
+  });
+
+  it("when every marker was stripped, a closed issue is linked to an unticked item but the box is not ticked", async () => {
+    const { h, deps, gh } = mk("## A\n\n- [ ] alpha\n");
+    await sync(deps);
+    gh.issues.get(1)!.state = "CLOSED";
+    h.file = strip(h.file!);
+    const r = await sync(deps);
+    expect(h.file).toBe("## A\n\n- [ ] alpha <!-- gh:#1 -->\n");
+    expect(gh.count("create")).toBe(1);
+    expect(r.conflicts.join()).toMatch(/#1/);
+    const again = await sync(deps); // stays a conflict for the user; still nothing is ticked or created
+    expect(h.file).toBe("## A\n\n- [ ] alpha <!-- gh:#1 -->\n");
+    expect(again.conflicts.join()).toMatch(/#1/);
+    expect(gh.count("create")).toBe(1);
+  });
+
+  it("identical candidates that differ in state: ticked items take the closed issue first", async () => {
+    const { h, deps, gh } = mk("## A\n\n- [ ] same\n- [x] same\n");
+    gh.seed({ number: 1, title: "same", body: body("A", "same"), state: "CLOSED" });
+    gh.seed({ number: 2, title: "same", body: body("A", "same") });
+    await sync(deps);
+    expect(gh.count("create")).toBe(0);
+    expect(h.file).toBe("## A\n\n- [ ] same <!-- gh:#2 -->\n- [x] same <!-- gh:#1 -->\n");
+    expect(gh.count("close")).toBe(0);
+    expect(gh.count("reopen")).toBe(0);
+  });
+
+  it("a marker present with a pending record and a closed issue behind an unticked box is not ticked", async () => {
+    const { h, deps, gh } = mk("## A\n\n- [ ] alpha <!-- gh:#1 -->\n");
+    gh.seed({ number: 1, title: "alpha", body: body("A", "alpha"), state: "CLOSED" });
+    h.state.pending = { "1": { hash: "x", at: h.now } };
+    const r = await sync(deps);
+    expect(h.file).toBe("## A\n\n- [ ] alpha <!-- gh:#1 -->\n");
+    expect(r.conflicts.join()).toMatch(/#1/);
+  });
+});
+
+describe("12. adoption saves pending before the marker reaches the file", () => {
+  it("state holds pending[n] at the moment the marker is written, and it is cleared afterwards", async () => {
+    const { h, deps, gh } = mk("## A\n\n- [ ] alpha\n");
+    gh.seed({ number: 1, title: "alpha", body: "alpha\n\n_Synced from phase-05-kanban.md, section: A_" });
+    let pendingAtWrite: unknown = "never written";
+    const write = deps.writeFile;
+    deps.writeFile = (t) => {
+      if (t.includes("gh:#1")) pendingAtWrite = h.state.pending?.["1"];
+      write(t);
+    };
+    await sync(deps);
+    expect(pendingAtWrite).toMatchObject({ hash: expect.any(String) });
+    expect(h.state.pending ?? {}).toEqual({});
+    expect(h.state.items["1"]).toBeDefined();
+  });
+
+  it("a kill right after the marker write leaves a marker that state knows about", async () => {
+    const { h, deps, gh } = mk("## A\n\n- [x] alpha\n");
+    gh.seed({ number: 1, title: "alpha", body: "alpha\n\n_Synced from phase-05-kanban.md, section: A_" });
+    const write = deps.writeFile;
+    deps.writeFile = (t) => {
+      write(t);
+      if (t.includes("gh:#1")) throw new Error("killed");
+    };
+    await expect(sync(deps)).rejects.toThrow("killed");
+    expect(h.file).toContain("gh:#1");
+    expect(h.state.pending?.["1"]).toBeDefined();
+    deps.writeFile = write;
+    await sync(deps);
+    expect(gh.issues.get(1)!.state).toBe("CLOSED"); // the ticked item's issue was closed on recovery
+    expect(h.state.pending ?? {}).toEqual({});
+  });
+});
+
+describe("13. adoption tolerates how GitHub returns bodies", () => {
+  afterEach(() => vi.restoreAllMocks());
+  it.each(["crlf", "trimmed", "padded"] as const)("%s bodies still match", async (style) => {
+    const { h, deps, gh } = mk("## A\n\n- [ ] alpha\n  with a second line\n- [x] beta\n");
+    await sync(deps);
+    const creates = gh.count("create");
+    h.file = strip(h.file!);
+    gh.bodyStyle = style;
+    const r = await sync(deps);
+    expect(gh.count("create")).toBe(creates);
+    expect(r.actions.map((a) => a.type)).toEqual(["link", "link"]);
   });
 });
