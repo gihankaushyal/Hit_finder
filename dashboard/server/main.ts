@@ -37,7 +37,7 @@ const kanban = createKanbanService({
   bus,
   imported: () => isImportCompleted(config),
 });
-const app = buildServer({ config, token, bus, gh, tests, kanban });
+const app = buildServer({ config, token, bus, gh, tests, kanban, runner: execRunner });
 
 if (!isImportCompleted(config)) {
   console.log("Kanban sync is off until you run the first import: npm run kanban:sync -- --dry-run, then -- --yes");

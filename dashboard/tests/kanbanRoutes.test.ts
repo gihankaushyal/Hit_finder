@@ -346,7 +346,7 @@ describe("buildServer", () => {
     const s = setup();
     const gh = s.gh;
     const tests = { state: () => ({ status: "idle" }) as never, start: () => true, stop: () => {} };
-    const app = buildServer({ config, token: "t".repeat(64), bus: s.bus, gh, tests, kanban: s.service });
+    const app = buildServer({ config, token: "t".repeat(64), bus: s.bus, gh, tests, kanban: s.service, runner: async () => ({ stdout: "x\n", stderr: "", code: 0 }) });
     return { app, gh };
   }
 
@@ -362,6 +362,7 @@ describe("buildServer", () => {
     ["POST", "/api/kanban/tasks"],
     ["PATCH", "/api/kanban/tasks/1"],
     ["POST", "/api/kanban/sync"],
+    ["GET", "/api/repo"],
   ])("%s %s without a token is 401", async (method, url) => {
     const { app, gh } = server();
     const res = await app.request(url, { method });
@@ -373,7 +374,7 @@ describe("buildServer", () => {
   it("with the token, every module answers", async () => {
     const { app } = server();
     const auth = { Authorization: `Bearer ${"t".repeat(64)}` };
-    for (const url of ["/api/health", "/api/tests", "/api/kanban", "/api/ci", "/api/issues", "/api/prs"]) {
+    for (const url of ["/api/health", "/api/tests", "/api/kanban", "/api/ci", "/api/issues", "/api/prs", "/api/repo"]) {
       const res = await app.request(url, { headers: auth });
       expect(res.status, url).toBe(200);
     }
