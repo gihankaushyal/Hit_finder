@@ -1,19 +1,11 @@
-import { PanelFrame } from "./components/PanelFrame";
 import { useResource } from "./lib/useResource";
 import { Issues } from "./panels/Issues";
+import { Kanban } from "./panels/Kanban";
 import { LatestPr } from "./panels/LatestPr";
 import { RightRail } from "./panels/RightRail";
 import { TerminalDrawer } from "./panels/TerminalDrawer";
 import { TestStatus } from "./panels/TestStatus";
 import { TopBar } from "./panels/TopBar";
-
-function KanbanPending() {
-  return (
-    <PanelFrame title="Kanban" state="ready">
-      <p className="dim">Not connected yet.</p>
-    </PanelFrame>
-  );
-}
 
 function Unauthorized({ message }: { message: string }) {
   return (
@@ -34,7 +26,7 @@ export function App() {
       <TopBar />
       <main id="main" className="main" tabIndex={-1}>
         <div className="col col--left"><LatestPr />
-          <KanbanPending /></div>
+          <Kanban /></div>
         <div className="col col--middle"><TestStatus />
           <Issues /></div>
         <RightRail />

@@ -188,3 +188,26 @@ input[aria-invalid="true"], textarea[aria-invalid="true"] { border-color: var(--
   font-size: 0.85rem; white-space: pre-wrap; overflow-wrap: anywhere;
 }
 .log__follow { position: absolute; right: var(--s2); bottom: var(--s2); background: var(--surface); border: 1px solid var(--rule); padding: 0 var(--s2); min-height: 24px; }
+
+/* Kanban */
+.kb { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0; border-top: 1px solid var(--rule); }
+.kb-col { min-width: 0; padding: var(--s2) var(--s3) var(--s3); border-right: 1px solid var(--rule); display: flex; flex-direction: column; gap: var(--s2); }
+.kb-col:first-child { padding-left: 0; }
+.kb-col:last-child { border-right: 0; padding-right: 0; }
+.kb-col__head { font-size: 0.85rem; font-weight: 600; color: var(--text-dim); }
+.kb-col__list { max-height: 55vh; overflow: auto; }
+.kb-item { padding: var(--s2) 0; border-bottom: 1px solid var(--rule); display: flex; flex-direction: column; gap: var(--s1); min-width: 0; }
+.kb-item__main { display: flex; gap: var(--s2); align-items: flex-start; min-width: 0; }
+.kb-item__main input[type="checkbox"] { margin: 3px 0 0; flex: none; accent-color: var(--text-dim); }
+.kb-item__title { min-width: 0; overflow-wrap: anywhere; }
+.kb-item__meta { display: flex; flex-wrap: wrap; gap: var(--s1) var(--s2); align-items: center; padding-left: 21px; }
+.kb-item__move { margin-left: auto; font-size: 0.85rem; padding: 0 var(--s1); max-width: 100%; }
+.kb-add { display: flex; flex-direction: column; gap: var(--s1); }
+.kb-add label { font-weight: 500; }
+.kb-add__row { display: flex; gap: var(--s2); }
+.kb-add__row input { flex: 1; min-width: 0; }
+.kb-note { margin-bottom: var(--s2); }
+.kb-sync { white-space: nowrap; align-self: center; }
+details.notice > summary { cursor: pointer; }
+details.notice .bullets { margin-top: var(--s2); }
+code.mono { background: var(--surface-2); padding: 0 var(--s1); border-radius: var(--radius); }
