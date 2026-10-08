@@ -14,6 +14,7 @@ const STATUS_PREFIX = "status:";
 const KIND_PREFIX = "kind:";
 const SYNC_FAILED = "sync failed; see the server log";
 const SYNC_STOPPED = "sync stopped because the kanban file changed on disk; it will retry";
+const SYNC_GH_UNUSABLE = "sync stopped because GitHub could not be reached or refused the requests; it will retry";
 export const NOT_IMPORTED_MESSAGE =
   "The kanban board has not been imported yet. Run the first import from a terminal: npm run kanban:sync -- --dry-run, then npm run kanban:sync -- --yes";
 
@@ -93,10 +94,10 @@ export function createKanbanService(d: KanbanServiceDeps): KanbanService {
 
   async function doSync(): Promise<void> {
     try {
-      const report = await runSync(syncDeps, { dryRun: false });
+      const report = await runSync(syncDeps, { dryRun: false, unattended: true });
       lastReport = report;
       lastSyncAt = new Date().toISOString();
-      syncError = report.aborted ? SYNC_STOPPED : null;
+      syncError = report.aborted ? (report.abortedBy === "gh" ? SYNC_GH_UNUSABLE : SYNC_STOPPED) : null;
     } catch (err) {
       if (err instanceof SyncLockedError) return; // another process is syncing: a skipped run, not an error
       console.error("kanban sync failed:", err);

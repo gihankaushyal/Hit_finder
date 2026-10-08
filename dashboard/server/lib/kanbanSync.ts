@@ -1,8 +1,9 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import type { Config } from "../config";
-import { flagArg, type Gh } from "./gh";
+import { classifyGhFailure, flagArg, type Gh } from "./gh";
 import * as K from "./kanbanMd";
 
 export interface GhTask {
@@ -47,6 +48,8 @@ export interface SyncSkipped {
   reason: string;
 }
 export interface SyncReport {
+  /** Why an aborted run stopped: the file changed under it, or gh/the network was unusable. */
+  abortedBy?: "file-changed" | "gh";
   actions: SyncAction[]; // dry run: what a real run would do; real run: what it did
   conflicts: string[];
   notInFile: number[];
@@ -57,6 +60,11 @@ export interface SyncOptions {
   dryRun: boolean;
   /** Rebuild the state records from the current file and GitHub, flipping and closing nothing. */
   rebuildState?: boolean;
+  /**
+   * True for a run nobody is watching (file watcher, poll, HTTP route): it refuses to create more than
+   * MAX_UNATTENDED_CREATES issues. The command-line run leaves this unset and is not capped.
+   */
+  unattended?: boolean;
 }
 
 export interface SyncDeps {
@@ -112,9 +120,10 @@ export const PENDING_MAX_AGE_MS = 10 * 60 * 1000;
 /** An unparsable lock file younger than this may still be being written by its owner. */
 const LOCK_UNPARSABLE_GRACE_MS = 10_000;
 const ZERO_WIDTH_JOINER = "\u200D";
-/** gh failures that affect every item, so the run stops instead of isolating them. */
-const GLOBAL_GH_FAILURE =
-  /auth|credential|token|log ?in|\b40[13]\b|rate limit|abuse|could not resolve|network|connection|timed? ?out|ENOTFOUND|ECONN/i;
+/** This many failures in a row, of any kind, stop the run: something is wrong beyond one item. */
+export const MAX_CONSECUTIVE_FAILURES = 3;
+/** A run that nobody is watching (watcher, poll, HTTP route) creates at most this many issues. */
+export const MAX_UNATTENDED_CREATES = 5;
 const FILE_CHANGED = "the kanban file changed on disk during the sync; stopped without overwriting it";
 
 export function labelsForSection(section: string): string[] {
@@ -151,7 +160,8 @@ const issueNumberFrom = (out: string): number | null => {
   const m = /\/issues\/(\d+)\s*$/.exec(out.trim());
   return m ? Number(m[1]) : null;
 };
-const isGlobalFailure = (err: unknown): boolean => GLOBAL_GH_FAILURE.test(err instanceof Error ? err.message : String(err));
+/** Thrown inside a run to stop it; execute() turns it into an aborted report. */
+class RunAbort extends Error {}
 
 type LinkedOp =
   | { kind: "md-check"; item: K.MdItem; issue: number; checked: boolean }
@@ -190,10 +200,22 @@ export function runSync(d: SyncDeps, opts: SyncOptions): Promise<SyncReport> {
 }
 
 async function execute(d: SyncDeps, opts: SyncOptions): Promise<SyncReport> {
+  const report: SyncReport = { actions: [], conflicts: [], notInFile: [], skipped: [], aborted: false };
+  try {
+    return await executeInner(d, opts, report);
+  } catch (err) {
+    if (!(err instanceof RunAbort)) throw err;
+    report.aborted = true;
+    report.abortedBy = "gh";
+    report.conflicts.push(err.message);
+    return report;
+  }
+}
+
+async function executeInner(d: SyncDeps, opts: SyncOptions, report: SyncReport): Promise<SyncReport> {
   const dryRun = opts.dryRun;
   const rebuild = opts.rebuildState === true;
   const nowMs = (): number => (d.now ?? Date.now)();
-  const report: SyncReport = { actions: [], conflicts: [], notInFile: [], skipped: [], aborted: false };
   // State and file first: a corrupt state file or invalid UTF-8 stops the run before any gh call.
   const loaded = d.loadState();
   const startText = d.readFile();
@@ -379,6 +401,7 @@ async function execute(d: SyncDeps, opts: SyncOptions): Promise<SyncReport> {
   const fileUnchanged = (): boolean => d.readFile() === known;
   const abort = (note: string): SyncReport => {
     report.aborted = true;
+    report.abortedBy = "file-changed";
     report.conflicts.push(note);
     return report;
   };
@@ -395,14 +418,21 @@ async function execute(d: SyncDeps, opts: SyncOptions): Promise<SyncReport> {
    * Runs one gh write for one item. A failure that is specific to the item becomes a conflict and the run
    * goes on; a failure that would hit every item (auth, network, rate limit) is rethrown to abort the run.
    */
+  let consecutiveFailures = 0;
   const attempt = async (what: string, fn: () => Promise<void>): Promise<boolean> => {
     try {
       await fn();
+      consecutiveFailures = 0;
       return true;
     } catch (err) {
-      if (isGlobalFailure(err)) throw err;
       console.error(`${what} failed:`, err);
+      if (classifyGhFailure(err) === "global") {
+        throw new RunAbort(`${what} failed because GitHub or the network is not usable right now; stopped the run, the next sync will retry`);
+      }
       report.conflicts.push(`${what} failed; the next sync will retry`);
+      if (++consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+        throw new RunAbort(`${MAX_CONSECUTIVE_FAILURES} gh calls failed in a row (last: ${what}); stopped the run, the next sync will retry`);
+      }
       return false;
     }
   };
@@ -494,6 +524,15 @@ async function execute(d: SyncDeps, opts: SyncOptions): Promise<SyncReport> {
   }
 
   // Phase B: creates. After each one the marker is on disk and the state saved before the next begins.
+  // An unwatched run never creates a large batch: it leaves them for the command line.
+  if (opts.unattended && createOps.length > MAX_UNATTENDED_CREATES) {
+    report.conflicts.push(
+      `${createOps.length} items are waiting to be created as GitHub issues, more than a background sync will create on its own (${MAX_UNATTENDED_CREATES}); ` +
+        "run npm run kanban:sync from the command line to create them",
+    );
+    incomplete = true;
+    createOps.length = 0;
+  }
   for (let i = 0; i < createOps.length; i++) {
     const op = createOps[i];
     if (i > 0) await d.sleep(CREATE_PAUSE_MS);
@@ -690,45 +729,132 @@ function pidAlive(pid: number): boolean {
   }
 }
 
-function acquireFileLock(stateDir: string): () => void {
+/** The file operations the lock needs, injectable so a race can be replayed step by step. */
+export interface LockFs {
+  openSync(p: string, flags: string, mode: number): number;
+  writeFileSync(fd: number, data: string): void;
+  fsyncSync(fd: number): void;
+  closeSync(fd: number): void;
+  readFileSync(p: string): string;
+  statMtimeMs(p: string): number;
+  renameSync(from: string, to: string): void;
+  linkSync(existing: string, created: string): void;
+  rmSync(p: string): void;
+}
+export interface LockEnv {
+  fs: LockFs;
+  hostname: string;
+  pid: number;
+  pidAlive(pid: number): boolean;
+  now(): number;
+  /** Unique suffix for the name a stale lock is renamed to. */
+  unique(): string;
+}
+const realLockFs: LockFs = {
+  openSync: (p, flags, mode) => fs.openSync(p, flags, mode),
+  writeFileSync: (fd, data) => fs.writeFileSync(fd, data),
+  fsyncSync: (fd) => fs.fsyncSync(fd),
+  closeSync: (fd) => fs.closeSync(fd),
+  readFileSync: (p) => fs.readFileSync(p, "utf8"),
+  statMtimeMs: (p) => fs.statSync(p).mtimeMs,
+  renameSync: (a, b) => fs.renameSync(a, b),
+  linkSync: (a, b) => fs.linkSync(a, b),
+  rmSync: (p) => fs.rmSync(p, { force: true }),
+};
+const realLockEnv = (): LockEnv => ({
+  fs: realLockFs,
+  hostname: os.hostname(),
+  pid: process.pid,
+  pidAlive,
+  now: () => Date.now(),
+  unique: () => crypto.randomBytes(6).toString("hex"),
+});
+const errCode = (err: unknown): string | undefined => (err as NodeJS.ErrnoException).code;
+
+export function acquireFileLock(stateDir: string, env: LockEnv = realLockEnv()): () => void {
+  const f = env.fs;
   fs.mkdirSync(stateDir, { recursive: true });
   const lockPath = path.join(stateDir, LOCK_FILE);
-  const payload = JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() });
+  const payload = JSON.stringify({ pid: env.pid, host: env.hostname, startedAt: new Date(env.now()).toISOString() });
   const held = (who: string): SyncLockedError =>
     new SyncLockedError(`another kanban sync is in progress (${who}); not starting a second one. Lock file: ${lockPath}`);
+  const describe = (h: { pid?: unknown; host?: unknown; startedAt?: unknown }): string =>
+    `pid ${String(h.pid)}${typeof h.host === "string" ? ` on host ${h.host}` : ""}, started ${String(h.startedAt ?? "unknown")}`;
   for (let tries = 0; tries < 3; tries++) {
     let fd: number;
     try {
-      fd = fs.openSync(lockPath, "wx", 0o600);
+      fd = f.openSync(lockPath, "wx", 0o600);
     } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
-      let holder: { pid?: unknown; startedAt?: unknown } | null = null;
-      let ageMs = Infinity;
+      if (errCode(err) !== "EEXIST") throw err;
+      let content: string;
+      let ageMs: number;
       try {
-        ageMs = Date.now() - fs.statSync(lockPath).mtimeMs;
-        holder = JSON.parse(fs.readFileSync(lockPath, "utf8")) as { pid?: unknown; startedAt?: unknown };
+        ageMs = env.now() - f.statMtimeMs(lockPath);
+        content = f.readFileSync(lockPath);
       } catch (readErr) {
-        if ((readErr as NodeJS.ErrnoException).code === "ENOENT") continue; // released meanwhile
+        if (errCode(readErr) === "ENOENT") continue; // released meanwhile
+        throw readErr;
+      }
+      type Holder = { pid?: unknown; host?: unknown; startedAt?: unknown };
+      let holder = null as Holder | null;
+      try {
+        holder = JSON.parse(content) as Holder;
+      } catch {
+        holder = null;
       }
       const pid = holder && typeof holder.pid === "number" ? holder.pid : null;
-      if (pid !== null ? pidAlive(pid) : ageMs < LOCK_UNPARSABLE_GRACE_MS) {
-        throw held(pid !== null ? `pid ${pid}, started ${String(holder?.startedAt ?? "unknown")}` : "lock being created");
+      if (holder && pid !== null && typeof holder.host === "string" && holder.host !== env.hostname) {
+        throw held(describe(holder)); // another machine: its pid means nothing here, never treat it as stale
       }
-      fs.rmSync(lockPath, { force: true }); // stale: its owner is gone
-      continue;
+      if (pid !== null ? env.pidAlive(pid) : ageMs < LOCK_UNPARSABLE_GRACE_MS) {
+        throw held(pid !== null ? describe(holder!) : "lock being created");
+      }
+      // Stale. Move it aside atomically, then check that what we moved is what we inspected.
+      const aside = `${lockPath}.stale.${env.pid}.${env.unique()}`;
+      try {
+        f.renameSync(lockPath, aside);
+      } catch (renameErr) {
+        if (errCode(renameErr) === "ENOENT") continue;
+        throw renameErr;
+      }
+      let moved: string | null = null;
+      try {
+        moved = f.readFileSync(aside);
+      } catch {
+        moved = null;
+      }
+      if (moved === content) {
+        f.rmSync(aside);
+        continue;
+      }
+      // Another process replaced the lock between our read and our rename: we moved a live lock. Put it back
+      // (link fails if a newer lock already exists, which is fine) and back off.
+      try {
+        f.linkSync(aside, lockPath);
+      } catch {
+        // a newer lock exists, or the file is gone
+      }
+      f.rmSync(aside);
+      let who = "lock was replaced while being taken over";
+      try {
+        who = describe(JSON.parse(moved ?? "") as object);
+      } catch {
+        // keep the generic wording
+      }
+      throw held(who);
     }
     try {
-      fs.writeFileSync(fd, payload);
-      fs.fsyncSync(fd);
+      f.writeFileSync(fd, payload);
+      f.fsyncSync(fd);
     } catch (err) {
-      fs.rmSync(lockPath, { force: true });
+      f.rmSync(lockPath);
       throw err;
     } finally {
-      fs.closeSync(fd);
+      f.closeSync(fd);
     }
     return () => {
       try {
-        if (fs.readFileSync(lockPath, "utf8") === payload) fs.unlinkSync(lockPath);
+        if (f.readFileSync(lockPath) === payload) f.rmSync(lockPath);
       } catch {
         // already gone
       }

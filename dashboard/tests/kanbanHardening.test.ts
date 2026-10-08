@@ -5,11 +5,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { FakeGh } from "./helpers/fakeGh";
+import { GhError, createGh, classifyGhFailure } from "../server/lib/gh";
 import { EventBus } from "../server/events";
 import { main } from "../server/cli/kanbanSync";
 import { createKanbanService, NotImportedError } from "../server/lib/kanbanService";
 import {
-  runSync, fileSyncDeps, isImportCompleted, escapeMentions, PENDING_MAX_AGE_MS, SyncLockedError, SyncStateError,
+  runSync, fileSyncDeps, acquireFileLock, type LockEnv, type LockFs, isImportCompleted, escapeMentions, PENDING_MAX_AGE_MS, MAX_UNATTENDED_CREATES, SyncLockedError, SyncStateError,
   type SyncDeps, type SyncState,
 } from "../server/lib/kanbanSync";
 import type { Config } from "../server/config";
@@ -513,7 +514,7 @@ describe("7. import-complete gate", () => {
   class AuthFailsOnSecondCreate extends FakeGh {
     armed = true;
     async text(args: string[]): Promise<string> {
-      if (this.armed && args[1] === "create" && this.creates === 1) throw new Error("gh auth login required");
+      if (this.armed && args[0] === "issue" && args[1] === "create" && this.creates === 1) throw ghFail(args, "To get started with GitHub CLI, please run:  gh auth login");
       return super.text(args);
     }
   }
@@ -523,8 +524,9 @@ describe("7. import-complete gate", () => {
     const { config } = setup(THREE_ITEMS);
     const gh = new AuthFailsOnSecondCreate();
     const spy = quiet();
-    await expect(runSync(fileSyncDeps(config, gh), { dryRun: false })).rejects.toThrow(/auth/);
+    const report = await runSync(fileSyncDeps(config, gh), { dryRun: false });
     spy.mockRestore();
+    expect(report.aborted).toBe(true);
     expect(fs.existsSync(path.join(config.stateDir, "kanban-sync.json"))).toBe(true);
     expect(isImportCompleted(config)).toBe(false);
   });
@@ -533,7 +535,7 @@ describe("7. import-complete gate", () => {
     const { config } = setup(THREE_ITEMS);
     const spy = quiet();
     const gh = new AuthFailsOnSecondCreate();
-    await expect(runSync(fileSyncDeps(config, gh), { dryRun: false })).rejects.toThrow();
+    expect((await runSync(fileSyncDeps(config, gh), { dryRun: false })).aborted).toBe(true);
     spy.mockRestore();
     gh.armed = false;
     gh.writes = [];
@@ -639,15 +641,16 @@ describe("8. per-item isolation", () => {
     async (message) => {
       class Global extends FakeGh {
         async text(args: string[]): Promise<string> {
-          if (args[1] === "close" && args[2] === "2") throw new Error(message);
+          if (args[1] === "close" && args[2] === "2") throw ghFail(args, message);
           return super.text(args);
         }
       }
       const gh = new Global();
       const { deps } = linked(gh);
       const spy = quiet();
-      await expect(sync(deps)).rejects.toThrow(message);
+      const r = await sync(deps);
       spy.mockRestore();
+      expect(r.aborted).toBe(true);
       expect(gh.issues.get(3)!.state).toBe("OPEN"); // never reached
     },
   );
@@ -816,5 +819,308 @@ describe("13. adoption tolerates how GitHub returns bodies", () => {
     const r = await sync(deps);
     expect(gh.count("create")).toBe(creates);
     expect(r.actions.map((a) => a.type)).toEqual(["link", "link"]);
+  });
+});
+
+describe("14. lock takeover", () => {
+  /** An in-memory file system for the lock, so two processes can be interleaved step by step. */
+  function memFs() {
+    const files = new Map<string, { content: string; mtime: number }>();
+    const fds = new Map<number, string>();
+    let nextFd = 3;
+    const enoent = () => Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+    const hooks = { afterRead: (_p: string, _content: string) => {} };
+    const fsOps: LockFs = {
+      openSync(p) {
+        if (files.has(p)) throw Object.assign(new Error("EEXIST"), { code: "EEXIST" });
+        files.set(p, { content: "", mtime: 0 });
+        fds.set(nextFd, p);
+        return nextFd++;
+      },
+      writeFileSync(fd, data) {
+        files.get(fds.get(fd)!)!.content = data;
+      },
+      fsyncSync() {},
+      closeSync() {},
+      readFileSync(p) {
+        const f = files.get(p);
+        if (!f) throw enoent();
+        hooks.afterRead(p, f.content);
+        return f.content;
+      },
+      statMtimeMs(p) {
+        const f = files.get(p);
+        if (!f) throw enoent();
+        return f.mtime;
+      },
+      renameSync(a, b) {
+        const f = files.get(a);
+        if (!f) throw enoent();
+        files.delete(a);
+        files.set(b, f);
+      },
+      linkSync(a, b) {
+        if (files.has(b)) throw Object.assign(new Error("EEXIST"), { code: "EEXIST" });
+        files.set(b, { ...files.get(a)! });
+      },
+      rmSync(p) {
+        files.delete(p);
+      },
+    };
+    return { files, fsOps, hooks };
+  }
+  const envFor = (fsOps: LockFs, o: Partial<LockEnv> & { pid: number }): LockEnv => ({
+    fs: fsOps, hostname: "hostA", pidAlive: () => false, now: () => 5_000_000, unique: () => `u${o.pid}`, ...o,
+  });
+  let dir: string;
+  const stateDir = () => (dir = fs.mkdtempSync(path.join(os.tmpdir(), "dash-lock2-")));
+  afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  it("two processes taking over the same stale lock: exactly one wins and the winner's lock is not deleted", () => {
+    const sd = stateDir();
+    const lockPath = path.join(sd, "kanban-sync.lock");
+    const { files, fsOps, hooks } = memFs();
+    const stale = JSON.stringify({ pid: 111, host: "hostA", startedAt: "2026-10-01T00:00:00Z" });
+    files.set(lockPath, { content: stale, mtime: 0 });
+    const p1 = envFor(fsOps, { pid: 201 });
+    const p2 = envFor(fsOps, { pid: 202 });
+    let p1Release: (() => void) | null = null;
+    // P2 has read the stale content; before it renames, P1 completes its whole takeover.
+    let injected = false;
+    hooks.afterRead = (p, content) => {
+      if (!injected && p === lockPath && content === stale) {
+        injected = true;
+        p1Release = acquireFileLock(sd, p1);
+      }
+    };
+    expect(() => acquireFileLock(sd, p2)).toThrow(SyncLockedError);
+    expect(p1Release).not.toBeNull();
+    expect(JSON.parse(files.get(lockPath)!.content).pid).toBe(201); // P1's lock is still in place
+    expect([...files.keys()].filter((k) => k.includes(".stale."))).toEqual([]); // nothing left behind
+  });
+
+  it("a lock from another host is never stale, even when its pid does not exist here", () => {
+    const sd = stateDir();
+    const lockPath = path.join(sd, "kanban-sync.lock");
+    const { files, fsOps } = memFs();
+    const foreign = JSON.stringify({ pid: 4242, host: "otherhost", startedAt: "2026-10-01T00:00:00Z" });
+    files.set(lockPath, { content: foreign, mtime: 0 });
+    expect(() => acquireFileLock(sd, envFor(fsOps, { pid: 7 }))).toThrow(/pid 4242 on host otherhost/);
+    expect(files.get(lockPath)!.content).toBe(foreign);
+  });
+
+  it("a stale lock from this host is taken over and the new lock records the host", () => {
+    const sd = stateDir();
+    const lockPath = path.join(sd, "kanban-sync.lock");
+    const { files, fsOps } = memFs();
+    files.set(lockPath, { content: JSON.stringify({ pid: 111, host: "hostA", startedAt: "x" }), mtime: 0 });
+    const release = acquireFileLock(sd, envFor(fsOps, { pid: 9 }));
+    expect(JSON.parse(files.get(lockPath)!.content)).toMatchObject({ pid: 9, host: "hostA" });
+    release();
+    expect(files.has(lockPath)).toBe(false);
+  });
+
+  it("the real lock file records the host name", async () => {
+    const sd = stateDir();
+    const release = acquireFileLock(sd);
+    expect(JSON.parse(fs.readFileSync(path.join(sd, "kanban-sync.lock"), "utf8")).host).toBe(os.hostname());
+    release();
+  });
+
+  it("an unparsable lock younger than the grace period is held; an old one is taken over", () => {
+    const sd = stateDir();
+    const lockPath = path.join(sd, "kanban-sync.lock");
+    fs.writeFileSync(lockPath, "{not json");
+    expect(() => acquireFileLock(sd)).toThrow(/lock being created/);
+    expect(fs.readFileSync(lockPath, "utf8")).toBe("{not json");
+    const old = new Date(Date.now() - 60_000);
+    fs.utimesSync(lockPath, old, old);
+    const release = acquireFileLock(sd);
+    expect(JSON.parse(fs.readFileSync(lockPath, "utf8")).pid).toBe(process.pid);
+    release();
+  });
+});
+
+/** A gh failure shaped like the real one: the message carries the arguments, stderr is separate. */
+function ghFail(args: string[], stderr: string, code = 1): GhError {
+  return new GhError(`gh ${args.join(" ")} failed (exit ${code}): ${stderr}`, args, code, undefined, stderr);
+}
+
+describe("15. failure classification", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("createGh keeps stderr and the exit code separate from the message", async () => {
+    const runner = async () => ({ stdout: "", stderr: "HTTP 429: slow down\n", code: 1 });
+    const err = (await createGh(runner, { ghBin: "gh", repoRoot: "/r" }).text(["issue", "create", "--title=secret title"]).catch((e: unknown) => e)) as GhError;
+    expect(err.stderr).toBe("HTTP 429: slow down\n");
+    expect(err.message).toContain("secret title");
+  });
+
+  it.each([
+    ["HTTP 401: Bad credentials (https://api.github.com/graphql)", 1],
+    ["HTTP 403: Resource not accessible by personal access token", 1],
+    ["HTTP 429: Too Many Requests", 1],
+    ["HTTP 502: Bad Gateway", 1],
+    ["gh: HTTP 503 Service Unavailable", 1],
+    ["You have exceeded a secondary rate limit. Please wait a few minutes", 1],
+    ["API rate limit exceeded for user", 1],
+    ["was submitted too quickly", 1],
+    ["To get started with GitHub CLI, please run:  gh auth login", 1],
+    ["error connecting to api.github.com", 1],
+    ["dial tcp: lookup api.github.com: no such host", 1],
+    ["Get \"https://api.github.com\": net/http: TLS handshake timeout", 1],
+    ["process timed out after 60000 ms", 124],
+    ["spawn gh ENOENT", 127],
+  ])("is global: %s", (stderr, code) => {
+    expect(classifyGhFailure(ghFail(["issue", "create", "--title=x"], stderr, code))).toBe("global");
+  });
+
+  it.each(["GraphQL: Validation Failed: title is too long", "could not add label: 'kind:x' not found", "HTTP 422: Unprocessable Entity", "no such issue"])(
+    "is per item: %s",
+    (stderr) => {
+      expect(classifyGhFailure(ghFail(["issue", "create", "--title=x"], stderr))).toBe("item");
+    },
+  );
+
+  it("ignores the words in the command arguments (an item titled 'auth token network login')", () => {
+    const args = ["issue", "create", "--title=auth token network login rate limit 401", "--body=timeout HTTP 429"];
+    expect(classifyGhFailure(ghFail(args, "GraphQL: Validation Failed"))).toBe("item");
+  });
+
+  it("an item whose title contains auth words and fails validation stays per-item: the run continues", async () => {
+    const { h, deps, gh } = mk("## A\n\n- [ ] auth token network login\n- [ ] two\n- [ ] three\n");
+    gh.failWith = (args) => (args[0] === "issue" && args[1] === "create" && args.some((a) => a.includes("auth token")) ? ghFail(args, "GraphQL: Validation Failed") : null);
+    const spy = quiet();
+    const r = await sync(deps);
+    spy.mockRestore();
+    expect(r.aborted).toBe(false);
+    expect(r.conflicts).toHaveLength(1);
+    expect(h.file).toContain("two <!-- gh:#1 -->");
+    expect(h.file).toContain("three <!-- gh:#2 -->");
+  });
+
+  it("a 429 on the 2nd create aborts the run with one conflict, not one per remaining item", async () => {
+    const items = Array.from({ length: 7 }, (_, i) => `- [ ] item ${i + 1}`).join("\n");
+    const { h, deps, gh } = mk(`## A\n\n${items}\n`);
+    let creates = 0;
+    gh.failWith = (args) => (args[0] === "issue" && args[1] === "create" && ++creates === 2 ? ghFail(args, "HTTP 429: Too Many Requests") : null);
+    const spy = quiet();
+    const r = await sync(deps);
+    spy.mockRestore();
+    expect(r.aborted).toBe(true);
+    expect(r.conflicts).toHaveLength(1);
+    expect(r.conflicts[0]).toMatch(/item 2/);
+    expect(creates).toBe(2); // nothing after the 429 was attempted
+    expect(gh.issues.size).toBe(1);
+    expect(h.file).toContain("item 1 <!-- gh:#1 -->");
+    expect(h.state.importCompletedAt).toBeUndefined();
+  });
+
+  it("a global failure while closing a linked issue aborts the run too", async () => {
+    const { h, deps, gh } = mk("## A\n\n- [x] one\n- [x] two\n");
+    await sync(deps);
+    gh.issues.get(1)!.state = "OPEN";
+    gh.issues.get(2)!.state = "OPEN";
+    h.state.items["1"].closed = false;
+    h.state.items["2"].closed = false;
+    h.state.items["1"].checked = false;
+    h.state.items["2"].checked = false;
+    gh.writes = [];
+    gh.failWith = (args) => (args[0] === "issue" && args[1] === "close" ? ghFail(args, "HTTP 502: Bad Gateway") : null);
+    const spy = quiet();
+    const r = await sync(deps);
+    spy.mockRestore();
+    expect(r.aborted).toBe(true);
+    expect(gh.writes.filter((w) => w[1] === "close")).toHaveLength(1);
+  });
+
+  it("three consecutive per-item failures abort the run (circuit breaker)", async () => {
+    const items = Array.from({ length: 6 }, (_, i) => `- [ ] item ${i + 1}`).join("\n");
+    const { h, deps, gh } = mk(`## A\n\n${items}\n`);
+    let attempts = 0;
+    gh.failWith = (args) => (args[0] === "issue" && args[1] === "create" && ++attempts > 0 ? ghFail(args, "GraphQL: something odd") : null);
+    const spy = quiet();
+    const r = await sync(deps);
+    spy.mockRestore();
+    expect(r.aborted).toBe(true);
+    expect(attempts).toBe(3);
+    expect(h.state.importCompletedAt).toBeUndefined();
+  });
+
+  it("a success in between resets the count", async () => {
+    const items = Array.from({ length: 5 }, (_, i) => `- [ ] item ${i + 1}`).join("\n");
+    const { deps, gh } = mk(`## A\n\n${items}\n`);
+    let n = 0;
+    gh.failWith = (args) => (args[0] === "issue" && args[1] === "create" && [1, 2, 4, 5].includes(++n) ? ghFail(args, "GraphQL: something odd") : null);
+    const spy = quiet();
+    const r = await sync(deps);
+    spy.mockRestore();
+    expect(r.aborted).toBe(false);
+    expect(r.conflicts).toHaveLength(4);
+  });
+
+  it("a per-item create failure leaves importCompletedAt unset", async () => {
+    const { h, deps, gh } = mk("## A\n\n- [ ] one\n- [ ] two\n");
+    gh.failCreateAt = 1;
+    const spy = quiet();
+    const r = await sync(deps);
+    spy.mockRestore();
+    expect(r.aborted).toBe(false);
+    expect(h.state.importCompletedAt).toBeUndefined();
+  });
+});
+
+describe("16. cap on unattended creates", () => {
+  afterEach(() => vi.restoreAllMocks());
+  const many = (n: number) => `## A\n\n${Array.from({ length: n }, (_, i) => `- [ ] item ${i + 1}`).join("\n")}\n`;
+
+  it("an unattended run with more than the cap creates none, says how many wait, and still does other work", async () => {
+    const { h, deps, gh } = mk(many(6));
+    gh.seed({ number: 50, title: "made on github" });
+    const r = await runSync(deps, { dryRun: false, unattended: true });
+    expect(gh.count("create")).toBe(0);
+    expect(r.conflicts).toHaveLength(1);
+    expect(r.conflicts[0]).toMatch(/6 items/);
+    expect(r.conflicts[0]).toContain("npm run kanban:sync");
+    expect(h.file).toContain("made on github <!-- gh:#50 -->"); // the non-create work happened
+    expect(h.state.importCompletedAt).toBeUndefined();
+  });
+
+  it("an unattended run at the cap creates them", async () => {
+    const { deps, gh } = mk(many(MAX_UNATTENDED_CREATES));
+    const r = await runSync(deps, { dryRun: false, unattended: true });
+    expect(gh.count("create")).toBe(MAX_UNATTENDED_CREATES);
+    expect(r.conflicts).toEqual([]);
+  });
+
+  it("the CLI is not capped", async () => {
+    const { deps, gh } = mk(many(8));
+    const code = await main(["--yes"], { sync: deps, importCompleted: () => true, out: () => {}, err: () => {} });
+    expect(code).toBe(0);
+    expect(gh.count("create")).toBe(8);
+  });
+
+  it("the service marks its syncs unattended: a file edit that adds six items creates nothing", async () => {
+    const { h, deps, gh } = mk("## A\n\n- [ ] one\n");
+    await sync(deps);
+    h.file = h.file! + Array.from({ length: 6 }, (_, i) => `- [ ] new ${i + 1}\n`).join("");
+    const service = createKanbanService({ gh, sync: deps, bus: new EventBus(), imported: () => true });
+    await service.sync();
+    expect(gh.count("create")).toBe(1);
+    expect((await service.board()).conflicts.join()).toContain("npm run kanban:sync");
+    service.dispose();
+  });
+
+  it("a gh outage during a service sync is reported as such, not as a file change", async () => {
+    const { deps, gh } = mk("## A\n\n- [ ] one\n");
+    gh.failWith = (args) => (args[0] === "issue" && args[1] === "create" ? ghFail(args, "HTTP 429: Too Many Requests") : null);
+    const spy = quiet();
+    const service = createKanbanService({ gh, sync: deps, bus: new EventBus(), imported: () => true });
+    await service.sync();
+    spy.mockRestore();
+    const b = await service.board();
+    expect(b.syncError).toMatch(/GitHub/);
+    expect(b.syncError).not.toMatch(/file changed/);
+    service.dispose();
   });
 });
