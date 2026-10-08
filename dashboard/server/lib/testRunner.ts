@@ -9,6 +9,7 @@ import type { TestRunState } from "../../shared/types";
 import { parseJunit } from "./junit";
 
 const TAIL_MAX_LINES = 200;
+const LINE_MAX_CHARS = 2000;
 const SPAWN_FAILURE_CODE = 127;
 const JUNIT_FILE = "junit.xml";
 const LAST_STATE_FILE = "tests-last.json";
@@ -33,6 +34,8 @@ export interface TestRunner {
 }
 
 const KILL_GRACE_MS = 2000;
+/** After the child exits, wait this long for output to drain before giving up on leftover pipe holders. */
+const DRAIN_MS = 1000;
 const liveChildren = new Set<() => void>();
 // Last-resort cleanup: if the server process exits, take any running pytest with it.
 process.on("exit", () => {
@@ -42,28 +45,48 @@ process.on("exit", () => {
 /** Long-running spawn with line streaming; deliberately has no timeout (full runs take minutes). */
 export const nodeSpawn: SpawnFn = (cmd, args, opts) => {
   const listeners: ((line: string) => void)[] = [];
-  const child = nodeSpawnProcess(cmd, args, { cwd: opts.cwd, stdio: ["ignore", "pipe", "pipe"] });
+  // detached: the child leads its own process group, so kill() reaches grandchildren too.
+  const child = nodeSpawnProcess(cmd, args, { cwd: opts.cwd, stdio: ["ignore", "pipe", "pipe"], detached: true });
   const forward = (line: string) => {
     for (const fn of listeners) fn(line);
   };
   for (const stream of [child.stdout, child.stderr]) {
     if (stream) readline.createInterface({ input: stream }).on("line", forward);
   }
+  const signalGroup = (signal: NodeJS.Signals) => {
+    if (child.pid === undefined) return;
+    try {
+      process.kill(-child.pid, signal);
+    } catch {
+      // group already gone
+    }
+  };
   const kill = () => {
     if (child.exitCode !== null || child.signalCode !== null) return;
-    child.kill("SIGTERM");
-    setTimeout(() => child.kill("SIGKILL"), KILL_GRACE_MS).unref();
+    signalGroup("SIGTERM");
+    // The leader may exit on SIGTERM while a grandchild ignores it, so always follow up on the group.
+    setTimeout(() => signalGroup("SIGKILL"), KILL_GRACE_MS).unref();
   };
   liveChildren.add(kill);
   const done = new Promise<number>((resolve) => {
-    child.on("error", () => {
+    let settled = false;
+    const settle = (code: number) => {
+      if (settled) return;
+      settled = true;
       liveChildren.delete(kill);
-      resolve(SPAWN_FAILURE_CODE);
+      resolve(code);
+    };
+    child.on("error", () => settle(SPAWN_FAILURE_CODE));
+    child.on("exit", (code, signal) => {
+      const result = code ?? (signal ? 128 : SPAWN_FAILURE_CODE);
+      // `close` waits for every holder of the pipes; a leftover background process must not hang the run.
+      setTimeout(() => {
+        child.stdout?.destroy();
+        child.stderr?.destroy();
+        settle(result);
+      }, DRAIN_MS).unref();
     });
-    child.on("close", (code, signal) => {
-      liveChildren.delete(kill);
-      resolve(code ?? (signal ? 128 : SPAWN_FAILURE_CODE));
-    });
+    child.on("close", (code, signal) => settle(code ?? (signal ? 128 : SPAWN_FAILURE_CODE)));
   });
   return { onLine: (fn) => listeners.push(fn), done, kill };
 };
@@ -127,7 +150,8 @@ export function createTestRunner(d: { config: Config; spawn: SpawnFn; runner: Ru
       fs.rmSync(junitPath, { force: true });
       const handle = d.spawn(config.pythonBin, ["-m", "pytest", "tests/", "-q", `--junitxml=${junitPath}`], { cwd: config.repoRoot });
       kill = handle.kill;
-      handle.onLine((line) => {
+      handle.onLine((raw) => {
+        const line = raw.length > LINE_MAX_CHARS ? raw.slice(0, LINE_MAX_CHARS) : raw;
         current = { ...current, tail: [...current.tail, line].slice(-TAIL_MAX_LINES) };
         bus.emit({ type: "tests-line", line });
       });

@@ -5,13 +5,22 @@ export interface ParsedPrBody {
 
 const HEADING = /^#{1,6}\s+(.*?)\s*#*\s*$/;
 const BULLET = /^\s{0,3}[-*+]\s+(.*)$/;
+const FENCE = /^\s{0,3}(```|~~~)/;
 const CHECKBOX = /^\[([ xX])\]\s+(.*)$/;
 
 /** Split a markdown body into lowercase-heading -> lines. Text before any heading is under "". */
 function sections(body: string): Map<string, string[]> {
   const out = new Map<string, string[]>([["", []]]);
   let current = "";
+  let fence: string | null = null;
   for (const line of body.split(/\r?\n/)) {
+    const f = FENCE.exec(line);
+    if (f) {
+      if (fence === null) fence = f[1];
+      else if (fence === f[1]) fence = null;
+      continue; // the fence lines themselves carry no content
+    }
+    if (fence !== null) continue;
     const h = HEADING.exec(line);
     if (h) {
       current = h[1].trim().toLowerCase();

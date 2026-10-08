@@ -8,6 +8,9 @@ on:
     branches: [main, 'phase-**']
     paths: ['dashboard/**', '.github/workflows/dashboard.yml']
 
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest

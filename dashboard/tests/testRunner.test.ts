@@ -205,6 +205,46 @@ describe("test runner", () => {
   });
 });
 
+describe("test runner failure paths", () => {
+  it("ends in an error state, not running, when done rejects", async () => {
+    const s = setup();
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const rejecting: SpawnFn = () => ({ onLine: () => {}, done: Promise.reject(new Error("pipe broke")), kill: () => {} });
+    const tr = createTestRunner({ config: s.config, spawn: rejecting, runner: s.runner, bus: s.bus });
+    expect(tr.start()).toBe(true);
+    await settle(tr);
+    expect(tr.state().status).toBe("error");
+    expect(tr.state().error).toBe("could not start pytest");
+    expect(tr.start()).toBe(true);
+    spy.mockRestore();
+  });
+  it("still runs and ends non-running when the git runner rejects", async () => {
+    const s = setup();
+    const throwing: Runner = async () => {
+      throw new Error("no git");
+    };
+    const tr = createTestRunner({ config: s.config, spawn: s.spawn, runner: throwing, bus: s.bus });
+    tr.start();
+    await waitSpawned(s);
+    s.finish(2);
+    await settle(tr);
+    expect(tr.state().status).toBe("error");
+    expect(tr.state().commit).toBeNull();
+  });
+  it("truncates over-long lines in the tail and on the bus", async () => {
+    const s = setup();
+    s.tr.start();
+    await waitSpawned(s);
+    s.emit("x".repeat(5000));
+    expect(s.tr.state().tail[0]).toHaveLength(2000);
+    const ev = s.events.find((e) => e.type === "tests-line");
+    expect(ev?.type === "tests-line" && ev.line.length).toBe(2000);
+    s.finish(1);
+    await settle(s.tr);
+    expect(JSON.parse(fs.readFileSync(path.join(s.dir, "tests-last.json"), "utf8")).tail[0]).toHaveLength(2000);
+  });
+});
+
 describe("test routes", () => {
   function routes() {
     const s = setup();
@@ -243,5 +283,56 @@ describe("nodeSpawn", () => {
     const h = nodeSpawn(process.execPath, ["-e", "setTimeout(()=>{},60000)"], { cwd: process.cwd() });
     h.kill();
     expect(await h.done).not.toBe(0);
+  });
+});
+
+function alive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+  } catch {
+    return false;
+  }
+  try {
+    // A zombie that nobody has reaped yet counts as dead.
+    return !/^\d+ \(.*\) Z/.test(fs.readFileSync(`/proc/${pid}/stat`, "utf8"));
+  } catch {
+    return true;
+  }
+}
+const until = async (cond: () => boolean, ms = 4000) => {
+  for (let i = 0; i < ms / 20 && !cond(); i++) await new Promise((r) => setTimeout(r, 20));
+};
+
+describe("nodeSpawn process control", () => {
+  it("kill() terminates the whole process group, including grandchildren", async () => {
+    const { nodeSpawn } = await import("../server/lib/testRunner");
+    const script = [
+      "const c = require('child_process').spawn(process.execPath, ['-e', 'setTimeout(()=>{},60000)'], { stdio: 'ignore' });",
+      "console.log('PIDS ' + process.pid + ' ' + c.pid);",
+      "setTimeout(()=>{},60000);",
+    ].join("");
+    const h = nodeSpawn(process.execPath, ["-e", script], { cwd: process.cwd() });
+    let pids: number[] = [];
+    h.onLine((l) => {
+      const m = /^PIDS (\d+) (\d+)$/.exec(l);
+      if (m) pids = [Number(m[1]), Number(m[2])];
+    });
+    await until(() => pids.length === 2);
+    expect(pids).toHaveLength(2);
+    expect(pids.every(alive)).toBe(true);
+    h.kill();
+    await h.done;
+    await until(() => pids.every((p) => !alive(p)));
+    expect(pids.map(alive)).toEqual([false, false]);
+  });
+
+  it("done resolves shortly after exit even if a leftover process holds the output pipes", async () => {
+    const { nodeSpawn } = await import("../server/lib/testRunner");
+    const script =
+      "require('child_process').spawn(process.execPath, ['-e', 'setTimeout(()=>{},4000)'], { detached: true, stdio: ['ignore', 1, 1] }).unref();";
+    const t0 = Date.now();
+    const h = nodeSpawn(process.execPath, ["-e", script], { cwd: process.cwd() });
+    expect(await h.done).toBe(0);
+    expect(Date.now() - t0).toBeLessThan(2500);
   });
 });

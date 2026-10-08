@@ -24,15 +24,15 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     }
     port = Number(env.DASH_PORT);
   }
-  const repoRoot = env.DASH_REPO_ROOT ?? path.dirname(DASHBOARD_DIR);
+  const repoRoot = path.resolve(env.DASH_REPO_ROOT ?? path.dirname(DASHBOARD_DIR));
   return {
     repoRoot,
     host: "127.0.0.1",
     port,
-    stateDir: env.DASH_STATE_DIR ?? path.join(DASHBOARD_DIR, ".state"),
+    stateDir: path.resolve(env.DASH_STATE_DIR ?? path.join(DASHBOARD_DIR, ".state")),
     ghBin: env.DASH_GH_BIN ?? "gh",
     pythonBin: env.DASH_PYTHON ?? "python",
-    kanbanPath: env.DASH_KANBAN ?? path.join(repoRoot, "phase-05-kanban.md"),
+    kanbanPath: path.resolve(env.DASH_KANBAN ?? path.join(repoRoot, "phase-05-kanban.md")),
     webDist: path.join(DASHBOARD_DIR, "dist"),
   };
 }

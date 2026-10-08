@@ -18,6 +18,14 @@ describe("loadConfig", () => {
     expect(c.ghBin).toBe("/x/gh");
     expect(c.kanbanPath).toBe("/k.md");
   });
+  it("resolves relative paths to absolute ones", () => {
+    const c = loadConfig({ DASH_STATE_DIR: "rel/state", DASH_REPO_ROOT: "rel/repo" });
+    expect(path.isAbsolute(c.stateDir)).toBe(true);
+    expect(c.stateDir).toBe(path.resolve("rel/state"));
+    expect(c.repoRoot).toBe(path.resolve("rel/repo"));
+    expect(c.kanbanPath).toBe(path.join(path.resolve("rel/repo"), "phase-05-kanban.md"));
+    expect(loadConfig({ DASH_KANBAN: "k.md" }).kanbanPath).toBe(path.resolve("k.md"));
+  });
   it("rejects a non-numeric port", () => {
     expect(() => loadConfig({ DASH_PORT: "abc" })).toThrow(/DASH_PORT/);
   });

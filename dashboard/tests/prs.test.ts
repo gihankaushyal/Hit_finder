@@ -1,12 +1,15 @@
 import { describe, it, expect, vi } from "vitest";
 import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { Hono } from "hono";
 import { prRoutes } from "../server/routes/prs";
 import { GhError, type Gh } from "../server/lib/gh";
 import type { PrsResponse } from "../shared/types";
 
-const list = JSON.parse(fs.readFileSync("tests/fixtures/pr-list.json", "utf8"));
-const view = JSON.parse(fs.readFileSync("tests/fixtures/pr-view-47.json", "utf8"));
+const fixtures = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
+const list = JSON.parse(fs.readFileSync(path.join(fixtures, "pr-list.json"), "utf8"));
+const view = JSON.parse(fs.readFileSync(path.join(fixtures, "pr-view-47.json"), "utf8"));
 
 function fakeGh(calls: string[][] = []): Gh {
   return {

@@ -17,6 +17,14 @@ export class GhError extends Error {
   }
 }
 
+/**
+ * Pass a value to gh as one `--name=value` argv element so a value that starts
+ * with `-` (for example "--web") can never be parsed as a separate flag.
+ */
+export function flagArg(name: string, value: string): string {
+  return `--${name}=${value}`;
+}
+
 export interface Gh {
   json<T>(args: string[]): Promise<T>;
   text(args: string[]): Promise<string>;

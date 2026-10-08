@@ -6,7 +6,7 @@ import { createApp } from "../server/app";
 import { loadConfig } from "../server/config";
 import { loadOrCreateToken } from "../server/auth";
 import { EventBus } from "../server/events";
-import { eventRoutes, HEARTBEAT_MS } from "../server/routes/events";
+import { eventRoutes, HEARTBEAT_MS, MAX_PENDING_WRITES } from "../server/routes/events";
 
 function setup(heartbeatMs?: number) {
   const stateDir = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "dash-ev-")), "state");
@@ -63,7 +63,7 @@ describe("GET /api/events", () => {
     expect(bus.size).toBe(before);
   });
 
-  it("unsubscribes when the request is aborted and emit does not throw afterwards", async () => {
+  it("unsubscribes when the client cancels the response body and emit does not throw afterwards", async () => {
     const { bus, open } = setup();
     const before = bus.size;
     const ac = new AbortController();
@@ -72,7 +72,7 @@ describe("GET /api/events", () => {
     await readUntil(reader, "event: hello");
     await waitFor(() => bus.size === before + 1);
     expect(bus.size).toBe(before + 1);
-    ac.abort();
+    ac.abort(); // belt and braces; the cancel below is what the server observes
     reader.cancel().catch(() => {});
     await waitFor(() => bus.size === before);
     expect(bus.size).toBe(before);
@@ -88,7 +88,39 @@ describe("GET /api/events", () => {
     const res = await open();
     const reader = res.body!.getReader();
     expect(await readUntil(reader, ": ping")).toContain(": ping");
+    expect(bus.size).toBe(1);
     await reader.cancel();
     await waitFor(() => bus.size === 0);
+    expect(bus.size).toBe(0);
+  });
+
+  it("disconnects a client that stopped reading instead of queueing for it forever", async () => {
+    const { bus, open } = setup();
+    const before = bus.size;
+    const res = await open();
+    expect(res.status).toBe(200);
+    await waitFor(() => bus.size === before + 1);
+    expect(bus.size).toBe(before + 1);
+    // Never read from res.body: a fake slow consumer.
+    for (let i = 0; i < MAX_PENDING_WRITES + 10; i++) bus.emit({ type: "tests-line", line: `l${i}` });
+    await waitFor(() => bus.size === before);
+    expect(bus.size).toBe(before);
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(() => bus.emit({ type: "invalidate", resource: "ci" })).not.toThrow();
+    spy.mockRestore();
+    await res.body!.cancel().catch(() => {});
+  });
+
+  it("keeps a client that reads promptly", async () => {
+    const { bus, open } = setup();
+    const res = await open();
+    const reader = res.body!.getReader();
+    await readUntil(reader, "event: hello");
+    for (let i = 0; i < MAX_PENDING_WRITES * 3; i++) {
+      bus.emit({ type: "tests-line", line: `l${i}` });
+      await readUntil(reader, `l${i}"`);
+    }
+    expect(bus.size).toBe(1);
+    await reader.cancel();
   });
 });

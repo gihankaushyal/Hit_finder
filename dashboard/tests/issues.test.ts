@@ -46,7 +46,7 @@ describe("GET /issues", () => {
       { number: 1, title: "a", labels: ["bug"], createdAt: "c", updatedAt: "u", url: "x" },
     ]);
     expect(jsonCalls[0]).toEqual([
-      "issue", "list", "--state", "open", "--limit", "100", "--json", "number,title,labels,createdAt,updatedAt,url",
+      "issue", "list", "--state", "open", "--limit", "100", "--search=-label:task", "--json", "number,title,labels,createdAt,updatedAt,url",
     ]);
   });
   it("returns 502 with the public message on GhError", async () => {
@@ -83,13 +83,35 @@ describe("POST /issues", () => {
     const r = await post(api, { title: `  ${title}  `, body: "$(whoami)" });
     expect(r.status).toBe(201);
     expect(await r.json()).toEqual({ url: "https://example.test/issues/9" });
-    expect(textCalls).toEqual([["issue", "create", "--title", title, "--body", "$(whoami)"]]);
+    expect(textCalls).toEqual([["issue", "create", `--title=${title}`, "--body=$(whoami)"]]);
     expect(events).toEqual([{ type: "invalidate", resource: "issues" }]);
+  });
+  it("passes a title that looks like a flag as part of a single --title= element", async () => {
+    const { api, textCalls } = setup();
+    const r = await post(api, { title: "--web", body: "--repo=evil/x" });
+    expect(r.status).toBe(201);
+    expect(textCalls[0]).toEqual(["issue", "create", "--title=--web", "--body=--repo=evil/x"]);
+  });
+  it("rejects NUL characters and over-long bodies with 400", async () => {
+    const { api, textCalls } = setup();
+    for (const b of [{ title: "a\u0000b" }, { title: "ok", body: "x\u0000y" }, { title: "ok", body: "x".repeat(60_001) }]) {
+      const r = await post(api, b);
+      expect(r.status).toBe(400);
+      expect(((await r.json()) as { error: string }).error).toMatch(/title|body/);
+    }
+    expect((await post(api, { title: "ok", body: "x".repeat(60_000) })).status).toBe(201);
+    expect(textCalls).toHaveLength(1);
+  });
+  it("rejects a request larger than 64 KB with 400", async () => {
+    const { api, textCalls } = setup();
+    const r = await post(api, { title: "ok", body: "x".repeat(70_000) });
+    expect(r.status).toBe(400);
+    expect(textCalls).toHaveLength(0);
   });
   it("defaults body to empty string", async () => {
     const { api, textCalls } = setup();
     await post(api, { title: "t" });
-    expect(textCalls[0]).toEqual(["issue", "create", "--title", "t", "--body", ""]);
+    expect(textCalls[0]).toEqual(["issue", "create", "--title=t", "--body="]);
   });
   it("502 on gh failure, no event", async () => {
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});

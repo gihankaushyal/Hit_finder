@@ -31,3 +31,23 @@ it("falls back to the first paragraph when there is no Summary heading", () => {
 it("matches headings case-insensitively and tolerates CRLF", () => {
   expect(parsePrBody("## SUMMARY\r\n- a\r\n").summary).toEqual(["a"]);
 });
+it("ignores headings and checklist items inside fenced code blocks", () => {
+  const b = [
+    "## Summary",
+    "- real bullet",
+    "```bash",
+    "# comment that is not a heading",
+    "- fake bullet",
+    "```",
+    "~~~",
+    "## Test plan",
+    "- [x] fake check",
+    "~~~",
+    "",
+    "## Test plan",
+    "- [ ] real check",
+  ].join("\n");
+  const r = parsePrBody(b);
+  expect(r.summary).toEqual(["real bullet"]);
+  expect(r.testPlan).toEqual([{ text: "real check", checked: false }]);
+});
