@@ -77,20 +77,37 @@ describe("LatestPr", () => {
     expect(screen.getByRole("button", { name: "Show fewer files" })).toHaveAttribute("aria-expanded", "true");
   });
 
-  it("lists open PRs first with their branch CI state, and earlier PRs compactly", async () => {
-    mockApi({
-      "GET /api/prs": { body: payload({ open: [summary(50, { state: "OPEN", mergedAt: null, title: "WIP thing", headRefName: "wip" })], recent: [summary(41, { title: "Older change" })] }) },
-      "GET /api/ci": { body: { runs: [{ id: 1, status: "completed", conclusion: "failure", branch: "wip", event: "push", createdAt: "2026-10-02T00:00:00Z", url: "https://github.com/o/r/actions/runs/1" }] } },
+  it("lists open PRs first with their check state, and earlier PRs compactly", async () => {
+    const api = mockApi({
+      "GET /api/prs": {
+        body: payload({
+          open: [summary(50, { state: "OPEN", mergedAt: null, title: "WIP thing", headRefName: "wip", checks: { state: "failing", passing: 3, failing: 1, pending: 0 } })],
+          recent: [summary(41, { title: "Older change" })],
+        }),
+      },
     });
     render(<LatestPr />);
     const open = await screen.findByRole("list", { name: "Open pull requests" });
     expect(within(open).getByRole("link", { name: "WIP thing" })).toBeInTheDocument();
     expect(within(open).getByText("Open")).toBeInTheDocument();
-    expect(await within(open).findByText("CI failed")).toBeInTheDocument();
+    expect(within(open).getByText("Checks failing (1 of 4)")).toBeInTheDocument();
+    expect(api.count("GET", "/api/ci")).toBe(0); // the check state comes from /api/prs now
     const earlier = screen.getByRole("list", { name: "Earlier pull requests" });
     expect(within(earlier).getByRole("link", { name: "Older change" })).toBeInTheDocument();
     // open PRs come before the latest merged one
     expect(open.compareDocumentPosition(screen.getByRole("link", { name: "Add frame cache" })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it.each([
+    [{ state: "passing", passing: 3, failing: 0, pending: 0 }, "Checks passed (3)"],
+    [{ state: "pending", passing: 1, failing: 0, pending: 2 }, "Checks running (2 of 3)"],
+    [{ state: "none", passing: 0, failing: 0, pending: 0 }, "No checks reported"],
+    [undefined, "No checks reported"],
+  ] as const)("shows %j as %s", async (checks, text) => {
+    mockApi({ "GET /api/prs": { body: payload({ open: [summary(50, { state: "OPEN", mergedAt: null, headRefName: "wip", ...(checks ? { checks } : {}) })] }) } });
+    render(<LatestPr />);
+    const open = await screen.findByRole("list", { name: "Open pull requests" });
+    expect(within(open).getByText(text)).toBeInTheDocument();
   });
 
   it("empty: says what would appear", async () => {

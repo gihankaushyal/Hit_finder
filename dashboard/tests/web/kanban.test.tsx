@@ -265,6 +265,28 @@ describe("Kanban sync and notices", () => {
     expect(screen.getByText("sync failed; see the server log")).toBeInTheDocument();
   });
 
+  it("shows a conflict next to the task it concerns as well as in the notice", async () => {
+    const msgs = ["#1 changed in both places; kept GitHub state", "creating \"Other\" failed; the next sync will retry"];
+    server(boardOf(standard(), { conflicts: msgs, conflictItems: [{ issue: 1, message: msgs[0] }, { issue: null, message: msgs[1] }] }));
+    render(<Kanban />);
+    const row = (await screen.findByText("Write docs")).closest("li")!;
+    expect(within(row).getByText(msgs[0])).toBeInTheDocument();
+    // the other tasks carry no conflict text
+    expect(within(screen.getByText("Fix loader").closest("li")!).queryByText(/changed in both/)).toBeNull();
+    // the notice still lists every conflict, including the one with no task
+    const notice = screen.getByText("2 conflicts need a look").closest("details")!;
+    expect(within(notice).getByText(msgs[0])).toBeInTheDocument();
+    expect(within(notice).getByText(msgs[1])).toBeInTheDocument();
+    expect(screen.queryAllByText(msgs[1])).toHaveLength(1);
+  });
+
+  it("a board without the structured list still shows its conflicts in the notice", async () => {
+    server(boardOf(standard(), { conflicts: ["#1 edited in both places"] }));
+    render(<Kanban />);
+    expect(await screen.findByText("#1 edited in both places")).toBeInTheDocument();
+    expect(within(screen.getByText("Write docs").closest("li")!).queryByText(/edited in both/)).toBeNull();
+  });
+
   it("Sync now posts to the sync route and shows that it is running", async () => {
     const gate = deferred();
     const { api } = server(boardOf(standard()), {

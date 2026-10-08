@@ -47,11 +47,18 @@ export interface SyncSkipped {
   section: string;
   reason: string;
 }
+/** A conflict with the issue it concerns, when the sync knows it. */
+export interface SyncConflict {
+  issue: number | null;
+  message: string;
+}
 export interface SyncReport {
   /** Why an aborted run stopped: the file changed under it, or gh/the network was unusable. */
   abortedBy?: "file-changed" | "gh";
   actions: SyncAction[]; // dry run: what a real run would do; real run: what it did
   conflicts: string[];
+  /** The same conflicts, in the same order, with the issue number where one applies. */
+  conflictItems: SyncConflict[];
   notInFile: number[];
   skipped: SyncSkipped[]; // items that were deliberately not created
   aborted: boolean; // true when the run stopped early (the file changed on disk)
@@ -160,6 +167,11 @@ const issueNumberFrom = (out: string): number | null => {
   const m = /\/issues\/(\d+)\s*$/.exec(out.trim());
   return m ? Number(m[1]) : null;
 };
+function addConflict(report: SyncReport, message: string, issue: number | null = null): void {
+  report.conflicts.push(message);
+  report.conflictItems.push({ issue, message });
+}
+
 /** Thrown inside a run to stop it; execute() turns it into an aborted report. */
 class RunAbort extends Error {}
 
@@ -200,14 +212,14 @@ export function runSync(d: SyncDeps, opts: SyncOptions): Promise<SyncReport> {
 }
 
 async function execute(d: SyncDeps, opts: SyncOptions): Promise<SyncReport> {
-  const report: SyncReport = { actions: [], conflicts: [], notInFile: [], skipped: [], aborted: false };
+  const report: SyncReport = { actions: [], conflicts: [], conflictItems: [], notInFile: [], skipped: [], aborted: false };
   try {
     return await executeInner(d, opts, report);
   } catch (err) {
     if (!(err instanceof RunAbort)) throw err;
     report.aborted = true;
     report.abortedBy = "gh";
-    report.conflicts.push(err.message);
+    addConflict(report, err.message);
     return report;
   }
 }
@@ -308,9 +320,11 @@ async function executeInner(d: SyncDeps, opts: SyncOptions, report: SyncReport):
             const age = nowMs() - (state.pending![String(pendingNumber)].at ?? nowMs());
             if (age >= PENDING_MAX_AGE_MS) {
               incomplete = true; // an issue is unaccounted for, so the import is not finished
-              report.conflicts.push(
+              addConflict(
+                report,
                 `#${pendingNumber} was created for "${title}" by an interrupted run but has still not appeared on GitHub after ${Math.round(PENDING_MAX_AGE_MS / 60000)} minutes; ` +
                   "not creating it again automatically. Check the repository's issues, then add the marker by hand or remove the entry from the sync state",
+                pendingNumber,
               );
             } else {
               incomplete = true;
@@ -331,13 +345,13 @@ async function executeInner(d: SyncDeps, opts: SyncOptions, report: SyncReport):
       }
       const n = item.issue;
       if (referenced.has(n)) {
-        report.conflicts.push(`#${n} is referenced by more than one item in the file; ignored the later one`);
+        addConflict(report, `#${n} is referenced by more than one item in the file; ignored the later one`, n);
         continue;
       }
       referenced.add(n);
       const task = byNumber.get(n);
       if (!task) {
-        report.conflicts.push(`#${n} is referenced in the file but was not found on GitHub`);
+        addConflict(report, `#${n} is referenced in the file but was not found on GitHub`, n);
         continue;
       }
       linkedItems.push(item);
@@ -355,11 +369,11 @@ async function executeInner(d: SyncDeps, opts: SyncOptions, report: SyncReport):
         const ghChanged = last ? closed !== last.closed : false;
         if (ghChanged || !last) {
           linkedOps.push({ kind: "md-check", item, issue: n, checked: closed });
-          if (mdChanged) report.conflicts.push(`#${n} changed in both places; kept GitHub state`);
+          if (mdChanged) addConflict(report, `#${n} changed in both places; kept GitHub state`, n);
         } else if (mdChanged) {
           linkedOps.push({ kind: closed ? "reopen" : "close", item, issue: n });
         } else {
-          report.conflicts.push(`#${n} differs between the file and GitHub but neither changed since the last sync; left alone`);
+          addConflict(report, `#${n} differs between the file and GitHub but neither changed since the last sync; left alone`, n);
         }
       }
       if (last && sha(K.itemBody(item)) !== last.bodyHash) linkedOps.push({ kind: "update-body", item, issue: n });
@@ -403,7 +417,7 @@ async function executeInner(d: SyncDeps, opts: SyncOptions, report: SyncReport):
   const abort = (note: string): SyncReport => {
     report.aborted = true;
     report.abortedBy = "file-changed";
-    report.conflicts.push(note);
+    addConflict(report, note);
     return report;
   };
   /** Writes the document if it differs from the file; false means the file changed under us. */
@@ -420,7 +434,7 @@ async function executeInner(d: SyncDeps, opts: SyncOptions, report: SyncReport):
    * goes on; a failure that would hit every item (auth, network, rate limit) is rethrown to abort the run.
    */
   let consecutiveFailures = 0;
-  const attempt = async (what: string, fn: () => Promise<void>): Promise<boolean> => {
+  const attempt = async (what: string, fn: () => Promise<void>, issue: number | null = null): Promise<boolean> => {
     try {
       await fn();
       consecutiveFailures = 0;
@@ -430,7 +444,7 @@ async function executeInner(d: SyncDeps, opts: SyncOptions, report: SyncReport):
       if (classifyGhFailure(err) === "global") {
         throw new RunAbort(`${what} failed because GitHub or the network is not usable right now; stopped the run, the next sync will retry`);
       }
-      report.conflicts.push(`${what} failed; the next sync will retry`);
+      addConflict(report, `${what} failed; the next sync will retry`, issue);
       if (++consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
         throw new RunAbort(`${MAX_CONSECUTIVE_FAILURES} gh calls failed in a row (last: ${what}); stopped the run, the next sync will retry`);
       }
@@ -468,17 +482,17 @@ async function executeInner(d: SyncDeps, opts: SyncOptions, report: SyncReport):
       ok = await attempt(`closing #${op.issue}`, async () => {
         await d.gh.text(["issue", "close", String(op.issue)]);
         closedNow.set(op.issue, true);
-      });
+      }, op.issue);
     } else if (op.kind === "reopen") {
       ok = await attempt(`reopening #${op.issue}`, async () => {
         await d.gh.text(["issue", "reopen", String(op.issue)]);
         closedNow.set(op.issue, false);
-      });
+      }, op.issue);
     } else {
       ok = await attempt(`updating the body of #${op.issue}`, async () => {
         await d.gh.text(["issue", "edit", String(op.issue), flagArg("body", issueBody(op.item))]);
         bodyUpdated.add(op.issue);
-      });
+      }, op.issue);
     }
     if (ok) report.actions.push(toAction(op));
   }
@@ -506,7 +520,7 @@ async function executeInner(d: SyncDeps, opts: SyncOptions, report: SyncReport):
     } else if (!op.item.checked) {
       // Closed on GitHub behind an unticked box: record the disagreement and leave the choice to the user.
       state.items[key] = { checked: false, closed: true, bodyHash };
-      report.conflicts.push(`#${op.issue} is closed on GitHub but its item in the file is not ticked; linked them and left both as they are. Tick the box or reopen the issue`);
+      addConflict(report, `#${op.issue} is closed on GitHub but its item in the file is not ticked; linked them and left both as they are. Tick the box or reopen the issue`, op.issue);
     } else {
       // Ticked item, open issue: close it. checked:false in the record so a failed close is retried.
       state.items[key] = { checked: false, closed: false, bodyHash };
@@ -518,7 +532,7 @@ async function executeInner(d: SyncDeps, opts: SyncOptions, report: SyncReport):
       const closedOk = await attempt(`closing #${op.issue} after linking it`, async () => {
         await d.gh.text(["issue", "close", String(op.issue)]);
         closedNow.set(op.issue, true);
-      });
+      }, op.issue);
       if (closedOk) state.items[key] = { checked: true, closed: true, bodyHash };
       saveIfChanged();
     }
@@ -527,7 +541,8 @@ async function executeInner(d: SyncDeps, opts: SyncOptions, report: SyncReport):
   // Phase B: creates. After each one the marker is on disk and the state saved before the next begins.
   // An unwatched run never creates a large batch: it leaves them for the command line.
   if (opts.unattended && createOps.length > MAX_UNATTENDED_CREATES) {
-    report.conflicts.push(
+    addConflict(
+      report,
       `${createOps.length} items are waiting to be created as GitHub issues, more than a background sync will create on its own (${MAX_UNATTENDED_CREATES}); ` +
         "run npm run kanban:sync from the command line to create them",
     );
@@ -567,7 +582,7 @@ async function executeInner(d: SyncDeps, opts: SyncOptions, report: SyncReport):
       const closedOk = await attempt(`closing #${n} after creating it`, async () => {
         await d.gh.text(["issue", "close", String(n)]);
         closedNow.set(n, true);
-      });
+      }, n);
       if (closedOk) {
         state.items[String(n)] = { ...state.items[String(n)], checked: true, closed: true };
         saveIfChanged();

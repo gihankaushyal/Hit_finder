@@ -66,4 +66,45 @@ describe("GET /prs", () => {
     expect(spy).toHaveBeenCalled();
     spy.mockRestore();
   });
+
+  describe("check state of open PRs", () => {
+    const run = (status: string, conclusion: string) => ({ __typename: "CheckRun", name: "x", status, conclusion });
+    const ctx = (state: string) => ({ __typename: "StatusContext", context: "y", state });
+    async function checksFor(rollup: unknown, withKey = true) {
+      const open = { ...list.find((p: { state: string }) => p.state === "OPEN"), ...(withKey ? { statusCheckRollup: rollup } : {}) };
+      const rest = list.filter((p: { state: string }) => p.state !== "OPEN");
+      const calls: string[][] = [];
+      const gh: Gh = {
+        async json<T>(args: string[]): Promise<T> {
+          calls.push(args);
+          return (args[1] === "list" ? [...rest, open] : view) as T;
+        },
+        text: async () => "",
+      };
+      const body = (await (await mk(gh).request("/prs")).json()) as PrsResponse;
+      return { checks: body.open[0].checks, open: body.open[0], calls };
+    }
+
+    it("asks gh for statusCheckRollup on the list call", async () => {
+      const { calls } = await checksFor([]);
+      expect(calls[0].join(" ")).toContain("statusCheckRollup");
+    });
+    it.each([
+      ["no checks", [], { state: "none", passing: 0, failing: 0, pending: 0 }],
+      ["missing key", undefined, { state: "none", passing: 0, failing: 0, pending: 0 }],
+      ["all green", [run("COMPLETED", "SUCCESS"), ctx("SUCCESS"), run("COMPLETED", "SKIPPED"), run("COMPLETED", "NEUTRAL")], { state: "passing", passing: 4, failing: 0, pending: 0 }],
+      ["one failing wins over pending", [run("COMPLETED", "SUCCESS"), run("IN_PROGRESS", ""), run("COMPLETED", "FAILURE")], { state: "failing", passing: 1, failing: 1, pending: 1 }],
+      ["pending only", [run("COMPLETED", "SUCCESS"), run("QUEUED", ""), ctx("PENDING")], { state: "pending", passing: 1, failing: 0, pending: 2 }],
+      ["timed out, cancelled and error count as failing", [run("COMPLETED", "TIMED_OUT"), run("COMPLETED", "CANCELLED"), ctx("ERROR")], { state: "failing", passing: 0, failing: 3, pending: 0 }],
+    ])("%s", async (_name, rollup, expected) => {
+      const { checks, open } = await checksFor(rollup, rollup !== undefined);
+      expect(checks).toEqual(expected);
+      expect(open).not.toHaveProperty("statusCheckRollup");
+    });
+    it("merged PRs carry no check state", async () => {
+      const body = (await (await mk(fakeGh()).request("/prs")).json()) as PrsResponse;
+      expect(body.recent[0]).not.toHaveProperty("checks");
+      expect(body.latest).not.toHaveProperty("statusCheckRollup");
+    });
+  });
 });

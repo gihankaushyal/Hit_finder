@@ -76,7 +76,7 @@ function AddTask({ onAdded }: { onAdded: () => void }) {
   );
 }
 
-function TaskRow({ task, editable, error, onChange }: { task: Task; editable: boolean; error?: string; onChange: (t: Task, s: TaskStatus, c: Control) => void }) {
+function TaskRow({ task, editable, error, conflicts, onChange }: { task: Task; editable: boolean; error?: string; conflicts: string[]; onChange: (t: Task, s: TaskStatus, c: Control) => void }) {
   const done = task.status === "done";
   const title = done ? <s className="dim">{task.title}</s> : <span>{task.title}</span>;
   return (
@@ -111,6 +111,11 @@ function TaskRow({ task, editable, error, onChange }: { task: Task; editable: bo
           </select>
         )}
       </div>
+      {conflicts.map((c, i) => (
+        <p key={i} className="kb-item__conflict">
+          <StatusWord kind="attention">Conflict</StatusWord> <span>{c}</span>
+        </p>
+      ))}
       {error && <p className="field__error" role="alert">{error}</p>}
     </li>
   );
@@ -214,6 +219,12 @@ export function Kanban() {
     }
   };
 
+  const conflictsByIssue = useMemo(() => {
+    const m = new Map<number, string[]>();
+    for (const c of board?.conflictItems ?? []) if (c.issue !== null) m.set(c.issue, [...(m.get(c.issue) ?? []), c.message]);
+    return m;
+  }, [board]);
+
   const allTasks = board ? COLUMNS.flatMap((c) => board.columns[c.status]) : [];
   const notInFile = allTasks.filter((t) => !t.inFile).length;
   const actions =
@@ -277,7 +288,7 @@ export function Kanban() {
                 {status === "todo" && editable && <AddTask onAdded={reload} />}
                 <ul className="plain kb-col__list">
                   {shown.map((t, i) => (
-                    <TaskRow key={`${t.number}-${i}`} task={t} editable={editable} error={errors[t.number]} onChange={change} />
+                    <TaskRow key={`${t.number}-${i}`} task={t} editable={editable} error={errors[t.number]} conflicts={conflictsByIssue.get(t.number) ?? []} onChange={change} />
                   ))}
                 </ul>
                 {tasks.length === 0 && <p className="dim">Nothing here.</p>}

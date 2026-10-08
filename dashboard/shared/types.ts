@@ -1,7 +1,13 @@
+export interface PrChecks {
+  state: "passing" | "failing" | "pending" | "none";
+  passing: number; failing: number; pending: number;
+}
 export interface PrSummary {
   number: number; title: string; state: "OPEN" | "MERGED" | "CLOSED";
   mergedAt: string | null; headRefName: string; baseRefName: string;
   additions: number; deletions: number; changedFiles: number; url: string;
+  /** Check state, present on open PRs only. */
+  checks?: PrChecks;
 }
 export interface PrDetail extends PrSummary {
   summary: string[];                                  // bullets under "## Summary"
@@ -35,9 +41,13 @@ export interface Task {
   number: number; title: string; status: TaskStatus; kind: string | null;
   url: string; updatedAt: string; inFile: boolean;
 }
+export interface BoardConflict { issue: number | null; message: string }
 export interface Board {
   columns: Record<TaskStatus, Task[]>;
-  conflicts: string[]; lastSyncAt: string | null; syncError: string | null;
+  conflicts: string[];
+  /** The same conflicts as `conflicts`, in the same order, with the issue each one concerns (null when none). */
+  conflictItems?: BoardConflict[];
+  lastSyncAt: string | null; syncError: string | null;
   /** False until the first import has been run from the CLI; the board is then read from the markdown only. */
   imported: boolean;
 }

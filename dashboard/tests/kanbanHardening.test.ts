@@ -1237,3 +1237,37 @@ describe("18. shutdown and leftover temp files", () => {
     expect(removed).toBe(3);
   });
 });
+
+describe("19. conflicts carry the issue they concern", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("a marker for an issue GitHub does not have names that issue", async () => {
+    const { deps } = mk("## A\n\n- [ ] ghost <!-- gh:#9 -->\n");
+    const r = await runSync(deps, { dryRun: false, rebuildState: true });
+    expect(r.conflictItems).toEqual([{ issue: 9, message: r.conflicts[0] }]);
+  });
+
+  it("a failed close names the issue; a failed create names none; the string list stays in step", async () => {
+    const m = mk("## A\n\n- [x] one <!-- gh:#1 -->\n- [ ] new thing\n");
+    m.gh.seed({ title: "one" });
+    m.h.state.items["1"] = { checked: false, closed: false, bodyHash: sha("one") };
+    m.gh.failWith = (args) => (args[0] === "issue" ? ghFail(args, "GraphQL: something odd") : null);
+    const spy = quiet();
+    const r = await sync(m.deps);
+    spy.mockRestore();
+    expect(r.conflicts).toHaveLength(2);
+    expect(r.conflictItems.map((c) => c.message)).toEqual(r.conflicts);
+    expect(r.conflictItems.map((c) => c.issue)).toEqual([1, null]);
+  });
+
+  it("the board exposes them next to the plain strings", async () => {
+    const m = mk("## A\n\n- [ ] alpha\n- [ ] ghost <!-- gh:#9 -->\n");
+    m.h.state.items["9"] = { checked: false, closed: false, bodyHash: "x" };
+    const service = createKanbanService({ gh: m.gh, sync: m.deps, bus: new EventBus(), imported: () => true });
+    await service.sync();
+    const b = await service.board();
+    expect(b.conflicts).toHaveLength(1);
+    expect(b.conflictItems).toEqual([{ issue: 9, message: b.conflicts[0] }]);
+    service.dispose();
+  });
+});

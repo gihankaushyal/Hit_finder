@@ -201,6 +201,7 @@ input[aria-invalid="true"], textarea[aria-invalid="true"] { border-color: var(--
 .kb-item__main input[type="checkbox"] { margin: 3px 0 0; flex: none; accent-color: var(--text-dim); }
 .kb-item__title { min-width: 0; overflow-wrap: anywhere; }
 .kb-item__meta { display: flex; flex-wrap: wrap; gap: var(--s1) var(--s2); align-items: center; padding-left: 21px; }
+.kb-item__conflict { margin: var(--s1) 0 0; padding-left: 21px; font-size: 0.8125rem; }
 .kb-item__move { margin-left: auto; font-size: 0.85rem; padding: 0 var(--s1); max-width: 100%; }
 .kb-add { display: flex; flex-direction: column; gap: var(--s1); }
 .kb-add label { font-weight: 500; }

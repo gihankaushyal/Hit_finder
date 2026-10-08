@@ -160,7 +160,7 @@ export function createKanbanService(d: KanbanServiceDeps): KanbanService {
     for (const s of STATUSES) {
       columns[s].sort(s === "done" ? (a, b) => (a.updatedAt < b.updatedAt ? 1 : a.updatedAt > b.updatedAt ? -1 : 0) : (a, b) => a.number - b.number);
     }
-    return { columns, conflicts: lastReport?.conflicts ?? [], lastSyncAt, syncError, imported: true };
+    return { columns, conflicts: lastReport?.conflicts ?? [], conflictItems: lastReport?.conflictItems ?? [], lastSyncAt, syncError, imported: true };
   }
 
   async function mutate(fn: () => Promise<void>): Promise<void> {

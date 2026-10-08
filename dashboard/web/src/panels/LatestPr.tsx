@@ -5,7 +5,7 @@ import { StatusWord } from "../components/StatusWord";
 import { ExternalLink, StaleNotice, absoluteTime, panelState } from "../components/bits";
 import { relTime } from "../lib/time";
 import { useResource } from "../lib/useResource";
-import type { CiRun, PrDetail, PrSummary, PrsResponse } from "../../../shared/types";
+import type { PrChecks, PrDetail, PrSummary, PrsResponse } from "../../../shared/types";
 
 /** Longer file lists are cut to this many rows until the user asks for all of them. */
 export const FILES_COLLAPSED_COUNT = 8;
@@ -37,13 +37,12 @@ function When({ iso }: { iso: string }) {
   );
 }
 
-function checkFor(branch: string, runs: CiRun[] | undefined) {
-  const run = runs?.find((r) => r.branch === branch);
-  if (!run) return <span className="dim">no CI run listed</span>;
-  if (run.status !== "completed") return <StatusWord kind="running">CI running</StatusWord>;
-  if (run.conclusion === "success") return <StatusWord kind="ok">CI passed</StatusWord>;
-  if (run.conclusion === "cancelled" || run.conclusion === "skipped") return <StatusWord kind="idle">CI {run.conclusion}</StatusWord>;
-  return <StatusWord kind="fail">CI failed</StatusWord>;
+function Checks({ checks }: { checks: PrChecks | undefined }) {
+  if (!checks || checks.state === "none") return <span className="dim">No checks reported</span>;
+  const total = checks.passing + checks.failing + checks.pending;
+  if (checks.state === "failing") return <StatusWord kind="fail">Checks failing ({checks.failing} of {total})</StatusWord>;
+  if (checks.state === "pending") return <StatusWord kind="running">Checks running ({checks.pending} of {total})</StatusWord>;
+  return <StatusWord kind="ok">Checks passed ({checks.passing})</StatusWord>;
 }
 
 function Files({ files }: { files: PrDetail["files"] }) {
@@ -70,7 +69,6 @@ function Files({ files }: { files: PrDetail["files"] }) {
 
 export function LatestPr() {
   const prs = useResource<PrsResponse>("prs", "/api/prs", isEmpty);
-  const ci = useResource<{ runs: CiRun[] }>("ci", "/api/ci");
   const state = panelState(prs);
   const data = prs.data;
   const latest = data?.latest ?? null;
@@ -85,7 +83,7 @@ export function LatestPr() {
               <ExternalLink href={p.url}>{p.title}</ExternalLink>
               <span className="mono dim">#{p.number}</span>
               <span className="dim"><Branches head={p.headRefName} base={p.baseRefName} /></span>
-              {checkFor(p.headRefName, ci.data?.runs)}
+              <Checks checks={p.checks} />
             </li>
           ))}
         </ul>
