@@ -227,3 +227,9 @@ input[aria-invalid="true"], textarea[aria-invalid="true"] { border-color: var(--
 details.notice > summary { cursor: pointer; }
 details.notice .bullets { margin-top: var(--s2); }
 code.mono { background: var(--surface-2); padding: 0 var(--s1); border-radius: var(--radius); }
+
+/* Web interface guidelines */
+h1, h2, h3, h4 { text-wrap: balance; }
+button, a, select, input[type="checkbox"] { touch-action: manipulation; }
+/* The Done column can hold many items; skip layout for the ones off screen */
+.kb-item { content-visibility: auto; contain-intrinsic-size: auto 56px; }

@@ -64,7 +64,7 @@ function AddTask({ onAdded }: { onAdded: () => void }) {
     <form className="kb-add" onSubmit={submit} noValidate>
       <label htmlFor={id}>Task</label>
       <div className="kb-add__row">
-        <input id={id} ref={ref} value={title} maxLength={TASK_TITLE_MAX_CHARS} onChange={(e) => setTitle(e.target.value)}
+        <input id={id} ref={ref} name="task-title" autoComplete="off" value={title} maxLength={TASK_TITLE_MAX_CHARS} onChange={(e) => setTitle(e.target.value)}
           aria-invalid={error !== null} aria-describedby={error ? errId : undefined} />
         <button type="submit" className="btn" disabled={pending}>
           <Plus size={14} aria-hidden="true" />
@@ -235,7 +235,7 @@ export function Kanban() {
         )}
         <button type="button" className="btn" disabled={syncing} onClick={sync}>
           <ArrowsClockwise size={14} aria-hidden="true" className={syncing ? "spin" : undefined} />
-          <span>{syncing ? "Syncing" : "Sync now"}</span>
+          <span>{syncing ? "Syncing…" : "Sync now"}</span>
         </button>
       </>
     ) : undefined;

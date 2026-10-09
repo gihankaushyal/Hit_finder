@@ -167,7 +167,7 @@ function LocalRun() {
             {word && <StatusWord kind={word.kind}>{word.text}</StatusWord>}
             <button type="button" className="btn" disabled={running || starting} onClick={run}>
               <Play size={14} aria-hidden="true" />
-              <span>{running ? "Running" : "Run tests"}</span>
+              <span>{running ? "Running…" : "Run tests"}</span>
             </button>
           </div>
           {startError && <p className="field__error" role="alert">{startError}</p>}

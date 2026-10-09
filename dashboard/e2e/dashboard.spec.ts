@@ -118,7 +118,7 @@ test.describe("panels with data", () => {
     await open(page, dash);
     const local = page.getByRole("region", { name: "Local run", exact: true });
     await local.getByRole("button", { name: "Run tests" }).click();
-    const running = local.getByRole("button", { name: "Running" });
+    const running = local.getByRole("button", { name: "Running…" });
     await expect(running).toBeDisabled();
     // a second start while running does not start a second run
     await running.click({ force: true });

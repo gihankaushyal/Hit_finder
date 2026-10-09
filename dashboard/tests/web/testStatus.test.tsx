@@ -49,7 +49,7 @@ describe("TestStatus", () => {
   it("the button is disabled and reads Running while a run is active", async () => {
     mockApi({ "GET /api/ci": ci, "GET /api/tests": { body: running } });
     render(<TestStatus />);
-    expect(await screen.findByRole("button", { name: "Running" })).toBeDisabled();
+    expect(await screen.findByRole("button", { name: "Running…" })).toBeDisabled();
   });
 
   it("409 says a run is already in progress", async () => {
@@ -84,7 +84,7 @@ describe("TestStatus", () => {
     let state: TestRunState = running;
     mockApi({ "GET /api/ci": ci, "GET /api/tests": () => ({ body: state }) });
     render(<TestStatus />);
-    await screen.findByRole("button", { name: "Running" });
+    await screen.findByRole("button", { name: "Running…" });
     const live = screen.getByRole("status");
     expect(live).toHaveAttribute("aria-live", "polite");
     expect(live).toHaveTextContent("");

@@ -66,7 +66,7 @@ function NewIssueForm({ onDone, onCancel }: { onDone: (url: string) => void; onC
       <div className="field">
         <label htmlFor={ids.title}>Title</label>
         <input
-          id={ids.title} ref={titleRef} value={title} maxLength={TITLE_MAX_CHARS} autoFocus
+          id={ids.title} ref={titleRef} name="issue-title" autoComplete="off" value={title} maxLength={TITLE_MAX_CHARS} autoFocus
           onChange={(e) => setTitle(e.target.value)}
           aria-invalid={error?.field === "title"} aria-describedby={error?.field === "title" ? ids.titleErr : undefined}
         />
@@ -75,7 +75,7 @@ function NewIssueForm({ onDone, onCancel }: { onDone: (url: string) => void; onC
       <div className="field">
         <label htmlFor={ids.body}>Details (optional)</label>
         <textarea
-          id={ids.body} ref={bodyRef} value={body} rows={4}
+          id={ids.body} ref={bodyRef} name="issue-body" autoComplete="off" value={body} rows={4}
           onChange={(e) => setBody(e.target.value)}
           aria-invalid={error?.field === "body"} aria-describedby={error?.field === "body" ? ids.bodyErr : undefined}
         />
@@ -83,7 +83,7 @@ function NewIssueForm({ onDone, onCancel }: { onDone: (url: string) => void; onC
       </div>
       {error?.field === "form" && <p className="field__error" role="alert">{error.message}</p>}
       <div className="form__actions">
-        <button type="submit" className="btn btn--primary" disabled={pending}>{pending ? "Creating" : "Create issue"}</button>
+        <button type="submit" className="btn btn--primary" disabled={pending}>{pending ? "Creating…" : "Create issue"}</button>
         <button type="button" className="btn" onClick={onCancel}>Cancel</button>
       </div>
     </form>

@@ -295,7 +295,7 @@ describe("Kanban sync and notices", () => {
     render(<Kanban />);
     await userEvent.click(await screen.findByRole("button", { name: "Sync now" }));
     expect(api.count("POST", "/api/kanban/sync")).toBe(1);
-    expect(screen.getByRole("button", { name: "Syncing" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Syncing…" })).toBeDisabled();
     gate.resolve();
     expect(await screen.findByRole("button", { name: "Sync now" })).toBeEnabled();
   });

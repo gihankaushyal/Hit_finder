@@ -83,7 +83,7 @@ describe("Issues", () => {
     await userEvent.type(screen.getByLabelText("Title"), "  Broken thing  ");
     await userEvent.type(screen.getByLabelText("Details (optional)"), "steps");
     await userEvent.click(screen.getByRole("button", { name: "Create issue" }));
-    expect(screen.getByRole("button", { name: "Creating" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Creating…" })).toBeDisabled();
     expect(api.calls.find((c) => c.method === "POST")?.body).toEqual({ title: "Broken thing", body: "steps" });
     gate.resolve();
     await waitFor(() => expect(screen.queryByLabelText("Title")).not.toBeInTheDocument());
