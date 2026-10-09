@@ -197,3 +197,41 @@ class TestCheckCheckpointCollisions:
         assert (keep / "best.pt").exists()
         assert not (tmp_path / "run-fold1-seed42" / "best.pt").exists()
         assert not (tmp_path / "run-fold1-seed42" / "results.json").exists()
+
+
+class TestTrack1Wrapper:
+    """train_asymmetric keeps its private wrapper; it must delegate to the shared gate."""
+
+    def test_override_removes_best_and_results(self, tmp_path, monkeypatch):
+        import src.training.train_asymmetric as ta
+
+        assert ta.check_checkpoint_collisions is check_checkpoint_collisions
+        monkeypatch.chdir(tmp_path)
+        run_dir = _make_run_dir(
+            tmp_path / "checkpoints",
+            "resnet18-asymmetric-v2-fold1-seed42",
+            ["best.pt", "results.json"],
+        )
+        ta._check_checkpoint_collisions(
+            [1], {"seed": 42}, "resnet18-asymmetric-v2", False, True
+        )
+        assert not (run_dir / "best.pt").exists()
+        assert not (run_dir / "results.json").exists()
+
+    def test_existing_checkpoint_without_flag_exits(self, tmp_path, monkeypatch):
+        import src.training.train_asymmetric as ta
+
+        monkeypatch.chdir(tmp_path)
+        _make_run_dir(
+            tmp_path / "checkpoints",
+            "resnet18-asymmetric-v2-fold1-seed42-x",
+            ["best.pt"],
+        )
+        with pytest.raises(SystemExit):
+            ta._check_checkpoint_collisions(
+                [1],
+                {"seed": 42, "wandb": {"run_suffix": "-x"}},
+                "resnet18-asymmetric-v2",
+                False,
+                False,
+            )
