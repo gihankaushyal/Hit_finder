@@ -153,3 +153,56 @@ class TestFinetuneBuilder:
         model = build_finetune_model_builder(cfg, ckpt, linear_probe=True)()
         frozen = [p for n, p in model.named_parameters() if not n.startswith("head.")]
         assert all(not p.requires_grad for p in frozen)
+
+
+class TestPretrainRunNaming:
+    def test_run_name_from_prefix(self, tmp_path):
+        from src.training.train_ssl_pretrain import prepare_pretrain_run
+
+        cfg = _tiny_cfg(tmp_path / "ckpt")
+        assert (
+            prepare_pretrain_run("mae-vits16-v2", 3, cfg)
+            == "mae-vits16-v2-fold3-seed42"
+        )
+
+    @pytest.mark.parametrize(
+        "bad", ["mae-vits16", "vits16-mae-v2", "mae-vits16-fold1-seed42"]
+    )
+    def test_invalid_prefix_exits(self, tmp_path, bad):
+        from src.training.train_ssl_pretrain import prepare_pretrain_run
+
+        with pytest.raises(SystemExit):
+            prepare_pretrain_run(bad, 1, _tiny_cfg(tmp_path / "ckpt"))
+
+    def _existing_run(self, cfg: dict) -> Path:
+        run_dir = Path(cfg["checkpoint_dir"]) / "mae-vits16-v2-fold1-seed42"
+        run_dir.mkdir(parents=True)
+        for name in ("last.pt", "epoch20.pt", "epoch40.pt"):
+            (run_dir / name).write_bytes(b"x")
+        return run_dir
+
+    def test_existing_checkpoint_without_flag_exits(self, tmp_path):
+        from src.training.train_ssl_pretrain import prepare_pretrain_run
+
+        cfg = _tiny_cfg(tmp_path / "ckpt")
+        self._existing_run(cfg)
+        with pytest.raises(SystemExit):
+            prepare_pretrain_run("mae-vits16-v2", 1, cfg)
+
+    def test_resume_keeps_checkpoints(self, tmp_path):
+        from src.training.train_ssl_pretrain import prepare_pretrain_run
+
+        cfg = _tiny_cfg(tmp_path / "ckpt")
+        run_dir = self._existing_run(cfg)
+        prepare_pretrain_run("mae-vits16-v2", 1, cfg, resume_training=True)
+        assert (run_dir / "last.pt").exists()
+        assert len(list(run_dir.glob("epoch*.pt"))) == 2
+
+    def test_override_removes_last_and_epoch_snapshots(self, tmp_path):
+        from src.training.train_ssl_pretrain import prepare_pretrain_run
+
+        cfg = _tiny_cfg(tmp_path / "ckpt")
+        run_dir = self._existing_run(cfg)
+        prepare_pretrain_run("mae-vits16-v2", 1, cfg, override_training=True)
+        assert not (run_dir / "last.pt").exists()
+        assert not list(run_dir.glob("epoch*.pt"))

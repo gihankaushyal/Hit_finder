@@ -1,7 +1,19 @@
 """MAE pretraining loop — Track 2, strict LODO (one run per fold).
 
+Run naming convention (--run-name-prefix, REQUIRED, no default):
+
+    mae-<backbone>-v<N>          e.g. mae-vits16-v2
+
+    <N> is the pipeline generation, as defined in src/training/run_naming.py.
+    The prefix becomes the wandb run id/name (mae-vits16-v2-fold{N}-seed{S})
+    and the checkpoint directory (checkpoints/mae-vits16-v2-fold{N}-seed{S}/).
+    If last.pt already exists under the resolved name, the script exits and
+    asks for --resume-training (continue) or --override-training (discard
+    last.pt and the epoch*.pt snapshots, then restart).
+
 Usage:
-    python -m src.training.train_ssl_pretrain --config configs/ssl/mae_pretrain.yaml --fold 1
+    python -m src.training.train_ssl_pretrain --config configs/ssl/mae_pretrain.yaml \
+        --fold 1 --run-name-prefix mae-vits16-v2
 """
 
 from __future__ import annotations
@@ -21,10 +33,46 @@ from src.data.frame_cache import FrameCache, frame_cache_from_cfg, verify_cache_
 from src.hitfinders import get_hitfinder
 from src.models.ssl import MASKING_PEAK_AWARE, build_mae_model
 from src.training.lodo import build_sessions
+from src.training.run_naming import (
+    SSL_PRETRAIN_CONVENTION,
+    SSL_PRETRAIN_EXAMPLE,
+    SSL_PRETRAIN_PREFIX_RE,
+    check_checkpoint_collisions,
+    fold_run_name,
+    validate_run_name_prefix,
+)
 from src.training.train_supervised import _set_seeds
 from src.utils.config import load_config
 
 CHECKPOINT_DIR_DEFAULT = "checkpoints"
+PRETRAIN_CHECKPOINT_NAME = "last.pt"
+EPOCH_SNAPSHOT_GLOB = "epoch*.pt"
+
+
+def prepare_pretrain_run(
+    run_name_prefix: str,
+    fold_id: int,
+    cfg: dict,
+    resume_training: bool = False,
+    override_training: bool = False,
+) -> str:
+    """Validate the prefix, apply the checkpoint gate and return the run name."""
+    validate_run_name_prefix(
+        run_name_prefix,
+        SSL_PRETRAIN_PREFIX_RE,
+        SSL_PRETRAIN_CONVENTION,
+        SSL_PRETRAIN_EXAMPLE,
+    )
+    run_name = fold_run_name(run_name_prefix, fold_id, cfg["seed"])
+    check_checkpoint_collisions(
+        {fold_id: run_name},
+        PRETRAIN_CHECKPOINT_NAME,
+        resume_training,
+        override_training,
+        extra_delete=(EPOCH_SNAPSHOT_GLOB,),
+        checkpoint_root=cfg.get("checkpoint_dir", CHECKPOINT_DIR_DEFAULT),
+    )
+    return run_name
 
 
 def _cosine_lr(base_lr: float, epoch: int, warmup: int, total: int) -> float:
@@ -69,7 +117,7 @@ def run_pretrain(
     )
     ckpt_dir = Path(cfg.get("checkpoint_dir", CHECKPOINT_DIR_DEFAULT)) / run_name
     ckpt_dir.mkdir(parents=True, exist_ok=True)
-    last_path = ckpt_dir / "last.pt"
+    last_path = ckpt_dir / PRETRAIN_CHECKPOINT_NAME
 
     start_epoch = 1
     if resume and last_path.exists():
@@ -174,7 +222,32 @@ def main() -> None:
         help="LODO fold ID (1-4); the fold's test detector is EXCLUDED from pretraining",
     )
     p.add_argument("--device", default=None)
-    p.add_argument("--resume", action="store_true")
+    p.add_argument(
+        "--run-name-prefix",
+        required=True,
+        help=(
+            "Required. Naming convention: mae-<backbone>-v<N> (e.g. mae-vits16-v2). "
+            "Becomes the wandb run id/name and checkpoint directory. "
+            "See module docstring for details."
+        ),
+    )
+    resume_group = p.add_mutually_exclusive_group()
+    resume_group.add_argument(
+        "--resume-training",
+        action="store_true",
+        help=(
+            "When last.pt exists for the resolved run name, continue from it "
+            "instead of exiting. Has no effect when no checkpoint is present."
+        ),
+    )
+    resume_group.add_argument(
+        "--override-training",
+        action="store_true",
+        help=(
+            "When last.pt exists for the resolved run name, discard it and the "
+            "epoch*.pt snapshots and start from scratch under the same run name."
+        ),
+    )
     p.add_argument(
         "--epochs",
         type=int,
@@ -213,6 +286,13 @@ def main() -> None:
     cfg = load_config(args.config)
     if args.epochs is not None:
         cfg["training"]["epochs"] = args.epochs
+    run_name = prepare_pretrain_run(
+        args.run_name_prefix,
+        args.fold,
+        cfg,
+        resume_training=args.resume_training,
+        override_training=args.override_training,
+    )
     if args.stage_dir is not None:
         from pathlib import Path as _Path
 
@@ -243,7 +323,6 @@ def main() -> None:
     fold = next(f for f in build_lodo_folds() if f["fold_id"] == args.fold)
     held_out = fold["test_detector"]
     pretrain_ids = [s["session_id"] for s in sessions if s["detector"] != held_out]
-    run_name = f"mae-vits16-fold{args.fold}-seed{cfg['seed']}"
     print(f"Fold {args.fold}: excluding {held_out}; {len(pretrain_ids)} sessions")
     summary = run_pretrain(
         cfg,
@@ -251,7 +330,7 @@ def main() -> None:
         pretrain_ids,
         run_name,
         device,
-        resume=args.resume,
+        resume=args.resume_training,
         frame_cache=frame_cache,
     )
     print(summary)
