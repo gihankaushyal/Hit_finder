@@ -6,24 +6,32 @@
 # CACHE_NVME to read from a fold-staged NVMe tier (see scripts/stage_frame_cache.sh);
 # omit it to read from the default NVMe path (empty unless staged beforehand).
 #
+# Run naming convention (run_name_prefix, REQUIRED): mae-<backbone>-v<N>
+# e.g. mae-vits16-v2. See src/training/train_ssl_pretrain.py's module docstring.
+# Checkpoints land in checkpoints/<prefix>-fold<N>-seed<S>/.
+#
 # Usage:
-#   sbatch scripts/submit_ssl_pretrain.sh <fold_id> [epochs]
+#   sbatch scripts/submit_ssl_pretrain.sh <fold_id> <run_name_prefix> [epochs]
 #   bash   scripts/submit_ssl_pretrain.sh --help
 #
 # Arguments:
-#   fold_id   LODO fold to train (1–4). Determines which detector is held out.
-#   epochs    Optional epoch count override. Omit for the full 400-epoch run.
+#   fold_id           LODO fold to train (1–4). Determines which detector is held out.
+#   run_name_prefix   Required. mae-<backbone>-v<N>, e.g. mae-vits16-v2.
+#   epochs            Optional epoch count override. Omit for the full 400-epoch run.
 #
 # Options:
 #   -h, --help   Show this help message and exit.
 #
 # Examples:
-#   sbatch scripts/submit_ssl_pretrain.sh 3          # full 400-epoch run, fold 3
-#   sbatch scripts/submit_ssl_pretrain.sh 1 100      # smoke run, 100 epochs
+#   sbatch scripts/submit_ssl_pretrain.sh 3 mae-vits16-v2          # full 400-epoch run, fold 3
+#   sbatch scripts/submit_ssl_pretrain.sh 1 mae-vits16-v2 100      # smoke run, 100 epochs
 #
 # Environment variables (set automatically by submit_ssl_pretrain_all.sh):
-#   CACHE_NVME   Path to this fold's NVMe-staged frame-cache tier
-#                (default /tmp/sfx_frame_cache). See scripts/stage_frame_cache.sh.
+#   CACHE_NVME    Path to this fold's NVMe-staged frame-cache tier
+#                 (default /tmp/sfx_frame_cache). See scripts/stage_frame_cache.sh.
+#   RESUME_FLAG   --resume-training (default) or --override-training. Decides what
+#                 happens when last.pt already exists for the resolved run name.
+#                 The default lets a job resubmitted after a timeout continue.
 #
 # See also:
 #   scripts/submit_ssl_pretrain_all.sh   multi-fold submission with per-fold NVMe staging
@@ -54,7 +62,9 @@ if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
 fi
 
 FOLD="${1:?fold id required (1-4)}"
-EPOCHS="${2:-}"   # optional; omit for full 400-epoch run
+RUN_NAME_PREFIX="${2:?run_name_prefix required, e.g. mae-vits16-v2}"
+EPOCHS="${3:-}"   # optional; omit for full 400-epoch run
+RESUME_FLAG="${RESUME_FLAG:---resume-training}"
 
 module load mamba/latest
 source activate sfx-hitfinder
@@ -69,6 +79,7 @@ fi
 /home/gketawal/.conda/envs/sfx-hitfinder/bin/python -u -m src.training.train_ssl_pretrain \
     --config configs/ssl/mae_pretrain.yaml \
     --fold "${FOLD}" \
-    --resume \
+    --run-name-prefix "${RUN_NAME_PREFIX}" \
+    "${RESUME_FLAG}" \
     --cache-nvme "${CACHE_NVME:-/tmp/sfx_frame_cache}" \
     ${EPOCHS_ARG}
