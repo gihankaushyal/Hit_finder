@@ -59,9 +59,21 @@ a { color: var(--text); text-underline-offset: 2px; }
 
 .main {
   display: grid;
-  grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr) 340px;
+  grid-template-columns: minmax(0, 1fr) 340px;
   min-height: 0;
 }
+/* Status area: PR beside tests and issues, kanban across the full width below */
+.status {
+  display: grid;
+  grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr);
+  grid-template-rows: auto 1fr;
+  min-width: 0; min-height: 0;
+  border-right: 1px solid var(--rule);
+}
+.status > .panel { flex: none; border-bottom: 0; }
+.status > .panel:first-child { border-right: 1px solid var(--rule); }
+.status > .col { border-right: 0; }
+.status > .panel:last-child { grid-column: 1 / -1; border-top: 1px solid var(--rule); }
 .main:focus { outline: none; }
 .col, .rail { display: flex; flex-direction: column; min-width: 0; min-height: 0; border-right: 1px solid var(--rule); }
 .rail { border-right: 0; background: var(--surface); }
@@ -116,6 +128,9 @@ a { color: var(--text); text-underline-offset: 2px; }
   .shell { grid-template-rows: auto 1fr auto; }
   .topbar { flex-wrap: wrap; padding: var(--s2) var(--s4); height: auto; min-height: 40px; }
   .main { grid-template-columns: minmax(0, 1fr); }
+  .status { grid-template-columns: minmax(0, 1fr); border-right: 0; }
+  .status > .panel:first-child { border-right: 0; border-bottom: 1px solid var(--rule); }
+  .status > .panel:last-child { border-bottom: 1px solid var(--rule); }
   .col, .rail { border-right: 0; border-bottom: 1px solid var(--rule); }
   .panel { flex: none; }
   .drawer { min-height: 32px; padding: var(--s2) var(--s4); }
@@ -205,8 +220,8 @@ input[aria-invalid="true"], textarea[aria-invalid="true"] { border-color: var(--
 .kb-item__move { margin-left: auto; font-size: 0.85rem; padding: 0 var(--s1); max-width: 100%; }
 .kb-add { display: flex; flex-direction: column; gap: var(--s1); }
 .kb-add label { font-weight: 500; }
-.kb-add__row { display: flex; gap: var(--s2); }
-.kb-add__row input { flex: 1; min-width: 0; }
+.kb-add__row { display: flex; flex-wrap: wrap; gap: var(--s2); }
+.kb-add__row input { flex: 1 1 12ch; min-width: 0; }
 .kb-note { margin-bottom: var(--s2); }
 .kb-sync { white-space: nowrap; align-self: center; }
 details.notice > summary { cursor: pointer; }

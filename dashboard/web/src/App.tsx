@@ -25,10 +25,12 @@ export function App() {
       <a className="skip-link" href="#main">Skip to status panels</a>
       <TopBar />
       <main id="main" className="main" tabIndex={-1}>
-        <div className="col col--left"><LatestPr />
-          <Kanban /></div>
-        <div className="col col--middle"><TestStatus />
-          <Issues /></div>
+        <div className="status">
+          <LatestPr />
+          <div className="col"><TestStatus />
+            <Issues /></div>
+          <Kanban />
+        </div>
         <RightRail />
       </main>
       <TerminalDrawer />
