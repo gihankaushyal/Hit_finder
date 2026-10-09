@@ -55,8 +55,13 @@ def prepare_pretrain_run(
     cfg: dict,
     resume_training: bool = False,
     override_training: bool = False,
+    dry_run: bool = False,
 ) -> str:
-    """Validate the prefix, apply the checkpoint gate and return the run name."""
+    """Validate the prefix, apply the checkpoint gate and return the run name.
+
+    With `dry_run` the gate only checks (exits on an unresolved collision) and
+    deletes nothing; call again without it right before training.
+    """
     validate_run_name_prefix(
         run_name_prefix,
         SSL_PRETRAIN_PREFIX_RE,
@@ -71,6 +76,7 @@ def prepare_pretrain_run(
         override_training,
         extra_delete=(EPOCH_SNAPSHOT_GLOB,),
         checkpoint_root=cfg.get("checkpoint_dir", CHECKPOINT_DIR_DEFAULT),
+        dry_run=dry_run,
     )
     return run_name
 
@@ -292,6 +298,7 @@ def main() -> None:
         cfg,
         resume_training=args.resume_training,
         override_training=args.override_training,
+        dry_run=True,  # fail fast; the real override happens just before training
     )
     if args.stage_dir is not None:
         from pathlib import Path as _Path
@@ -324,6 +331,15 @@ def main() -> None:
     held_out = fold["test_detector"]
     pretrain_ids = [s["session_id"] for s in sessions if s["detector"] != held_out]
     print(f"Fold {args.fold}: excluding {held_out}; {len(pretrain_ids)} sessions")
+    # Everything that can fail before training has succeeded: only now discard
+    # the previous attempt's checkpoints.
+    prepare_pretrain_run(
+        args.run_name_prefix,
+        args.fold,
+        cfg,
+        resume_training=args.resume_training,
+        override_training=args.override_training,
+    )
     summary = run_pretrain(
         cfg,
         session_map,

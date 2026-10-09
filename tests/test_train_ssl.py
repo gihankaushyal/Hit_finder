@@ -306,10 +306,47 @@ class TestFinetuneRunNaming:
         assert read_pretrain_epoch(ckpt) == 2
 
     def test_finetune_config_has_no_run_suffix(self):
-        import yaml
+        """The merged config (base.yaml + model values) must not add a name suffix."""
+        from src.utils.config import load_config
 
         cfg_path = (
             Path(__file__).parent.parent / "configs" / "ssl" / "mae_finetune.yaml"
         )
-        cfg = yaml.safe_load(cfg_path.read_text())
-        assert "run_suffix" not in cfg["wandb"]
+        assert "run_suffix" not in load_config(str(cfg_path))["wandb"]
+
+
+class TestOverrideIsDeferred:
+    """--override-training must not delete anything until training is about to start."""
+
+    def test_pretrain_dry_run_keeps_checkpoints(self, tmp_path):
+        from src.training.train_ssl_pretrain import prepare_pretrain_run
+
+        cfg = _tiny_cfg(tmp_path / "ckpt")
+        run_dir = Path(cfg["checkpoint_dir"]) / "mae-vits16-v2-fold1-seed42"
+        run_dir.mkdir(parents=True)
+        (run_dir / "last.pt").write_bytes(b"x")
+        prepare_pretrain_run(
+            "mae-vits16-v2", 1, cfg, override_training=True, dry_run=True
+        )
+        assert (run_dir / "last.pt").exists()
+
+    def test_finetune_dry_run_keeps_checkpoints(self, tmp_path, monkeypatch):
+        from src.training.train_ssl_finetune import prepare_finetune_run
+
+        monkeypatch.chdir(tmp_path)
+        run_dir = tmp_path / "checkpoints" / "vits16-mae-finetune-v2-fold1-seed42"
+        run_dir.mkdir(parents=True)
+        (run_dir / "best.pt").write_bytes(b"x")
+        prepare_finetune_run(
+            "vits16-mae-v2", 1, {"seed": 42}, override_training=True, dry_run=True
+        )
+        assert (run_dir / "best.pt").exists()
+
+    def test_read_pretrain_epoch_names_the_file_when_epoch_is_missing(self, tmp_path):
+        from src.training.train_ssl_finetune import read_pretrain_epoch
+
+        path = tmp_path / "weights_only.pt"
+        torch.save({"model_state_dict": {}}, path)
+        with pytest.raises(SystemExit) as exc:
+            read_pretrain_epoch(path)
+        assert str(path) in str(exc.value)

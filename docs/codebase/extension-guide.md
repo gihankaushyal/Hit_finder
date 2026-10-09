@@ -263,7 +263,8 @@ Add a hyperparameter variant for MAE pretraining (different mask ratio, patch si
   source .secrets/wandb.env
   python -m src.training.train_ssl_pretrain \
       --config configs/ssl/mae_pretrain_v2.yaml \
-      --fold 1
+      --fold 1 \
+      --run-name-prefix mae-vits16-v2   # required; mae-<backbone>-v<N>
   ```
 
 - [ ] **4. Add a config-load test in `tests/test_config.py`**

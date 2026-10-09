@@ -396,3 +396,31 @@ class TestTrack1Wrapper:
                 False,
                 False,
             )
+
+
+class TestDryRun:
+    def test_dry_run_override_deletes_nothing(self, tmp_path):
+        run_dir = _make_run_dir(tmp_path, "run-fold1-seed42", ["last.pt", "epoch20.pt"])
+        check_checkpoint_collisions(
+            {1: "run-fold1-seed42"},
+            "last.pt",
+            False,
+            True,
+            extra_delete=("epoch*.pt",),
+            checkpoint_root=tmp_path,
+            dry_run=True,
+        )
+        assert (run_dir / "last.pt").exists()
+        assert (run_dir / "epoch20.pt").exists()
+
+    def test_dry_run_still_exits_on_unresolved_collision(self, tmp_path):
+        _make_run_dir(tmp_path, "run-fold1-seed42", ["last.pt"])
+        with pytest.raises(SystemExit):
+            check_checkpoint_collisions(
+                {1: "run-fold1-seed42"},
+                "last.pt",
+                False,
+                False,
+                checkpoint_root=tmp_path,
+                dry_run=True,
+            )

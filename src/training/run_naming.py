@@ -84,6 +84,7 @@ def check_checkpoint_collisions(
     override_training: bool,
     extra_delete: tuple[str, ...] = (),
     checkpoint_root: str | Path = CHECKPOINT_ROOT,
+    dry_run: bool = False,
 ) -> None:
     """Gate on checkpoints that already exist under the resolved run names.
 
@@ -93,7 +94,9 @@ def check_checkpoint_collisions(
     glob patterns in that run directory are deleted; with `resume_training`
     nothing is touched; with neither the process exits. Extras are only removed
     when the primary checkpoint exists. Passing both `resume_training` and
-    `override_training` is an error (ValueError).
+    `override_training` is an error (ValueError). With `dry_run` nothing is ever
+    deleted: an unresolved collision still exits, so callers can fail early and
+    defer the destructive part until just before training starts.
     """
     if resume_training and override_training:
         raise ValueError("resume_training and override_training are mutually exclusive")
@@ -103,6 +106,8 @@ def check_checkpoint_collisions(
         if not ckpt_path.exists():
             continue
         if override_training:
+            if dry_run:
+                continue
             # Extras first, primary checkpoint last: if an extra fails to delete,
             # the checkpoint survives so a rerun still sees the collision.
             for pattern in extra_delete:
