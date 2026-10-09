@@ -15,10 +15,11 @@
 # Run naming convention (--run-name-prefix, REQUIRED): mae-<backbone>-v<N>
 # e.g. mae-vits16-v2. See src/training/train_ssl_pretrain.py's module docstring
 # for the full rationale. Before submitting each fold, this script checks
-# checkpoints/<prefix>-fold<N>-seed<S>/last.pt; if it already exists it prompts
-# interactively — type "resume" or "override" — since this script runs directly
-# in your terminal (unlike the SLURM batch jobs it submits, which have no tty
-# and cannot prompt).
+# checkpoints/<prefix>-fold<N>-seed<S>/last.pt for every requested fold; where one
+# already exists it prompts interactively — type "resume" or "override" — since
+# this script runs directly in your terminal (unlike the SLURM batch jobs it
+# submits, which have no tty and cannot prompt). All questions are asked first,
+# before anything is submitted, so Ctrl-C or EOF at a prompt queues nothing.
 #
 # Usage:
 #   bash scripts/submit_ssl_pretrain_all.sh --run-name-prefix <prefix> [OPTIONS]
@@ -82,32 +83,49 @@ for fold in "${FOLDS[@]}"; do
     fi
 done
 
-mkdir -p logs
 CACHE_NVME="/tmp/sfx_frame_cache"
 CONFIG="configs/ssl/mae_pretrain.yaml"
 # seed lives in base.yaml and may be overridden in the model config (load_config()
 # deep-merges base.yaml with model values winning) — check the model file first.
-SEED="$(grep -E '^\s*seed:' "${CONFIG}" configs/base.yaml 2>/dev/null | head -1 | awk '{print $2}')"
+# Only a top-level `seed:` counts (python reads cfg["seed"]); nested keys are ignored.
+SEED="$({ grep -hE '^seed:' "${CONFIG}" configs/base.yaml 2>/dev/null || true; } | head -1 | awk '{print $2}')" || SEED=""
+if [[ ! "${SEED}" =~ ^[0-9]+$ ]]; then
+    echo "Error: could not read a top-level integer 'seed:' from ${CONFIG} or configs/base.yaml." >&2
+    echo "Run this script from the repository root." >&2
+    exit 1
+fi
+
+mkdir -p logs
 
 # Sequential fold slots: stage(N) → pretrain(N) → cleanup(N) → stage(N+1) → …
 # Each fold's cache working set fills NVMe, so folds cannot overlap.
-PREV_DEP=""
+# Pass 1: resolve every resume/override answer before submitting anything.
+# Interactive prompt — only possible here (a terminal); the SLURM batch job this
+# submits has no tty and cannot prompt.
+declare -A RESUME_FLAGS
 for fold in "${FOLDS[@]}"; do
-    # Interactive resume/override prompt — only possible here (a terminal);
-    # the SLURM batch job this submits has no tty and cannot prompt.
     CKPT_PATH="checkpoints/${RUN_NAME_PREFIX}-fold${fold}-seed${SEED}/last.pt"
-    RESUME_FLAG="--resume-training"
+    RESUME_FLAGS[${fold}]="--resume-training"
     if [[ -f "${CKPT_PATH}" ]]; then
         echo "Checkpoint already exists for fold ${fold}: ${CKPT_PATH}"
         while true; do
-            read -r -p "Type 'resume' to continue training, or 'override' to discard and restart: " choice
+            if ! read -r -p "Type 'resume' to continue training, or 'override' to discard and restart: " choice; then
+                echo "No answer read — nothing submitted." >&2
+                exit 1
+            fi
             case "${choice}" in
-                resume) RESUME_FLAG="--resume-training"; break ;;
-                override) RESUME_FLAG="--override-training"; break ;;
+                resume) RESUME_FLAGS[${fold}]="--resume-training"; break ;;
+                override) RESUME_FLAGS[${fold}]="--override-training"; break ;;
                 *) echo "Please type exactly 'resume' or 'override'." ;;
             esac
         done
     fi
+done
+
+# Pass 2: submit.
+PREV_DEP=""
+for fold in "${FOLDS[@]}"; do
+    RESUME_FLAG="${RESUME_FLAGS[${fold}]}"
 
     if [ -n "${PREV_DEP}" ]; then
         STAGE_JID=$(sbatch --parsable --dependency=afterany:"${PREV_DEP}" \

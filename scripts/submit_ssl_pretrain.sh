@@ -32,6 +32,8 @@
 #   RESUME_FLAG   --resume-training (default) or --override-training. Decides what
 #                 happens when last.pt already exists for the resolved run name.
 #                 The default lets a job resubmitted after a timeout continue.
+#                 A requeued job (SLURM_RESTART_COUNT > 0) always resumes, even if
+#                 --override-training was requested, so it never deletes its own progress.
 #
 # See also:
 #   scripts/submit_ssl_pretrain_all.sh   multi-fold submission with per-fold NVMe staging
@@ -65,6 +67,14 @@ FOLD="${1:?fold id required (1-4)}"
 RUN_NAME_PREFIX="${2:?run_name_prefix required, e.g. mae-vits16-v2}"
 EPOCHS="${3:-}"   # optional; omit for full 400-epoch run
 RESUME_FLAG="${RESUME_FLAG:---resume-training}"
+
+# A requeued job (SLURM_RESTART_COUNT > 0) re-runs with the same environment, so a
+# job started with --override-training would delete the checkpoint it wrote before
+# the node failure. Resume instead; the override already happened on the first start.
+if [[ "${SLURM_RESTART_COUNT:-0}" -gt 0 && "${RESUME_FLAG}" == "--override-training" ]]; then
+    echo "Requeued job (restart ${SLURM_RESTART_COUNT}): using --resume-training instead of --override-training." >&2
+    RESUME_FLAG="--resume-training"
+fi
 
 module load mamba/latest
 source activate sfx-hitfinder

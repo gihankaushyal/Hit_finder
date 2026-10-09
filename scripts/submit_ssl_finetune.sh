@@ -31,6 +31,8 @@
 #                 (default /tmp/sfx_frame_cache). See scripts/stage_frame_cache.sh.
 #   RESUME_FLAG   --resume-training (default) or --override-training. Decides what
 #                 happens when best.pt already exists for the resolved run name.
+#                 A requeued job (SLURM_RESTART_COUNT > 0) always resumes, even if
+#                 --override-training was requested, so it never deletes its own progress.
 #
 # See also:
 #   scripts/submit_ssl_finetune_all.sh   multi-fold submission with per-fold NVMe staging
@@ -65,10 +67,24 @@ shift 3
 EXTRA=("$@")
 RESUME_FLAG="${RESUME_FLAG:---resume-training}"
 
+# A requeued job (SLURM_RESTART_COUNT > 0) re-runs with the same environment, so a
+# job started with --override-training would delete the checkpoint it wrote before
+# the node failure. Resume instead; the override already happened on the first start.
+if [[ "${SLURM_RESTART_COUNT:-0}" -gt 0 && "${RESUME_FLAG}" == "--override-training" ]]; then
+    echo "Requeued job (restart ${SLURM_RESTART_COUNT}): using --resume-training instead of --override-training." >&2
+    RESUME_FLAG="--resume-training"
+fi
+
 CONFIG="configs/ssl/mae_finetune.yaml"
 # seed lives in base.yaml and may be overridden in the model config (load_config()
 # deep-merges base.yaml with model values winning) — check the model file first.
-SEED="$(grep -E '^\s*seed:' "${CONFIG}" configs/base.yaml 2>/dev/null | head -1 | awk '{print $2}')"
+# Only a top-level `seed:` counts (python reads cfg["seed"]); nested keys are ignored.
+SEED="$({ grep -hE '^seed:' "${CONFIG}" configs/base.yaml 2>/dev/null || true; } | head -1 | awk '{print $2}')" || SEED=""
+if [[ ! "${SEED}" =~ ^[0-9]+$ ]]; then
+    echo "Error: could not read a top-level integer 'seed:' from ${CONFIG} or configs/base.yaml." >&2
+    echo "Run this script from the repository root." >&2
+    exit 1
+fi
 PRETRAIN_CKPT="checkpoints/${PRETRAIN_RUN_PREFIX}-fold${FOLD}-seed${SEED}/last.pt"
 
 if [ ! -f "${PRETRAIN_CKPT}" ]; then

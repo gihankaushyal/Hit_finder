@@ -17,11 +17,12 @@
 # <backbone>-mae-probe-v<N>. --pretrain-run-prefix (REQUIRED) names the pretrain
 # run whose checkpoints are loaded, e.g. mae-vits16-v2; every requested fold
 # must already have checkpoints/<pretrain-prefix>-fold<N>-seed<S>/last.pt or
-# nothing is submitted. Before submitting each fold, this script checks the
-# fine-tune and the probe best.pt; if one already exists it prompts
+# nothing is submitted. For every requested fold this script checks the
+# fine-tune and the probe best.pt; where one already exists it prompts
 # interactively — type "resume" or "override" — since this script runs directly
 # in your terminal (unlike the SLURM batch jobs it submits, which have no tty
-# and cannot prompt).
+# and cannot prompt). All questions are asked first, before anything is
+# submitted, so Ctrl-C or EOF at a prompt queues nothing.
 #
 # Usage:
 #   bash scripts/submit_ssl_finetune_all.sh --run-name-prefix <prefix> --pretrain-run-prefix <prefix> [OPTIONS]
@@ -106,12 +107,19 @@ if ! $RUN_FINETUNE && ! $RUN_PROBE; then
     exit 1
 fi
 
-mkdir -p logs
 CACHE_NVME="/tmp/sfx_frame_cache"
 CONFIG="configs/ssl/mae_finetune.yaml"
 # seed lives in base.yaml and may be overridden in the model config (load_config()
 # deep-merges base.yaml with model values winning) — check the model file first.
-SEED="$(grep -E '^\s*seed:' "${CONFIG}" configs/base.yaml 2>/dev/null | head -1 | awk '{print $2}')"
+# Only a top-level `seed:` counts (python reads cfg["seed"]); nested keys are ignored.
+SEED="$({ grep -hE '^seed:' "${CONFIG}" configs/base.yaml 2>/dev/null || true; } | head -1 | awk '{print $2}')" || SEED=""
+if [[ ! "${SEED}" =~ ^[0-9]+$ ]]; then
+    echo "Error: could not read a top-level integer 'seed:' from ${CONFIG} or configs/base.yaml." >&2
+    echo "Run this script from the repository root." >&2
+    exit 1
+fi
+
+mkdir -p logs
 
 # vits16-mae-v2 → vits16-mae-finetune-v2 / vits16-mae-probe-v2, matching
 # expand_finetune_prefix() in src/training/run_naming.py.
@@ -143,7 +151,10 @@ resolve_resume_flag() {
     if [[ -f "${ckpt}" ]]; then
         echo "Checkpoint already exists for ${label}: ${ckpt}"
         while true; do
-            read -r -p "Type 'resume' to continue training, or 'override' to discard and restart: " choice
+            if ! read -r -p "Type 'resume' to continue training, or 'override' to discard and restart: " choice; then
+                echo "No answer read — nothing submitted." >&2
+                exit 1
+            fi
             case "${choice}" in
                 resume) RESUME_FLAG="--resume-training"; break ;;
                 override) RESUME_FLAG="--override-training"; break ;;
@@ -156,20 +167,26 @@ resolve_resume_flag() {
 # Sequential fold slots: stage(N) → [finetune N, probe N] → stage(N+1) → …
 # Each fold's cache working set fills NVMe, so folds cannot overlap; the
 # fine-tune and probe for one fold share a working set and do run in parallel.
-PREV_DEP=""
+# Pass 1: resolve every resume/override answer before submitting anything.
+declare -A FINETUNE_FLAGS PROBE_FLAGS
 for fold in "${FOLDS[@]}"; do
-    FINETUNE_FLAG=""
-    PROBE_FLAG=""
     if $RUN_FINETUNE; then
         resolve_resume_flag "fine-tune fold ${fold}" \
             "checkpoints/${FINETUNE_PREFIX}-fold${fold}-seed${SEED}/best.pt"
-        FINETUNE_FLAG="${RESUME_FLAG}"
+        FINETUNE_FLAGS[${fold}]="${RESUME_FLAG}"
     fi
     if $RUN_PROBE; then
         resolve_resume_flag "probe fold ${fold}" \
             "checkpoints/${PROBE_PREFIX}-fold${fold}-seed${SEED}/best.pt"
-        PROBE_FLAG="${RESUME_FLAG}"
+        PROBE_FLAGS[${fold}]="${RESUME_FLAG}"
     fi
+done
+
+# Pass 2: submit.
+PREV_DEP=""
+for fold in "${FOLDS[@]}"; do
+    FINETUNE_FLAG="${FINETUNE_FLAGS[${fold}]:-}"
+    PROBE_FLAG="${PROBE_FLAGS[${fold}]:-}"
 
     if [ -n "${PREV_DEP}" ]; then
         STAGE_JID=$(sbatch --parsable --dependency=afterany:"${PREV_DEP}" \
