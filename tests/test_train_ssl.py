@@ -206,3 +206,110 @@ class TestPretrainRunNaming:
         prepare_pretrain_run("mae-vits16-v2", 1, cfg, override_training=True)
         assert not (run_dir / "last.pt").exists()
         assert not list(run_dir.glob("epoch*.pt"))
+
+    def test_gate_checks_the_directory_run_pretrain_writes(
+        self, synthetic_cxi, tmp_path, monkeypatch
+    ):
+        """The gate and run_pretrain must agree on where last.pt lives."""
+        from src.training.train_ssl_pretrain import prepare_pretrain_run
+
+        monkeypatch.setenv("WANDB_MODE", "disabled")
+        cfg = _tiny_cfg(tmp_path / "ckpt")
+        run_name = prepare_pretrain_run("mae-vits16-v2", 1, cfg)
+        run_pretrain(cfg, {"s0": synthetic_cxi}, ["s0"], run_name, "cpu")
+        with pytest.raises(SystemExit):
+            prepare_pretrain_run("mae-vits16-v2", 1, cfg)
+        prepare_pretrain_run("mae-vits16-v2", 1, cfg, resume_training=True)
+        prepare_pretrain_run("mae-vits16-v2", 1, cfg, override_training=True)
+        assert not (Path(cfg["checkpoint_dir"]) / run_name / "last.pt").exists()
+
+
+class TestFinetuneRunNaming:
+    def test_finetune_prefix_expansion(self, tmp_path, monkeypatch):
+        from src.training.train_ssl_finetune import prepare_finetune_run
+
+        monkeypatch.chdir(tmp_path)
+        assert (
+            prepare_finetune_run("vits16-mae-v2", 1, {"seed": 42})
+            == "vits16-mae-finetune-v2"
+        )
+
+    def test_probe_prefix_expansion(self, tmp_path, monkeypatch):
+        from src.training.train_ssl_finetune import prepare_finetune_run
+
+        monkeypatch.chdir(tmp_path)
+        assert (
+            prepare_finetune_run("vits16-mae-v2", 1, {"seed": 42}, linear_probe=True)
+            == "vits16-mae-probe-v2"
+        )
+
+    @pytest.mark.parametrize(
+        "bad", ["vits16-mae-finetune", "vits16-mae-finetune-v2", "mae-vits16-v2"]
+    )
+    def test_invalid_prefix_exits(self, tmp_path, monkeypatch, bad):
+        from src.training.train_ssl_finetune import prepare_finetune_run
+
+        monkeypatch.chdir(tmp_path)
+        with pytest.raises(SystemExit):
+            prepare_finetune_run(bad, 1, {"seed": 42})
+
+    def _existing_run(self, root: Path, run_name: str) -> Path:
+        run_dir = root / "checkpoints" / run_name
+        run_dir.mkdir(parents=True)
+        (run_dir / "best.pt").write_bytes(b"x")
+        (run_dir / "results.json").write_text("{}")
+        return run_dir
+
+    def test_existing_checkpoint_without_flag_exits(self, tmp_path, monkeypatch):
+        from src.training.train_ssl_finetune import prepare_finetune_run
+
+        monkeypatch.chdir(tmp_path)
+        self._existing_run(tmp_path, "vits16-mae-finetune-v2-fold1-seed42")
+        with pytest.raises(SystemExit):
+            prepare_finetune_run("vits16-mae-v2", 1, {"seed": 42})
+
+    def test_probe_gate_is_independent_of_finetune(self, tmp_path, monkeypatch):
+        from src.training.train_ssl_finetune import prepare_finetune_run
+
+        monkeypatch.chdir(tmp_path)
+        self._existing_run(tmp_path, "vits16-mae-finetune-v2-fold1-seed42")
+        # a finished fine-tune must not block the probe of the same fold
+        prepare_finetune_run("vits16-mae-v2", 1, {"seed": 42}, linear_probe=True)
+
+    def test_override_removes_best_and_results(self, tmp_path, monkeypatch):
+        from src.training.train_ssl_finetune import prepare_finetune_run
+
+        monkeypatch.chdir(tmp_path)
+        run_dir = self._existing_run(tmp_path, "vits16-mae-probe-v2-fold4-seed42")
+        prepare_finetune_run(
+            "vits16-mae-v2", 4, {"seed": 42}, linear_probe=True, override_training=True
+        )
+        assert not (run_dir / "best.pt").exists()
+        assert not (run_dir / "results.json").exists()
+
+    def test_read_pretrain_epoch(self, tmp_path):
+        from src.training.train_ssl_finetune import read_pretrain_epoch
+
+        path = tmp_path / "last.pt"
+        torch.save({"epoch": 250, "model_state_dict": {}}, path)
+        assert read_pretrain_epoch(path) == 250
+
+    def test_read_pretrain_epoch_on_a_real_pretrain_checkpoint(
+        self, synthetic_cxi, tmp_path, monkeypatch
+    ):
+        from src.training.train_ssl_finetune import read_pretrain_epoch
+
+        monkeypatch.setenv("WANDB_MODE", "disabled")
+        cfg = _tiny_cfg(tmp_path / "ckpt")
+        run_pretrain(cfg, {"s0": synthetic_cxi}, ["s0"], "mae-test-fold0", "cpu")
+        ckpt = Path(cfg["checkpoint_dir"]) / "mae-test-fold0" / "last.pt"
+        assert read_pretrain_epoch(ckpt) == 2
+
+    def test_finetune_config_has_no_run_suffix(self):
+        import yaml
+
+        cfg_path = (
+            Path(__file__).parent.parent / "configs" / "ssl" / "mae_finetune.yaml"
+        )
+        cfg = yaml.safe_load(cfg_path.read_text())
+        assert "run_suffix" not in cfg["wandb"]
