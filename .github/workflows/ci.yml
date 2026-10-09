@@ -2,9 +2,13 @@ name: CI
 
 on:
   push:
-    branches: [main, 'phase-**']
+    branches: [main, 'phase-[0-9][0-9]']
   pull_request:
     branches: [main, 'phase-**']
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
