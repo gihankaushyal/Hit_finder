@@ -52,6 +52,34 @@ describe("loadOrCreateToken", () => {
     expect(t).toMatch(/^[0-9a-f]{64}$/);
     expect(fs.readFileSync(path.join(dir, "token"), "utf8").trim()).toBe(t);
   });
+  it("keeps a valid token another starter wrote between our read and our write", () => {
+    const dir = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "dash-race-")), "state");
+    const file = path.join(dir, "token");
+    const winner = "cd".repeat(32);
+    const real = fs.readFileSync;
+    let raced = false;
+    const spy = vi.spyOn(fs, "readFileSync").mockImplementation(((p: fs.PathOrFileDescriptor, ...rest: unknown[]) => {
+      if (p === file && !raced) {
+        raced = true;
+        // Our read sees no file; then the other starter creates a valid one.
+        fs.writeFileSync(file, winner, { mode: 0o600 });
+        throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+      }
+      return (real as (...a: unknown[]) => unknown)(p, ...rest);
+    }) as typeof fs.readFileSync);
+    try {
+      expect(loadOrCreateToken(dir)).toBe(winner);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(fs.readFileSync(file, "utf8").trim()).toBe(winner);
+  });
+  it("still replaces a malformed file", () => {
+    const dir = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "dash-mal-")), "state");
+    fs.mkdirSync(dir, { mode: 0o700 });
+    fs.writeFileSync(path.join(dir, "token"), "zz", { mode: 0o600 });
+    expect(loadOrCreateToken(dir)).toMatch(/^[0-9a-f]{64}$/);
+  });
 });
 
 describe("auth", () => {

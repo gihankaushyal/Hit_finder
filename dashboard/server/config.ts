@@ -19,8 +19,8 @@ const DASHBOARD_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)),
 export function loadConfig(env: NodeJS.ProcessEnv): Config {
   let port = DEFAULT_PORT;
   if (env.DASH_PORT !== undefined) {
-    if (!/^\d+$/.test(env.DASH_PORT) || Number(env.DASH_PORT) > 65535) {
-      throw new Error(`DASH_PORT must be a valid port number, got "${env.DASH_PORT}"`);
+    if (!/^\d+$/.test(env.DASH_PORT) || Number(env.DASH_PORT) < 1 || Number(env.DASH_PORT) > 65535) {
+      throw new Error(`DASH_PORT must be a port number from 1 to 65535, got "${env.DASH_PORT}"`);
     }
     port = Number(env.DASH_PORT);
   }

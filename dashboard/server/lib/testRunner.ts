@@ -20,8 +20,8 @@ export interface SpawnHandle {
   onLine(fn: (line: string) => void): void;
   /** Exit code; 127 if the spawn fails. Never rejects. */
   done: Promise<number>;
-  /** Terminate the child (SIGTERM, then SIGKILL after a grace period). */
-  kill(): void;
+  /** Terminate the child's process group (SIGTERM, then SIGKILL after a grace period); resolves once the group is gone. */
+  kill(): Promise<void>;
 }
 export type SpawnFn = (cmd: string, args: string[], opts: { cwd: string }) => SpawnHandle;
 
@@ -29,17 +29,21 @@ export interface TestRunner {
   state(): TestRunState;
   /** Returns false if a run is already active. */
   start(): boolean;
-  /** Kill the active run's child, if any. Call on server shutdown. */
-  stop(): void;
+  /**
+   * Cancel the active run. A run that has not spawned yet never will; a running child is
+   * killed. Resolves once the child process group is gone. Call on server shutdown.
+   */
+  stop(): Promise<void>;
 }
 
 const KILL_GRACE_MS = 2000;
+const KILL_POLL_MS = 25;
 /** After the child exits, wait this long for output to drain before giving up on leftover pipe holders. */
 const DRAIN_MS = 1000;
-const liveChildren = new Set<() => void>();
+const liveChildren = new Set<() => Promise<void>>();
 // Last-resort cleanup: if the server process exits, take any running pytest with it.
 process.on("exit", () => {
-  for (const kill of liveChildren) kill();
+  for (const kill of liveChildren) void kill();
 });
 
 /** Long-running spawn with line streaming; deliberately has no timeout (full runs take minutes). */
@@ -61,11 +65,35 @@ export const nodeSpawn: SpawnFn = (cmd, args, opts) => {
       // group already gone
     }
   };
-  const kill = () => {
-    if (child.exitCode !== null || child.signalCode !== null) return;
-    signalGroup("SIGTERM");
-    // The leader may exit on SIGTERM while a grandchild ignores it, so always follow up on the group.
-    setTimeout(() => signalGroup("SIGKILL"), KILL_GRACE_MS).unref();
+  const groupAlive = (): boolean => {
+    if (child.pid === undefined) return false;
+    try {
+      process.kill(-child.pid, 0);
+      return true;
+    } catch (err) {
+      return (err as NodeJS.ErrnoException).code === "EPERM";
+    }
+  };
+  let killing: Promise<void> | null = null;
+  const kill = (): Promise<void> => {
+    killing ??= new Promise<void>((resolve) => {
+      if (!groupAlive()) return resolve();
+      signalGroup("SIGTERM");
+      // The leader may exit on SIGTERM while a grandchild ignores it, so escalate on the group.
+      const started = Date.now();
+      let escalated = false;
+      const poll = setInterval(() => {
+        const elapsed = Date.now() - started;
+        if (!groupAlive() || elapsed >= 2 * KILL_GRACE_MS + KILL_POLL_MS) {
+          clearInterval(poll);
+          resolve();
+        } else if (!escalated && elapsed >= KILL_GRACE_MS) {
+          escalated = true;
+          signalGroup("SIGKILL");
+        }
+      }, KILL_POLL_MS);
+    });
+    return killing;
   };
   liveChildren.add(kill);
   const done = new Promise<number>((resolve) => {
@@ -113,7 +141,9 @@ export function createTestRunner(d: { config: Config; spawn: SpawnFn; runner: Ru
   const lastPath = path.join(config.stateDir, LAST_STATE_FILE);
   let current: TestRunState = loadPersisted(lastPath);
   let running = false;
-  let kill: (() => void) | null = null;
+  let kill: (() => Promise<void>) | null = null;
+  let cancelled = false;
+  let runDone: Promise<void> = Promise.resolve();
 
   const invalidate = () => bus.emit({ type: "invalidate", resource: "tests" });
 
@@ -132,6 +162,7 @@ export function createTestRunner(d: { config: Config; spawn: SpawnFn; runner: Ru
     current = { ...current, ...patch, finishedAt: new Date().toISOString() };
     running = false;
     kill = null;
+    cancelled = false;
     persist();
     invalidate();
   }
@@ -145,11 +176,16 @@ export function createTestRunner(d: { config: Config; spawn: SpawnFn; runner: Ru
       commit = null;
     }
     current = { ...current, commit };
+    if (cancelled) {
+      finish({ status: "error", summary: null, error: "the test run was cancelled before it started" });
+      return;
+    }
     try {
       fs.mkdirSync(config.stateDir, { recursive: true });
       fs.rmSync(junitPath, { force: true });
       const handle = d.spawn(config.pythonBin, ["-m", "pytest", "tests/", "-q", `--junitxml=${junitPath}`], { cwd: config.repoRoot });
       kill = handle.kill;
+      if (cancelled) void handle.kill();
       handle.onLine((raw) => {
         const line = raw.length > LINE_MAX_CHARS ? raw.slice(0, LINE_MAX_CHARS) : raw;
         current = { ...current, tail: [...current.tail, line].slice(-TAIL_MAX_LINES) };
@@ -179,11 +215,15 @@ export function createTestRunner(d: { config: Config; spawn: SpawnFn; runner: Ru
       running = true;
       current = { ...idleState(), status: "running", startedAt: new Date().toISOString() };
       invalidate();
-      void run();
+      cancelled = false;
+      runDone = run();
       return true;
     },
-    stop() {
-      kill?.();
+    async stop() {
+      if (!running) return;
+      cancelled = true;
+      if (kill) await kill();
+      else await runDone; // not spawned yet: run() sees the flag and never spawns
     },
   };
 }

@@ -14,6 +14,13 @@ import { buildServer } from "./wiring";
 const EXIT_FAILURE = 1;
 /** Open SSE streams never end on their own; force the exit after this long. */
 const SHUTDOWN_GRACE_MS = 3000;
+/** Upper bound on waiting for pytest's process group to die (SIGTERM, then SIGKILL after 2 s) before exiting. */
+const STOP_TESTS_TIMEOUT_MS = 6000;
+
+function stopTests(): Promise<void> {
+  const bound = new Promise<void>((resolve) => setTimeout(resolve, STOP_TESTS_TIMEOUT_MS).unref());
+  return Promise.race([tests.stop().catch(() => {}), bound]);
+}
 
 function fail(message: string): never {
   console.error(message);
@@ -51,19 +58,20 @@ const server = serve({ fetch: app.fetch, hostname: config.host, port: config.por
 
 server.on("error", (err: NodeJS.ErrnoException) => {
   void triggers.close();
-  tests.stop();
-  fail(err.code === "EADDRINUSE" ? `dashboard: port ${config.port} is already in use` : `dashboard: could not start the server (${err.code ?? "error"})`);
+  const message = err.code === "EADDRINUSE" ? `dashboard: port ${config.port} is already in use` : `dashboard: could not start the server (${err.code ?? "error"})`;
+  void stopTests().finally(() => fail(message));
 });
 
 let shuttingDown = false;
 function shutdown(): void {
   if (shuttingDown) return;
   shuttingDown = true;
-  tests.stop();
-  const force = setTimeout(() => process.exit(0), SHUTDOWN_GRACE_MS);
+  const force = setTimeout(() => process.exit(0), STOP_TESTS_TIMEOUT_MS + SHUTDOWN_GRACE_MS);
   force.unref();
+  // Exit only after pytest's process group is gone, or the bound above elapses.
+  const testsStopped = stopTests();
   void triggers.close().finally(() => {
-    server.close(() => process.exit(0));
+    server.close(() => void testsStopped.finally(() => process.exit(0)));
     server.closeAllConnections?.();
   });
 }

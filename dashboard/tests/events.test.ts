@@ -6,9 +6,9 @@ import { createApp } from "../server/app";
 import { loadConfig } from "../server/config";
 import { loadOrCreateToken } from "../server/auth";
 import { EventBus } from "../server/events";
-import { eventRoutes, HEARTBEAT_MS, MAX_PENDING_WRITES } from "../server/routes/events";
+import { eventRoutes, HEARTBEAT_MS, MAX_QUEUED_EVENTS, QUEUE_STALL_MS } from "../server/routes/events";
 
-function setup(heartbeatMs?: number) {
+function setup(heartbeatMs?: number, limits?: { queueLimit?: number; stallMs?: number }) {
   const stateDir = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "dash-ev-")), "state");
   const token = loadOrCreateToken(stateDir);
   const bus = new EventBus();
@@ -16,7 +16,7 @@ function setup(heartbeatMs?: number) {
     config: { ...loadConfig({}), stateDir, webDist: path.join(stateDir, "no-dist") },
     token,
     bus,
-    routes: (api) => eventRoutes(api, { bus, heartbeatMs }),
+    routes: (api) => eventRoutes(api, { bus, heartbeatMs, ...limits }),
   });
   const open = (ac?: AbortController) =>
     app.request("/api/events", { headers: { Authorization: `Bearer ${token}` }, signal: ac?.signal });
@@ -94,15 +94,20 @@ describe("GET /api/events", () => {
     expect(bus.size).toBe(0);
   });
 
-  it("disconnects a client that stopped reading instead of queueing for it forever", async () => {
-    const { bus, open } = setup();
+  it("drops a client whose queue stays over the limit for the stall time", async () => {
+    expect(MAX_QUEUED_EVENTS).toBeGreaterThan(64);
+    expect(QUEUE_STALL_MS).toBeGreaterThan(0);
+    const { bus, open } = setup(undefined, { queueLimit: 10, stallMs: 40 });
     const before = bus.size;
     const res = await open();
     expect(res.status).toBe(200);
     await waitFor(() => bus.size === before + 1);
     expect(bus.size).toBe(before + 1);
     // Never read from res.body: a fake slow consumer.
-    for (let i = 0; i < MAX_PENDING_WRITES + 10; i++) bus.emit({ type: "tests-line", line: `l${i}` });
+    for (let i = 0; i < 2000; i++) bus.emit({ type: "tests-line", line: `l${i}` });
+    expect(bus.size).toBe(before + 1); // over the limit, but not for long enough yet
+    await new Promise((r) => setTimeout(r, 80));
+    bus.emit({ type: "tests-line", line: "late" });
     await waitFor(() => bus.size === before);
     expect(bus.size).toBe(before);
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -111,12 +116,33 @@ describe("GET /api/events", () => {
     await res.body!.cancel().catch(() => {});
   });
 
+  it("delivers a synchronous burst of 500 events in order to a reading client and keeps it connected", async () => {
+    const { bus, open } = setup();
+    const res = await open();
+    const reader = res.body!.getReader();
+    await readUntil(reader, "event: hello");
+    await waitFor(() => bus.size === 1);
+    const N = 500;
+    for (let i = 0; i < N; i++) bus.emit({ type: "tests-line", line: `b${i}` });
+    const dec = new TextDecoder();
+    let acc = "";
+    while (!acc.includes(`"line":"b${N - 1}"`)) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      acc += dec.decode(value);
+    }
+    const seen = [...acc.matchAll(/"line":"b(\d+)"/g)].map((m) => Number(m[1]));
+    expect(seen).toEqual(Array.from({ length: N }, (_, i) => i));
+    expect(bus.size).toBe(1);
+    await reader.cancel();
+  });
+
   it("keeps a client that reads promptly", async () => {
     const { bus, open } = setup();
     const res = await open();
     const reader = res.body!.getReader();
     await readUntil(reader, "event: hello");
-    for (let i = 0; i < MAX_PENDING_WRITES * 3; i++) {
+    for (let i = 0; i < 200; i++) {
       bus.emit({ type: "tests-line", line: `l${i}` });
       await readUntil(reader, `l${i}"`);
     }

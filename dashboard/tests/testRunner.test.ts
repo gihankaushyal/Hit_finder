@@ -33,7 +33,7 @@ function setup(stateDir?: string) {
     return {
       onLine: (fn) => { emit = fn; },
       done: new Promise<number>((res) => { finish = res; }),
-      kill: () => { killed++; },
+      kill: () => { killed++; return Promise.resolve(); },
     };
   };
   const runnerCalls: { cmd: string; args: string[]; cwd?: string }[] = [];
@@ -188,6 +188,53 @@ describe("test runner", () => {
     await settle(s.tr);
   });
 
+  it("stop() before the spawn cancels the run: spawn is never called and the state ends not running", async () => {
+    const s = setup();
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => { release = r; });
+    const slowGit: Runner = async () => {
+      await gate;
+      return { stdout: "abc\n", stderr: "", code: 0 };
+    };
+    const spawn = vi.fn(s.spawn);
+    const tr = createTestRunner({ config: s.config, spawn, runner: slowGit, bus: s.bus });
+    expect(tr.start()).toBe(true);
+    let stopped = false;
+    const stopping = Promise.resolve(tr.stop()).then(() => { stopped = true; });
+    release();
+    await stopping;
+    expect(stopped).toBe(true);
+    expect(spawn).not.toHaveBeenCalled();
+    expect(tr.state().status).not.toBe("running");
+    expect(tr.start()).toBe(true); // a later run is still possible
+    release();
+  });
+
+  it("stop() resolves only once the child's kill() has completed", async () => {
+    const s = setup();
+    let gone: () => void = () => {};
+    const goneP = new Promise<void>((r) => { gone = r; });
+    let finish: (c: number) => void = () => {};
+    const spawn: SpawnFn = () => ({
+      onLine: () => {},
+      done: new Promise<number>((r) => { finish = r; }),
+      kill: () => goneP,
+    });
+    const tr = createTestRunner({ config: s.config, spawn, runner: s.runner, bus: s.bus });
+    tr.start();
+    for (let i = 0; i < 100 && tr.state().commit === null; i++) await new Promise((r) => setTimeout(r, 5));
+    await new Promise((r) => setTimeout(r, 20));
+    let stopped = false;
+    const stopping = Promise.resolve(tr.stop()).then(() => { stopped = true; });
+    await new Promise((r) => setTimeout(r, 30));
+    expect(stopped).toBe(false);
+    gone();
+    await stopping;
+    expect(stopped).toBe(true);
+    finish(143);
+    await settle(tr);
+  });
+
   it("works with a missing commit (git failure) and a rejecting spawn", async () => {
     const s = setup();
     const failing: Runner = async () => ({ stdout: "", stderr: "x", code: 128 });
@@ -209,7 +256,7 @@ describe("test runner failure paths", () => {
   it("ends in an error state, not running, when done rejects", async () => {
     const s = setup();
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
-    const rejecting: SpawnFn = () => ({ onLine: () => {}, done: Promise.reject(new Error("pipe broke")), kill: () => {} });
+    const rejecting: SpawnFn = () => ({ onLine: () => {}, done: Promise.reject(new Error("pipe broke")), kill: () => Promise.resolve() });
     const tr = createTestRunner({ config: s.config, spawn: rejecting, runner: s.runner, bus: s.bus });
     expect(tr.start()).toBe(true);
     await settle(tr);
@@ -324,6 +371,23 @@ describe("nodeSpawn process control", () => {
     await h.done;
     await until(() => pids.every((p) => !alive(p)));
     expect(pids.map(alive)).toEqual([false, false]);
+  });
+
+  it("kill() on a child that ignores SIGTERM resolves only after it has been SIGKILLed", async () => {
+    const { nodeSpawn } = await import("../server/lib/testRunner");
+    const script = "process.on('SIGTERM',()=>{});console.log('PID '+process.pid);setTimeout(()=>{},60000);";
+    const h = nodeSpawn(process.execPath, ["-e", script], { cwd: process.cwd() });
+    let pid = 0;
+    h.onLine((l) => {
+      const m = /^PID (\d+)$/.exec(l);
+      if (m) pid = Number(m[1]);
+    });
+    await until(() => pid > 0);
+    const t0 = Date.now();
+    await h.kill();
+    expect(alive(pid)).toBe(false);
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(1500);
+    await h.done;
   });
 
   it("done resolves shortly after exit even if a leftover process holds the output pipes", async () => {

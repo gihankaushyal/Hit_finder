@@ -11,15 +11,17 @@ const FILE_MODE = 0o600;
 
 const TOKEN_PATTERN = new RegExp(`^[0-9a-f]{${TOKEN_BYTES * 2}}$`);
 
-function readValidToken(file: string): string | null {
+type TokenRead = { kind: "valid"; token: string } | { kind: "malformed" } | { kind: "missing" };
+
+function readToken(file: string): TokenRead {
   try {
     const existing = fs.readFileSync(file, "utf8").trim();
-    if (!TOKEN_PATTERN.test(existing)) return null;
+    if (!TOKEN_PATTERN.test(existing)) return { kind: "malformed" };
     fs.chmodSync(file, FILE_MODE);
-    return existing;
+    return { kind: "valid", token: existing };
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
-    return null;
+    return { kind: "missing" };
   }
 }
 
@@ -27,17 +29,18 @@ export function loadOrCreateToken(stateDir: string): string {
   const file = path.join(stateDir, "token");
   fs.mkdirSync(stateDir, { recursive: true, mode: DIR_MODE });
   fs.chmodSync(stateDir, DIR_MODE);
-  const existing = readValidToken(file);
-  if (existing) return existing;
+  const first = readToken(file);
+  if (first.kind === "valid") return first.token;
+  // Only a file we read and found malformed is removed; never one that merely appeared since.
+  if (first.kind === "malformed") fs.rmSync(file, { force: true });
   const token = crypto.randomBytes(TOKEN_BYTES).toString("hex");
   try {
-    // Replace a malformed file; "wx" below then makes concurrent starters agree.
-    fs.rmSync(file, { force: true });
+    // "wx" makes concurrent starters agree on a single winner.
     fs.writeFileSync(file, token, { mode: FILE_MODE, flag: "wx" });
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
-    const winner = readValidToken(file);
-    if (winner) return winner;
+    const winner = readToken(file);
+    if (winner.kind === "valid") return winner.token;
     throw err;
   }
   fs.chmodSync(file, FILE_MODE);

@@ -345,7 +345,7 @@ describe("buildServer", () => {
   function server() {
     const s = setup();
     const gh = s.gh;
-    const tests = { state: () => ({ status: "idle" }) as never, start: () => true, stop: () => {} };
+    const tests = { state: () => ({ status: "idle" }) as never, start: () => true, stop: () => Promise.resolve() };
     const app = buildServer({ config, token: "t".repeat(64), bus: s.bus, gh, tests, kanban: s.service, runner: async () => ({ stdout: "x\n", stderr: "", code: 0 }) });
     return { app, gh };
   }

@@ -6,32 +6,54 @@ import type { EventBus } from "../events";
 export const HEARTBEAT_MS = 25_000;
 
 /**
- * Hono's stream API has no backpressure signal, so count writes that have not
- * completed. A reader that keeps up has at most one or two in flight; one that
- * stopped reading accumulates them, and is dropped (EventSource reconnects).
+ * Each connection owns a queue that one pump drains in order, so a burst
+ * emitted in a single tick (pytest output arrives in chunks) is delivered, not
+ * dropped. A client is disconnected (EventSource reconnects) only when its
+ * queue stays above MAX_QUEUED_EVENTS for QUEUE_STALL_MS: it has stopped reading.
  */
-export const MAX_PENDING_WRITES = 64;
+export const MAX_QUEUED_EVENTS = 1000;
+export const QUEUE_STALL_MS = 5000;
 
-export function eventRoutes(api: Hono, d: { bus: EventBus; heartbeatMs?: number }): void {
+export function eventRoutes(
+  api: Hono,
+  d: { bus: EventBus; heartbeatMs?: number; queueLimit?: number; stallMs?: number },
+): void {
   const heartbeatMs = d.heartbeatMs ?? HEARTBEAT_MS;
+  const queueLimit = d.queueLimit ?? MAX_QUEUED_EVENTS;
+  const stallMs = d.stallMs ?? QUEUE_STALL_MS;
   api.get("/events", (c) =>
     streamSSE(c, async (stream) => {
       // Never let a write to a closed stream throw back into bus.emit.
-      let pending = 0;
+      const queue: string[] = [];
+      let pumping = false;
+      let overSince: number | null = null;
+      const pump = async () => {
+        if (pumping) return;
+        pumping = true;
+        try {
+          while (queue.length > 0 && !stream.aborted && !stream.closed) {
+            const data = queue.shift() as string;
+            await stream.writeSSE({ data }).catch(() => {});
+          }
+        } finally {
+          pumping = false;
+        }
+      };
       const unsubscribe = d.bus.subscribe((e) => {
         if (stream.aborted || stream.closed) return;
-        if (pending >= MAX_PENDING_WRITES) {
-          unsubscribe();
-          stream.abort();
-          return;
+        if (queue.length > queueLimit) {
+          const now = Date.now();
+          overSince ??= now;
+          if (now - overSince >= stallMs) {
+            unsubscribe();
+            stream.abort();
+            return;
+          }
+        } else {
+          overSince = null;
         }
-        pending++;
-        stream
-          .writeSSE({ data: JSON.stringify(e) })
-          .catch(() => {})
-          .finally(() => {
-            pending--;
-          });
+        queue.push(JSON.stringify(e));
+        void pump();
       });
       stream.onAbort(unsubscribe);
       try {

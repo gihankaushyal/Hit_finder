@@ -29,4 +29,8 @@ describe("loadConfig", () => {
   it("rejects a non-numeric port", () => {
     expect(() => loadConfig({ DASH_PORT: "abc" })).toThrow(/DASH_PORT/);
   });
+  it("rejects port 0, which would bind a random port while printing 0", () => {
+    expect(() => loadConfig({ DASH_PORT: "0" })).toThrow(/DASH_PORT/);
+    expect(() => loadConfig({ DASH_PORT: "00" })).toThrow(/DASH_PORT/);
+  });
 });
