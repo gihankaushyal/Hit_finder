@@ -155,6 +155,16 @@ def main() -> None:
 
     cfg = load_config(args.config)
 
+    validate_run_name_prefix(
+        args.run_name_prefix,
+        SSL_FINETUNE_PREFIX_RE,
+        SSL_FINETUNE_CONVENTION,
+        SSL_FINETUNE_EXAMPLE,
+    )
+    # Read the pretrain checkpoint before the gate so a bad path fails before
+    # --override-training can delete anything.
+    pretrain_epoch = read_pretrain_epoch(args.pretrain_checkpoint)
+    print(f"[pretrain] {args.pretrain_checkpoint} — stored epoch {pretrain_epoch}")
     probe = args.linear_probe
     prefix = prepare_finetune_run(
         args.run_name_prefix,
@@ -164,8 +174,6 @@ def main() -> None:
         resume_training=args.resume_training,
         override_training=args.override_training,
     )
-    pretrain_epoch = read_pretrain_epoch(args.pretrain_checkpoint)
-    print(f"[pretrain] {args.pretrain_checkpoint} — stored epoch {pretrain_epoch}")
     # _train_fold passes cfg to wandb.init(config=...), so these land in the run config.
     cfg["pretrain_checkpoint"] = str(args.pretrain_checkpoint)
     cfg["pretrain_epoch"] = pretrain_epoch
