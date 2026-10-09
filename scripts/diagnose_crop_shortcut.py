@@ -25,7 +25,7 @@ deltas are attributable to the crop construction rather than to sampling.
 Usage:
     python -m scripts.diagnose_crop_shortcut \
         --config configs/ssl/mae_finetune.yaml \
-        --checkpoint checkpoints/vits16-mae-finetune-fold4-seed42-v2/best.pt \
+        --checkpoint checkpoints/vits16-mae-finetune-v2-fold4-seed42/best.pt \
         --fold 4 --max-frames 400
 """
 
