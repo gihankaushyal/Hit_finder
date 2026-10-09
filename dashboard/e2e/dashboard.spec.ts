@@ -122,7 +122,7 @@ test.describe("panels with data", () => {
     await expect(running).toBeDisabled();
     // a second start while running does not start a second run
     await running.click({ force: true });
-    const second = await page.request.post(`${dash.baseUrl}/api/tests/run`);
+    const second = await page.request.post(`${dash.baseUrl}/api/tests/run`, { headers: { "Content-Type": "application/json" } });
     expect(second.status()).toBe(409);
     const log = local.getByLabel("Test output");
     await expect(log).toContainText("collected 5 items");
@@ -270,13 +270,17 @@ test.describe("kanban after the import", () => {
     await expect.poll(() => dash.ghIssues().find((i) => i.title === title)?.labels ?? []).toContain("status:in-progress");
   });
 
-  test("an unreachable GitHub shows the error and the board recovers after Retry", async ({ page }) => {
+  test("an unreachable GitHub shows a sync problem on the board, and Sync now recovers", async ({ page }) => {
+    // The board is built from the list the last sync fetched, so an unreachable GitHub shows up
+    // as a sync problem on that board rather than as a failed board read.
     const dash = dashboard();
     dash.failGh(["issue list"]);
     await open(page, dash);
-    await expect(panel(page, "Kanban").getByRole("alert")).toContainText("GitHub CLI failed");
+    await panel(page, "Kanban").getByRole("button", { name: "Sync now" }).click();
+    await expect(panel(page, "Kanban").getByText("Sync problem")).toBeVisible();
     dash.clearGhFailures();
-    await panel(page, "Kanban").getByRole("button", { name: "Retry" }).click();
+    await panel(page, "Kanban").getByRole("button", { name: "Sync now" }).click();
+    await expect(panel(page, "Kanban").getByText("Sync problem")).toHaveCount(0);
     await expect(column(page, "Todo")).toBeVisible();
   });
 
