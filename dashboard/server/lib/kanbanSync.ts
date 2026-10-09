@@ -19,6 +19,12 @@ export interface SyncStateItem {
   checked: boolean;
   closed: boolean;
   bodyHash: string;
+  /**
+   * "github": the issue was created on GitHub (appended to the Inbox by the sync, or added through the
+   * dashboard). Its markdown line is display only and its body is never pushed. Absent means the item
+   * originated in the file.
+   */
+  origin?: "github";
 }
 export interface PendingLink {
   /** Identifies the item (title plus body) the issue was created for. */
@@ -72,6 +78,8 @@ export interface SyncOptions {
    * MAX_UNATTENDED_CREATES issues. The command-line run leaves this unset and is not capped.
    */
   unattended?: boolean;
+  /** Called with the task list the run fetched at its start, so a caller can reuse it instead of listing again. */
+  onTasks?(tasks: GhTask[]): void;
 }
 
 export interface SyncDeps {
@@ -116,6 +124,7 @@ export const TASK_LABELS: { name: string; color: string }[] = [
 const TASK_LABEL = "task";
 const LIST_LIMIT = "1000";
 const LIST_FIELDS = "number,title,state,labels,body,url,updatedAt";
+const LIST_FIELDS_NO_BODY = "number,title,state,labels,url,updatedAt";
 const TITLE_MAX_CHARS = 256; // GitHub's issue title limit
 const BODY_MAX_CHARS = 60_000; // GitHub's limit is 65,536
 const CREATE_PAUSE_MS = 1000;
@@ -143,14 +152,17 @@ export function labelsForSection(section: string): string[] {
   return labels;
 }
 
-export async function listTasks(gh: Gh): Promise<GhTask[]> {
-  const raw = await gh.json<(Omit<GhTask, "labels"> & { labels: { name: string }[] })[]>([
-    "issue", "list", "--label", TASK_LABEL, "--state", "all", "--limit", LIST_LIMIT, "--json", LIST_FIELDS,
+/** `withBody: false` skips the (large) issue bodies for callers that only show titles and states; `body` is then "". */
+export async function listTasks(gh: Gh, opts: { withBody?: boolean } = {}): Promise<GhTask[]> {
+  const withBody = opts.withBody ?? true;
+  const raw = await gh.json<(Omit<GhTask, "labels" | "body"> & { body?: string; labels: { name: string }[] })[]>([
+    "issue", "list", "--label", TASK_LABEL, "--state", "all", "--limit", LIST_LIMIT, "--json", withBody ? LIST_FIELDS : LIST_FIELDS_NO_BODY,
   ]);
-  return raw.map((t) => ({ ...t, labels: t.labels.map((l) => l.name) }));
+  return raw.map((t) => ({ ...t, body: withBody ? (t.body ?? "") : "", labels: t.labels.map((l) => l.name) }));
 }
 
 
+const originOf = (prev: SyncStateItem | undefined): Pick<SyncStateItem, "origin"> => (prev?.origin ? { origin: prev.origin } : {});
 const sha = (s: string): string => crypto.createHash("sha256").update(s).digest("hex");
 /** Stops `@name` text from notifying a real GitHub user. Idempotent. */
 export function escapeMentions(s: string): string {
@@ -232,6 +244,7 @@ async function executeInner(d: SyncDeps, opts: SyncOptions, report: SyncReport):
   const loaded = d.loadState();
   const startText = d.readFile();
   const tasks = await listTasks(d.gh);
+  opts.onTasks?.(tasks);
   const byNumber = new Map(tasks.map((t) => [t.number, t]));
   const closedNow = new Map(tasks.map((t) => [t.number, t.state === "CLOSED"]));
   const doc = startText === null ? null : K.parseKanban(startText);
@@ -358,7 +371,7 @@ async function executeInner(d: SyncDeps, opts: SyncOptions, report: SyncReport):
       const closed = task.state === "CLOSED";
       if (rebuild) {
         // Record reality; flip nothing. A disagreement is left for the user.
-        state.items[String(n)] = { checked: item.checked, closed, bodyHash: sha(K.itemBody(item)) };
+        state.items[String(n)] = { checked: item.checked, closed, bodyHash: sha(K.itemBody(item)), ...originOf(state.items[String(n)]) };
       }
       const last = state.items[String(n)];
       if (!last && item.checked && !closed) {
@@ -376,7 +389,7 @@ async function executeInner(d: SyncDeps, opts: SyncOptions, report: SyncReport):
           addConflict(report, `#${n} differs between the file and GitHub but neither changed since the last sync; left alone`, n);
         }
       }
-      if (last && sha(K.itemBody(item)) !== last.bodyHash) linkedOps.push({ kind: "update-body", item, issue: n });
+      if (last && last.origin !== "github" && sha(K.itemBody(item)) !== last.bodyHash) linkedOps.push({ kind: "update-body", item, issue: n });
     }
     for (const task of [...tasks].sort((a, b) => a.number - b.number)) {
       if (referenced.has(task.number) || claimed.has(task.number)) continue;
@@ -462,7 +475,7 @@ async function executeInner(d: SyncDeps, opts: SyncOptions, report: SyncReport):
       if (prev && bodyUpdated) state.items[String(n)] = { ...prev, bodyHash };
       return;
     }
-    state.items[String(n)] = { checked: item.checked, closed, bodyHash };
+    state.items[String(n)] = { checked: item.checked, closed, bodyHash, ...originOf(prev) };
   };
 
   if (!state.labelsEnsured) {
@@ -599,6 +612,8 @@ async function executeInner(d: SyncDeps, opts: SyncOptions, report: SyncReport):
       if (item) {
         closedNow.set(op.task.number, op.closed);
         record(item, true);
+        const rec = state.items[String(op.task.number)];
+        if (rec) rec.origin = "github";
       }
       report.actions.push(appendAction(op));
     }
@@ -689,7 +704,7 @@ export function parseSyncState(raw: unknown, where: string): SyncState {
   if (!isRecord(raw.items)) return bad("missing items");
   if (raw.labelsEnsured !== undefined && typeof raw.labelsEnsured !== "boolean") return bad("labelsEnsured is not a boolean");
   for (const [n, it] of Object.entries(raw.items)) {
-    if (!/^\d+$/.test(n) || !isRecord(it) || typeof it.checked !== "boolean" || typeof it.closed !== "boolean" || typeof it.bodyHash !== "string") {
+    if (!/^\d+$/.test(n) || !isRecord(it) || typeof it.checked !== "boolean" || typeof it.closed !== "boolean" || typeof it.bodyHash !== "string" || (it.origin !== undefined && it.origin !== "github")) {
       return bad(`bad record for item ${n}`);
     }
   }

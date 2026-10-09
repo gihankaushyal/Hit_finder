@@ -22,6 +22,18 @@ describe("api client", () => {
     expect(init.credentials).toBe("same-origin");
   });
 
+  it("every non-GET request declares JSON, even without a body (the server refuses anything else)", async () => {
+    const f = vi.fn().mockResolvedValue(res(200, { ok: true }));
+    vi.stubGlobal("fetch", f);
+    await apiSend("POST", "/api/tests/run");
+    await apiSend("POST", "/api/kanban/sync");
+    await apiSend("PATCH", "/api/kanban/tasks/1", { status: "done" });
+    for (const [, init] of f.mock.calls) expect(init.headers).toEqual({ "Content-Type": "application/json" });
+    expect(f.mock.calls[0][1].body).toBeUndefined();
+    await apiGet("/api/x");
+    expect(f.mock.calls[3][1].headers).toBeUndefined();
+  });
+
   it("a non-2xx response throws ApiError carrying the server's error string", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(res(502, { error: "GitHub CLI failed" })));
     await expect(apiGet("/api/x")).rejects.toMatchObject({ name: "ApiError", status: 502, message: "GitHub CLI failed" });

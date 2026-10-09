@@ -72,6 +72,10 @@ export function createKanbanService(d: KanbanServiceDeps): KanbanService {
   let lastWritten: string | null = null;
   let timer: ReturnType<typeof setTimeout> | null = null;
   let disposed = false;
+  /** The task list the board is built from: refreshed by every sync and mutation, never by a GET. */
+  let tasksCache: GhTask[] | null = null;
+  /** What the board last showed besides the columns' cards; a background sync emits only when this changes. */
+  let lastSignature: string | null = null;
 
   // Every write path (HTTP mutation, watcher, poll, manual sync) goes through this one queue.
   const exclusive = <T>(fn: () => Promise<T>): Promise<T> => {
@@ -93,17 +97,43 @@ export function createKanbanService(d: KanbanServiceDeps): KanbanService {
     },
   };
 
-  async function doSync(): Promise<void> {
+  const forBoard = (tasks: GhTask[]): GhTask[] => tasks.map((t) => ({ ...t, body: "" }));
+  const signature = (report: SyncReport | null, tasks: GhTask[] | null): string =>
+    JSON.stringify([
+      report?.conflictItems ?? [],
+      report?.notInFile ?? [],
+      syncError,
+      (tasks ?? []).map((t) => [t.number, t.title, t.state, t.labels, t.updatedAt]),
+    ]);
+
+  /** Runs a sync; true when something a viewer could see differs from the previous run. */
+  async function doSync(): Promise<boolean> {
+    let fetched: GhTask[] | null = null;
+    let wrote = false;
     try {
-      const report = await runSync(syncDeps, { dryRun: false, unattended: true });
+      const report = await runSync(syncDeps, { dryRun: false, unattended: true, onTasks: (t) => (fetched = forBoard(t)) });
       lastReport = report;
       lastSyncAt = new Date().toISOString();
       syncError = report.aborted ? (report.abortedBy === "gh" ? SYNC_GH_UNUSABLE : SYNC_STOPPED) : null;
+      wrote = report.actions.length > 0;
     } catch (err) {
-      if (err instanceof SyncLockedError) return; // another process is syncing: a skipped run, not an error
+      if (err instanceof SyncLockedError) return false; // another process is syncing: a skipped run, not an error
       console.error("kanban sync failed:", err);
       syncError = SYNC_FAILED;
     }
+    if (fetched) tasksCache = fetched;
+    // The run changed GitHub or the file, so the list it fetched at its start is out of date.
+    if (wrote) {
+      try {
+        tasksCache = await listTasks(d.gh, { withBody: false });
+      } catch {
+        tasksCache = null; // the next board read fetches it
+      }
+    }
+    const sig = signature(lastReport, tasksCache);
+    const changed = wrote || sig !== lastSignature;
+    lastSignature = sig;
+    return changed;
   }
 
   function sync(): Promise<void> {
@@ -111,8 +141,7 @@ export function createKanbanService(d: KanbanServiceDeps): KanbanService {
     if (queuedSync) return queuedSync;
     const run = exclusive(async () => {
       queuedSync = null; // later triggers now queue a fresh follow-up
-      await doSync();
-      invalidate();
+      if (await doSync()) invalidate();
     });
     queuedSync = run;
     return run;
@@ -141,7 +170,8 @@ export function createKanbanService(d: KanbanServiceDeps): KanbanService {
 
   async function board(): Promise<Board> {
     if (!d.imported()) return boardFromMarkdown();
-    const tasks = await listTasks(d.gh);
+    tasksCache ??= await listTasks(d.gh, { withBody: false });
+    const tasks = tasksCache;
     const notInFile = new Set(lastReport?.notInFile ?? []);
     const columns = emptyColumns();
     for (const t of tasks) {
@@ -187,7 +217,8 @@ export function createKanbanService(d: KanbanServiceDeps): KanbanService {
       }),
     setStatus: (n, s) =>
       mutate(async () => {
-        const task = (await listTasks(d.gh)).find((t) => t.number === n);
+        let task = (tasksCache ??= await listTasks(d.gh, { withBody: false })).find((t) => t.number === n);
+        if (!task) task = (tasksCache = await listTasks(d.gh, { withBody: false })).find((t) => t.number === n); // filed since the last sync
         if (!task) throw new TaskNotFoundError(n);
         if (s === "done") {
           if (task.state !== "CLOSED") await d.gh.text(["issue", "close", String(n)]);

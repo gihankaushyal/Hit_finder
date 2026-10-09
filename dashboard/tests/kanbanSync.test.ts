@@ -206,6 +206,39 @@ describe("runSync", () => {
     expect(gh.count("create")).toBe(3);
   });
 
+  it("8b. an issue appended from GitHub keeps its real body when the title-only line is edited later", async () => {
+    const { h, deps, gh } = mk(THREE);
+    await sync(deps);
+    gh.seed({ title: "Filed on GitHub", body: "The real, long description\n\nwith details" });
+    await sync(deps);
+    expect(h.state.items["4"].origin).toBe("github");
+    h.file = h.file!.replace("- [ ] Filed on GitHub", "- [ ] Filed on GitHub (renamed)");
+    const r = await sync(deps);
+    expect(r.actions.filter((a) => a.type === "update-body")).toEqual([]);
+    expect(gh.count("edit")).toBe(0);
+    expect(gh.issues.get(4)!.body).toBe("The real, long description\n\nwith details");
+    expect(h.state.items["4"].origin).toBe("github");
+    expect((await sync(deps)).actions).toEqual([]);
+  });
+
+  it("8c. a record without an origin flag is file-origin: its edited line still updates the body", async () => {
+    const { h, deps, gh } = mk(THREE);
+    await sync(deps);
+    gh.seed({ title: "Filed on GitHub", body: "body" });
+    await sync(deps);
+    delete h.state.items["4"].origin; // a record written before the flag existed
+    h.file = h.file!.replace("- [ ] Filed on GitHub", "- [ ] Filed on GitHub v2");
+    const r = await sync(deps);
+    expect(r.actions).toEqual([{ type: "update-body", issue: 4 }]);
+    expect(gh.count("edit")).toBe(1);
+  });
+
+  it("8d. a file-origin item stays file-origin and an edit still updates its body", async () => {
+    const { h, deps } = mk(THREE);
+    await sync(deps);
+    expect(h.state.items["3"].origin).toBeUndefined();
+  });
+
   it("9. deleting a synced item reports it as notInFile and neither re-appends nor closes it", async () => {
     const { h, deps, gh } = mk(THREE);
     await sync(deps);

@@ -11,10 +11,8 @@ export class ApiError extends Error {
 
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   const init: RequestInit = { method, credentials: "same-origin" };
-  if (body !== undefined) {
-    init.headers = { "Content-Type": "application/json" };
-    init.body = JSON.stringify(body);
-  }
+  if (method !== "GET") init.headers = { "Content-Type": "application/json" }; // the server requires it on every mutation
+  if (body !== undefined) init.body = JSON.stringify(body);
   let res: Response;
   try {
     res = await fetch(path, init);

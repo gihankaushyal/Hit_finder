@@ -272,6 +272,103 @@ describe("before the first import", () => {
   });
 });
 
+describe("background sync cost", () => {
+  const kanbanEvents = (events: DashEvent[]) => events.filter((e) => e.type === "invalidate" && e.resource === "kanban");
+  async function settled(s: ReturnType<typeof setup>) {
+    await s.service.sync(); // creates the issues and writes markers
+    await s.service.sync(); // nothing left to do
+    s.gh.jsonCalls.length = 0;
+    s.events.length = 0;
+  }
+  const idle = () => new Promise((r) => setTimeout(r, 30));
+
+  it("an idle poll makes exactly one list call and emits nothing", async () => {
+    const s = setup();
+    await settled(s);
+    s.service.poll();
+    await idle();
+    expect(s.gh.jsonCalls).toHaveLength(1);
+    expect(kanbanEvents(s.events)).toEqual([]);
+  });
+
+  it("a poll emits one invalidate when GitHub changed something the board shows, even with no file action", async () => {
+    const s = setup();
+    await settled(s);
+    s.gh.issues.get(1)!.title = "Renamed on GitHub";
+    s.gh.issues.get(1)!.updatedAt = "2026-10-08T00:00:00Z";
+    s.service.poll();
+    await idle();
+    expect(kanbanEvents(s.events)).toHaveLength(1);
+    const b = await s.board();
+    expect(Object.values(b.columns).flat().map((t) => t.title)).toContain("Renamed on GitHub");
+    s.events.length = 0;
+    s.service.poll();
+    await idle();
+    expect(kanbanEvents(s.events)).toEqual([]);
+  });
+
+  it("a poll that appends a new GitHub issue emits an invalidate and the next GET shows it", async () => {
+    const s = setup();
+    await settled(s);
+    s.gh.seed({ title: "Filed elsewhere" });
+    s.service.poll();
+    await idle();
+    expect(kanbanEvents(s.events)).toHaveLength(1);
+    s.gh.jsonCalls.length = 0;
+    const b = await s.board();
+    expect(Object.values(b.columns).flat().map((t) => t.title)).toContain("Filed elsewhere");
+    expect(s.gh.jsonCalls).toEqual([]);
+  });
+
+  it("a poll that newly fails emits an invalidate and the board reports the error", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const s = setup();
+    await settled(s);
+    s.gh.failNextJson = true;
+    s.service.poll();
+    await idle();
+    expect(kanbanEvents(s.events)).toHaveLength(1);
+    expect((await s.board()).syncError).toBeTruthy();
+    spy.mockRestore();
+  });
+
+  it("GET /kanban after a sync makes no gh call", async () => {
+    const s = setup();
+    await s.service.sync();
+    s.gh.jsonCalls.length = 0;
+    await s.board();
+    await s.board();
+    expect(s.gh.jsonCalls).toEqual([]);
+  });
+
+  it("the board reflects the sync's own writes (closed issue lands in Done) without another gh read per GET", async () => {
+    const s = setup({ file: "## A\n\n- [x] done one\n- [ ] todo one\n" });
+    await s.service.sync();
+    s.gh.jsonCalls.length = 0;
+    const b = await s.board();
+    expect(b.columns.done.map((t) => t.title)).toEqual(["done one"]);
+    expect(b.columns.todo.map((t) => t.title)).toEqual(["todo one"]);
+    expect(s.gh.jsonCalls).toEqual([]);
+  });
+
+  it("the first board read before any sync lists without issue bodies", async () => {
+    const s = setup();
+    s.gh.seed({ title: "x", labels: ["task", "status:todo"], body: "huge" });
+    await s.board();
+    expect(s.gh.jsonCalls).toHaveLength(1);
+    expect(s.gh.jsonCalls[0].join(" ")).not.toContain("body");
+  });
+
+  it("setStatus does not list issues a third time", async () => {
+    const s = setup();
+    await s.service.sync();
+    s.gh.jsonCalls.length = 0;
+    await s.service.setStatus(1, "blocked");
+    expect(s.gh.jsonCalls.length).toBeLessThanOrEqual(2); // the sync that follows, plus its cache refresh
+    expect((await s.board()).columns.blocked.map((t) => t.number)).toEqual([1]);
+  });
+});
+
 describe("one sync at a time", () => {
   it("never runs two gh operations at once across mutations, syncs and polls", async () => {
     const { gh, req, service } = setup();
@@ -326,7 +423,7 @@ describe("file watcher trigger", () => {
     h.file = h.file + "\n- [ ] user line\n";
     service.fileChanged();
     await vi.advanceTimersByTimeAsync(5000);
-    expect(gh.jsonCalls.length).toBe(lists + 1);
+    expect(gh.jsonCalls.length).toBe(lists + 2); // the sync's list, plus the board-cache refresh after its create
     service.dispose();
   });
 

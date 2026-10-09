@@ -56,15 +56,45 @@ export function tokensMatch(expected: string, given: string | undefined | null):
   return crypto.timingSafeEqual(a, b);
 }
 
-export function requestHasValidToken(c: Parameters<MiddlewareHandler>[0], token: string): boolean {
+function hasValidBearer(c: Parameters<MiddlewareHandler>[0], token: string): boolean {
   const auth = c.req.header("Authorization");
-  if (auth?.startsWith("Bearer ") && tokensMatch(token, auth.slice("Bearer ".length))) return true;
-  return tokensMatch(token, getCookie(c, TOKEN_COOKIE));
+  return !!auth?.startsWith("Bearer ") && tokensMatch(token, auth.slice("Bearer ".length));
+}
+
+export function requestHasValidToken(c: Parameters<MiddlewareHandler>[0], token: string): boolean {
+  return hasValidBearer(c, token) || tokensMatch(token, getCookie(c, TOKEN_COOKIE));
+}
+
+const SAFE_METHODS = new Set(["GET", "HEAD"]);
+const JSON_MEDIA_TYPE = "application/json";
+const SAME_ORIGIN_FETCH_SITES = new Set(["same-origin", "none"]);
+
+/**
+ * Cookies are not scoped by port and SameSite treats every 127.0.0.1 port as same-site, so another
+ * local service could forge state-changing requests. Mutations must therefore be JSON (which a
+ * cross-origin page cannot send without a preflight we never grant) and, when the browser says where
+ * they came from, come from this very origin. A Bearer token cannot be attached by a foreign page.
+ */
+function csrfRejection(c: Parameters<MiddlewareHandler>[0], viaBearer: boolean): Response | null {
+  if (SAFE_METHODS.has(c.req.method)) return null;
+  const origin = c.req.header("Origin");
+  if (!viaBearer && origin !== undefined && origin !== new URL(c.req.url).origin) {
+    return c.json({ error: "cross-origin request refused" }, 403);
+  }
+  const site = c.req.header("Sec-Fetch-Site");
+  if (site !== undefined && !SAME_ORIGIN_FETCH_SITES.has(site)) {
+    return c.json({ error: "cross-site request refused" }, 403);
+  }
+  const mediaType = (c.req.header("Content-Type") ?? "").split(";")[0].trim().toLowerCase();
+  if (mediaType !== JSON_MEDIA_TYPE) return c.json({ error: "Content-Type must be application/json" }, 415);
+  return null;
 }
 
 export function authMiddleware(token: string): MiddlewareHandler {
   return async (c, next) => {
     if (!requestHasValidToken(c, token)) return c.json({ error: "unauthorized" }, 401);
+    const rejected = csrfRejection(c, hasValidBearer(c, token));
+    if (rejected) return rejected;
     await next();
   };
 }
