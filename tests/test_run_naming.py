@@ -82,6 +82,70 @@ class TestValidateRunNamePrefix:
                 SSL_FINETUNE_EXAMPLE,
             )
 
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            "resnet18-asymmetric",  # no version
+            "resnet18-asymmetric-fold1-seed42-v2",  # version in suffix position
+            "ResNet18-asymmetric-v2",  # uppercase inside the backbone
+            "resnet18-asymmetric-v",  # bare -v
+            "resnet18-asymmetric-v2-fold1",  # trailing junk
+            "res-net18-asymmetric-v2",  # dash in backbone
+        ],
+    )
+    def test_asymmetric_rejects_malformed(self, bad):
+        with pytest.raises(SystemExit):
+            validate_run_name_prefix(
+                bad,
+                ASYMMETRIC_PREFIX_RE,
+                ASYMMETRIC_CONVENTION,
+                ASYMMETRIC_EXAMPLE,
+            )
+
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            "vits16-mae-fold1-seed42-v2",  # version in suffix position
+            "vits16-mae-v",  # bare -v
+            "vits16-mae-v2-fold1-seed42",  # trailing junk
+            "vit-small-mae-v2",  # dash in backbone
+        ],
+    )
+    def test_finetune_rejects_more_malformed(self, bad):
+        with pytest.raises(SystemExit):
+            validate_run_name_prefix(
+                bad,
+                SSL_FINETUNE_PREFIX_RE,
+                SSL_FINETUNE_CONVENTION,
+                SSL_FINETUNE_EXAMPLE,
+            )
+
+    def test_pretrain_rejects_uppercase_in_backbone(self):
+        with pytest.raises(SystemExit):
+            validate_run_name_prefix(
+                "mae-ViTS16-v2",
+                SSL_PRETRAIN_PREFIX_RE,
+                SSL_PRETRAIN_CONVENTION,
+                SSL_PRETRAIN_EXAMPLE,
+            )
+
+    @pytest.mark.parametrize("kind", sorted(PATTERNS))
+    def test_rejects_trailing_newline(self, kind):
+        pattern, convention, example = PATTERNS[kind]
+        with pytest.raises(SystemExit):
+            validate_run_name_prefix(example + "\n", pattern, convention, example)
+
+    @pytest.mark.parametrize("kind", sorted(PATTERNS))
+    def test_rejects_non_ascii_digit(self, kind):
+        pattern, convention, example = PATTERNS[kind]
+        with pytest.raises(SystemExit):
+            validate_run_name_prefix(example[:-1] + "٢", pattern, convention, example)
+
+    def test_expand_rejects_trailing_newline_and_unicode_digit(self):
+        for bad in ("vits16-mae-v2\n", "vits16-mae-v٢"):
+            with pytest.raises(ValueError):
+                expand_finetune_prefix(bad, linear_probe=False)
+
     def test_error_message_names_convention_and_example(self):
         with pytest.raises(SystemExit) as exc:
             validate_run_name_prefix(
@@ -183,8 +247,104 @@ class TestCheckCheckpointCollisions:
         assert not list(run_dir.glob("epoch*.pt"))
         assert (run_dir / "keep.txt").exists()
 
+    def test_collision_in_later_fold_is_found(self, tmp_path):
+        _make_run_dir(tmp_path, "run-fold1-seed42", ["README"])
+        _make_run_dir(tmp_path, "run-fold2-seed42", ["last.pt"])
+        with pytest.raises(SystemExit) as exc:
+            check_checkpoint_collisions(
+                {1: "run-fold1-seed42", 2: "run-fold2-seed42"},
+                "last.pt",
+                False,
+                False,
+                checkpoint_root=tmp_path,
+            )
+        assert "fold 2" in str(exc.value)
+
+    def test_exit_message_includes_checkpoint_path(self, tmp_path):
+        _make_run_dir(tmp_path, "run-fold1-seed42", ["last.pt"])
+        with pytest.raises(SystemExit) as exc:
+            check_checkpoint_collisions(
+                {1: "run-fold1-seed42"},
+                "last.pt",
+                False,
+                False,
+                checkpoint_root=tmp_path,
+            )
+        assert str(tmp_path / "run-fold1-seed42" / "last.pt") in str(exc.value)
+
+    def test_both_flags_raise_and_delete_nothing(self, tmp_path):
+        run_dir = _make_run_dir(tmp_path, "run-fold1-seed42", ["last.pt", "epoch20.pt"])
+        with pytest.raises(ValueError):
+            check_checkpoint_collisions(
+                {1: "run-fold1-seed42"},
+                "last.pt",
+                True,
+                True,
+                extra_delete=("epoch*.pt",),
+                checkpoint_root=tmp_path,
+            )
+        assert (run_dir / "last.pt").exists()
+        assert (run_dir / "epoch20.pt").exists()
+
+    def test_override_skips_directories_matching_extra_glob(self, tmp_path):
+        run_dir = _make_run_dir(
+            tmp_path, "run-fold1-seed42", ["last.pt", "epoch20.pt", "epoch40.pt"]
+        )
+        backup = run_dir / "epoch_backup.pt"
+        backup.mkdir()
+        (backup / "inner.txt").write_bytes(b"x")
+        check_checkpoint_collisions(
+            {1: "run-fold1-seed42"},
+            "last.pt",
+            False,
+            True,
+            extra_delete=("epoch*.pt",),
+            checkpoint_root=tmp_path,
+        )
+        assert not (run_dir / "last.pt").exists()
+        assert not (run_dir / "epoch20.pt").exists()
+        assert not (run_dir / "epoch40.pt").exists()
+        assert backup.is_dir()
+        assert (backup / "inner.txt").exists()
+
+    def test_override_deletes_extras_before_checkpoint(self, tmp_path, monkeypatch):
+        run_dir = _make_run_dir(tmp_path, "run-fold1-seed42", ["last.pt", "epoch20.pt"])
+        real_unlink = Path.unlink
+
+        def failing_unlink(self, *args, **kwargs):
+            if self.name == "epoch20.pt":
+                raise OSError("boom")
+            return real_unlink(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "unlink", failing_unlink)
+        with pytest.raises(OSError):
+            check_checkpoint_collisions(
+                {1: "run-fold1-seed42"},
+                "last.pt",
+                False,
+                True,
+                extra_delete=("epoch*.pt",),
+                checkpoint_root=tmp_path,
+            )
+        # the primary checkpoint must survive so a rerun still sees the collision
+        assert (run_dir / "last.pt").exists()
+
+    def test_override_without_primary_checkpoint_deletes_nothing(self, tmp_path):
+        run_dir = _make_run_dir(tmp_path, "run-fold1-seed42", ["epoch20.pt"])
+        check_checkpoint_collisions(
+            {1: "run-fold1-seed42"},
+            "last.pt",
+            False,
+            True,
+            extra_delete=("epoch*.pt",),
+            checkpoint_root=tmp_path,
+        )
+        assert (run_dir / "epoch20.pt").exists()
+
     def test_only_colliding_fold_is_touched(self, tmp_path):
-        keep = _make_run_dir(tmp_path, "other-fold2-seed42", ["best.pt"])
+        keep = _make_run_dir(
+            tmp_path, "other-fold2-seed42", ["best.pt", "results.json"]
+        )
         _make_run_dir(tmp_path, "run-fold1-seed42", ["best.pt", "results.json"])
         check_checkpoint_collisions(
             {1: "run-fold1-seed42"},
@@ -195,6 +355,7 @@ class TestCheckCheckpointCollisions:
             checkpoint_root=tmp_path,
         )
         assert (keep / "best.pt").exists()
+        assert (keep / "results.json").exists()
         assert not (tmp_path / "run-fold1-seed42" / "best.pt").exists()
         assert not (tmp_path / "run-fold1-seed42" / "results.json").exists()
 

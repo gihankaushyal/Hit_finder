@@ -25,15 +25,17 @@ from pathlib import Path
 
 CHECKPOINT_ROOT = Path("checkpoints")
 
-ASYMMETRIC_PREFIX_RE = re.compile(r"^[a-z0-9]+-asymmetric-v\d+$")
+ASYMMETRIC_PREFIX_RE = re.compile(r"^[a-z0-9]+-asymmetric-v[0-9]+$")
 ASYMMETRIC_CONVENTION = "<backbone>-asymmetric-v<N>"
 ASYMMETRIC_EXAMPLE = "resnet18-asymmetric-v2"
 
-SSL_PRETRAIN_PREFIX_RE = re.compile(r"^mae-[a-z0-9]+-v\d+$")
+SSL_PRETRAIN_PREFIX_RE = re.compile(r"^mae-[a-z0-9]+-v[0-9]+$")
 SSL_PRETRAIN_CONVENTION = "mae-<backbone>-v<N>"
 SSL_PRETRAIN_EXAMPLE = "mae-vits16-v2"
 
-SSL_FINETUNE_PREFIX_RE = re.compile(r"^(?P<backbone>[a-z0-9]+)-mae-v(?P<version>\d+)$")
+SSL_FINETUNE_PREFIX_RE = re.compile(
+    r"^(?P<backbone>[a-z0-9]+)-mae-v(?P<version>[0-9]+)$"
+)
 SSL_FINETUNE_CONVENTION = "<backbone>-mae-v<N>"
 SSL_FINETUNE_EXAMPLE = "vits16-mae-v2"
 
@@ -45,7 +47,7 @@ def validate_run_name_prefix(
     prefix: str, pattern: re.Pattern[str], convention: str, example: str
 ) -> None:
     """Exit with the naming convention if `prefix` does not match `pattern`."""
-    if not pattern.match(prefix):
+    if not pattern.fullmatch(prefix):
         raise SystemExit(
             f"Invalid --run-name-prefix: {prefix!r}\n\n"
             "Run names must follow the convention:\n\n"
@@ -65,7 +67,7 @@ def fold_run_name(prefix: str, fold_id: int, seed: int, run_suffix: str = "") ->
 
 def expand_finetune_prefix(prefix: str, linear_probe: bool) -> str:
     """Insert the mode before the version: vits16-mae-v2 -> vits16-mae-finetune-v2."""
-    m = SSL_FINETUNE_PREFIX_RE.match(prefix)
+    m = SSL_FINETUNE_PREFIX_RE.fullmatch(prefix)
     if m is None:
         raise ValueError(
             f"{prefix!r} does not match the fine-tune convention "
@@ -89,18 +91,25 @@ def check_checkpoint_collisions(
     `<checkpoint_root>/<run_name>/<checkpoint_name>` exists: with
     `override_training` the checkpoint and every match of the `extra_delete`
     glob patterns in that run directory are deleted; with `resume_training`
-    nothing is touched; with neither the process exits.
+    nothing is touched; with neither the process exits. Extras are only removed
+    when the primary checkpoint exists. Passing both `resume_training` and
+    `override_training` is an error (ValueError).
     """
+    if resume_training and override_training:
+        raise ValueError("resume_training and override_training are mutually exclusive")
     for fold_id, run_name in run_names.items():
         run_dir = Path(checkpoint_root) / run_name
         ckpt_path = run_dir / checkpoint_name
         if not ckpt_path.exists():
             continue
         if override_training:
-            ckpt_path.unlink()
+            # Extras first, primary checkpoint last: if an extra fails to delete,
+            # the checkpoint survives so a rerun still sees the collision.
             for pattern in extra_delete:
                 for stale in run_dir.glob(pattern):
-                    stale.unlink()
+                    if stale.is_file() or stale.is_symlink():
+                        stale.unlink()
+            ckpt_path.unlink()
         elif not resume_training:
             raise SystemExit(
                 f"Checkpoint already exists for fold {fold_id}: {ckpt_path}\n\n"
