@@ -6,7 +6,7 @@ import { ExternalLink, SectionState, StaleNotice } from "../components/bits";
 import { ApiError, apiSend } from "../lib/api";
 import { subscribe } from "../lib/events";
 import { duration, relTime } from "../lib/time";
-import { useResource } from "../lib/useResource";
+import { CI_REFRESH_MS, useResource } from "../lib/useResource";
 import type { CiRun, TestRunState } from "../../../shared/types";
 
 const EARLIER_CI_RUNS = 5;
@@ -31,7 +31,7 @@ function localWord(t: TestRunState): { kind: StatusKind; text: string } {
 }
 
 function GithubActions() {
-  const ci = useResource<{ runs: CiRun[] }>("ci", "/api/ci", (d) => d.runs.length === 0);
+  const ci = useResource<{ runs: CiRun[] }>("ci", "/api/ci", (d) => d.runs.length === 0, CI_REFRESH_MS);
   const runs = ci.data?.runs ?? [];
   const [first, ...rest] = runs;
   return (

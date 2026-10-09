@@ -4,7 +4,7 @@ import { PanelFrame } from "../components/PanelFrame";
 import { StatusWord } from "../components/StatusWord";
 import { ExternalLink, StaleNotice, absoluteTime, panelState } from "../components/bits";
 import { relTime } from "../lib/time";
-import { useResource } from "../lib/useResource";
+import { PRS_REFRESH_MS, useResource } from "../lib/useResource";
 import type { PrChecks, PrDetail, PrSummary, PrsResponse } from "../../../shared/types";
 
 /** Longer file lists are cut to this many rows until the user asks for all of them. */
@@ -68,7 +68,7 @@ function Files({ files }: { files: PrDetail["files"] }) {
 }
 
 export function LatestPr() {
-  const prs = useResource<PrsResponse>("prs", "/api/prs", isEmpty);
+  const prs = useResource<PrsResponse>("prs", "/api/prs", isEmpty, PRS_REFRESH_MS);
   const state = panelState(prs);
   const data = prs.data;
   const latest = data?.latest ?? null;

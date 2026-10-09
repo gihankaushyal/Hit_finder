@@ -1,7 +1,7 @@
 import { GitBranch } from "@phosphor-icons/react";
 import { StatusWord, type StatusKind } from "../components/StatusWord";
 import { ThemeToggle } from "../components/ThemeToggle";
-import { useResource } from "../lib/useResource";
+import { CI_REFRESH_MS, REPO_REFRESH_MS, useResource } from "../lib/useResource";
 import type { CiRun, TestRunState } from "../../../shared/types";
 
 const REPO_NAME = "Hit_finder";
@@ -29,8 +29,8 @@ function testWord(t: TestRunState | null): { kind: StatusKind; text: string } {
 }
 
 export function TopBar() {
-  const repo = useResource<RepoInfo>("repo", "/api/repo");
-  const ci = useResource<{ runs: CiRun[] }>("ci", "/api/ci");
+  const repo = useResource<RepoInfo>("repo", "/api/repo", undefined, REPO_REFRESH_MS);
+  const ci = useResource<{ runs: CiRun[] }>("ci", "/api/ci", (d) => d.runs.length === 0, CI_REFRESH_MS);
   const tests = useResource<TestRunState>("tests", "/api/tests");
   const ciState = ci.error ? { kind: "attention" as const, text: "Unknown" } : ciWord(ci.data?.runs);
   const testState = tests.error ? { kind: "attention" as const, text: "Unknown" } : testWord(tests.data);
