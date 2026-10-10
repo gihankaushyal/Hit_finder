@@ -321,9 +321,22 @@ read the file through `resolve_wandb_id`. Several W&B runs can share one display
 tools should filter on the `overridden` tag (`scripts/plot_hit_frac.py` does) or read the
 file; never group by name alone.
 
-Known limits: the id is rotated before the checkpoint is deleted, so if the delete then fails
-the directory keeps its old checkpoint under the new id (rerun `--override-training` or fix the
-permission first). In offline mode the old run cannot be tagged, so tag it by hand after
-`wandb sync`. Removing `checkpoints/<run_name>/` by hand also removes `wandb_id.txt`; the next
-start then logs to the original run id. Track 1 applies `--override-training` to every requested
-fold up front (as before this change), unlike the SSL entry points, which defer it.
+Behaviour worth knowing:
+
+- **Failed delete rolls back.** The hook returns a rollback callable. If deleting the
+  checkpoint or its extras raises, `check_checkpoint_collisions` restores `wandb_id.txt`
+  (or removes it if it did not exist), best-effort removes the `overridden` tag from the old
+  run, and re-raises. The checkpoint is deleted last, so it survives for a rerun.
+- **Plots pick the highest attempt per name, tag or not.** `select_current_runs` drops
+  `overridden`-tagged runs, then keeps only the highest attempt (`<name>` = 1,
+  `<name>-oN` = N) among runs sharing a display name. Offline mode, where the old run cannot be
+  tagged, is therefore covered; `scripts/plot_hit_frac.py` uses it.
+- **A fresh start never reuses an existing W&B run id.** Before the training `wandb.init`,
+  `wandb_id_for_training` (Track 1 `_train_fold`, SSL pretrain) asks W&B whether the current id
+  exists; if so it tags that run `overridden` and rotates past it (e.g. after `rm -rf` of the
+  checkpoint dir, or a crash before `best.pt`). Genuine resumes and inference keep the current
+  id. If W&B cannot be queried, the current id is kept with a warning.
+- **Track 1 override is per fold.** `train_asymmetric` runs the gate once up front with
+  `dry_run=True` (fail fast, nothing deleted or rotated) and the real gate for each fold just
+  before that fold starts, so a crash on fold 1 leaves fold 2's checkpoint and id untouched.
+  `_train_fold` resolves the id after that real pass; keep that order.
