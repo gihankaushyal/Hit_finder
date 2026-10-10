@@ -38,6 +38,8 @@
 #   RESUME_FLAG   --resume-training (default), --override-training or
 #                 --inference-only (evaluate the existing best.pt without
 #                 training), resolved by the orchestrator's interactive prompt.
+#                 A requeued job (SLURM_RESTART_COUNT > 0) always resumes, even if
+#                 --override-training was requested, so it never deletes its own progress.
 #
 # See also:
 #   scripts/submit_asymmetric_lodo_all.sh   multi-fold submission with per-fold NVMe staging
@@ -70,6 +72,14 @@ fi
 FOLD="${1:?fold id required (1-4)}"
 RUN_NAME_PREFIX="${2:?run_name_prefix required, e.g. resnet18-asymmetric-v2}"
 RESUME_FLAG="${RESUME_FLAG:---resume-training}"
+
+# A requeued job (SLURM_RESTART_COUNT > 0) re-runs with the same environment, so a
+# job started with --override-training would delete the checkpoint it wrote before
+# the node failure. Resume instead; the override already happened on the first start.
+if [[ "${SLURM_RESTART_COUNT:-0}" -gt 0 && "${RESUME_FLAG}" == "--override-training" ]]; then
+    echo "Requeued job (restart ${SLURM_RESTART_COUNT}): using --resume-training instead of --override-training." >&2
+    RESUME_FLAG="--resume-training"
+fi
 
 module load mamba/latest
 source activate sfx-hitfinder
