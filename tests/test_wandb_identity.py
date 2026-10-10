@@ -130,6 +130,24 @@ class TestOverrideHook:
         hook(RUN, tmp_path)  # run missing in the fake API: tagging fails quietly
         assert wi.resolve_wandb_id(tmp_path, RUN) == f"{RUN}-o2"
 
+    def test_rollback_restores_missing_file_and_untags(self, tmp_path, fake_wandb):
+        FakeApi.runs[f"proj/{RUN}"] = FakeRun([])
+        hook = wi.OverrideHook("proj", None)
+        rollback = hook(RUN, tmp_path)
+        assert FakeApi.runs[f"proj/{RUN}"].tags == [wi.OVERRIDDEN_TAG]
+        rollback()
+        assert not (tmp_path / wi.WANDB_ID_FILE).exists()
+        assert FakeApi.runs[f"proj/{RUN}"].tags == []
+
+    def test_rollback_restores_previous_content(self, tmp_path, fake_wandb):
+        (tmp_path / wi.WANDB_ID_FILE).write_text(f"{RUN}-o2\n")
+        FakeApi.runs[f"proj/{RUN}-o2"] = FakeRun(["x"])
+        rollback = wi.OverrideHook("proj", None)(RUN, tmp_path)
+        assert wi.resolve_wandb_id(tmp_path, RUN) == f"{RUN}-o3"
+        rollback()
+        assert wi.resolve_wandb_id(tmp_path, RUN) == f"{RUN}-o2"
+        assert FakeApi.runs[f"proj/{RUN}-o2"].tags == ["x"]
+
     def test_from_cfg(self):
         hook = wi.override_hook_from_cfg({"wandb": {"project": "p", "entity": "e"}})
         assert (hook.project, hook.entity) == ("p", "e")

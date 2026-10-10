@@ -562,3 +562,55 @@ class TestOnOverride:
             on_override=lambda *a: calls.append(a),
         )
         assert calls == []
+
+
+class TestOverrideRollback:
+    def test_failed_delete_calls_rollback_and_keeps_checkpoint(
+        self, tmp_path, monkeypatch
+    ):
+        run_dir = _make_run_dir(tmp_path, "run-fold1-seed42", ["last.pt", "epoch20.pt"])
+        rolled = []
+        real_unlink = Path.unlink
+
+        def flaky_unlink(self, *a, **k):
+            if self.name == "epoch20.pt":
+                raise OSError("read-only")
+            return real_unlink(self, *a, **k)
+
+        monkeypatch.setattr(Path, "unlink", flaky_unlink)
+        with pytest.raises(OSError):
+            check_checkpoint_collisions(
+                {1: "run-fold1-seed42"},
+                "last.pt",
+                False,
+                True,
+                extra_delete=("epoch*.pt",),
+                checkpoint_root=tmp_path,
+                on_override=lambda n, d: (lambda: rolled.append(n)),
+            )
+        assert rolled == ["run-fold1-seed42"]
+        assert (run_dir / "last.pt").exists()
+
+    def test_success_does_not_roll_back(self, tmp_path):
+        _make_run_dir(tmp_path, "run-fold1-seed42", ["last.pt"])
+        rolled = []
+        check_checkpoint_collisions(
+            {1: "run-fold1-seed42"},
+            "last.pt",
+            False,
+            True,
+            checkpoint_root=tmp_path,
+            on_override=lambda n, d: (lambda: rolled.append(n)),
+        )
+        assert rolled == []
+
+    def test_hook_returning_none_is_fine(self, tmp_path):
+        _make_run_dir(tmp_path, "run-fold1-seed42", ["last.pt"])
+        check_checkpoint_collisions(
+            {1: "run-fold1-seed42"},
+            "last.pt",
+            False,
+            True,
+            checkpoint_root=tmp_path,
+            on_override=lambda n, d: None,
+        )

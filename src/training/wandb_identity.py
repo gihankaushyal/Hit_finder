@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import os
 import re
+from collections.abc import Callable
 from pathlib import Path
 
 from src.training.inference_results import WANDB_API_TIMEOUT_S, wandb_enabled
@@ -55,25 +56,41 @@ def rotate_wandb_id(run_dir: str | Path, run_name: str) -> tuple[str, str]:
     return old, new
 
 
-def tag_overridden(project: str | None, entity: str | None, run_id: str) -> bool:
-    """Add the ``overridden`` tag to a W&B run. Never raises: a failure only warns."""
+def _set_overridden_tag(
+    project: str | None, entity: str | None, run_id: str, present: bool
+) -> bool:
+    """Add (`present`) or remove the ``overridden`` tag. Never raises: a failure only warns."""
     if project is None or not wandb_enabled():
         return False
     try:
         import wandb
 
-        path = f"{entity}/{project}/{run_id}" if entity else f"{project}/{run_id}"
-        run = wandb.Api(timeout=WANDB_API_TIMEOUT_S).run(path)
+        run = wandb.Api(timeout=WANDB_API_TIMEOUT_S).run(
+            _run_path(project, entity, run_id)
+        )
         tags = list(run.tags)
-        if OVERRIDDEN_TAG not in tags:
+        if present and OVERRIDDEN_TAG not in tags:
             run.tags = tags + [OVERRIDDEN_TAG]
+            run.update()
+        elif not present and OVERRIDDEN_TAG in tags:
+            run.tags = [t for t in tags if t != OVERRIDDEN_TAG]
             run.update()
         return True
     except Exception as exc:
+        verb = "tag" if present else "untag"
         print(
-            f"  [wandb] could not tag {run_id!r} as overridden ({exc!r}); continuing."
+            f"  [wandb] could not {verb} {run_id!r} as overridden ({exc!r}); continuing."
         )
         return False
+
+
+def _run_path(project: str, entity: str | None, run_id: str) -> str:
+    return f"{entity}/{project}/{run_id}" if entity else f"{project}/{run_id}"
+
+
+def tag_overridden(project: str | None, entity: str | None, run_id: str) -> bool:
+    """Add the ``overridden`` tag to a W&B run. Never raises: a failure only warns."""
+    return _set_overridden_tag(project, entity, run_id, True)
 
 
 class OverrideHook:
@@ -84,11 +101,26 @@ class OverrideHook:
         self.entity = entity
         self.rotations: list[tuple[str, str, str]] = []
 
-    def __call__(self, run_name: str, run_dir: Path) -> None:
+    def __call__(self, run_name: str, run_dir: Path) -> Callable[[], None]:
+        """Rotate the id and tag the old run; return a callable undoing both."""
+        id_file = Path(run_dir) / WANDB_ID_FILE
+        previous = id_file.read_text() if id_file.is_file() else None
         old, new = rotate_wandb_id(run_dir, run_name)
         self.rotations.append((run_name, old, new))
         print(f"  [wandb] override: logging to new run {new!r}; {old!r} is kept.")
         tag_overridden(self.project, self.entity, old)
+
+        def rollback() -> None:
+            if previous is None:
+                id_file.unlink(missing_ok=True)
+            else:
+                id_file.write_text(previous)
+            if self.rotations and self.rotations[-1] == (run_name, old, new):
+                self.rotations.pop()
+            _set_overridden_tag(self.project, self.entity, old, False)
+            print(f"  [wandb] override rolled back: {old!r} is the live run again.")
+
+        return rollback
 
 
 def override_hook_from_cfg(cfg: dict) -> OverrideHook:
