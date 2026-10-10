@@ -112,6 +112,13 @@ def _run_path(project: str, entity: str | None, run_id: str) -> str:
 
 
 MAX_FRESH_ID_ATTEMPTS = 20
+# wandb 0.27.0 says "Could not find run <Run ...>"; older/other paths say "not found".
+_MISSING_RUN_MARKERS = ("not found", "could not find")
+
+
+def _is_missing_run(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return any(marker in text for marker in _MISSING_RUN_MARKERS)
 
 
 def ensure_fresh_wandb_id(
@@ -135,7 +142,7 @@ def ensure_fresh_wandb_id(
                 _run_path(project, entity, run_id)
             )
         except Exception as exc:
-            if "not found" in str(exc).lower():
+            if _is_missing_run(exc):
                 return run_id
             print(
                 f"  [wandb] could not check whether run {run_id!r} exists ({exc!r}); "

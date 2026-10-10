@@ -244,3 +244,36 @@ class TestWandbIdForTraining:
         FakeApi.runs[f"proj/{RUN}"] = FakeRun([])
         got = wi.wandb_id_for_training(tmp_path, RUN, "proj", None, resuming=False)
         assert got == f"{RUN}-o2"
+
+
+class TestMissingRunMessage:
+    """wandb 0.27.0 words a missing run as 'Could not find run ...' (seen live)."""
+
+    def test_real_wandb_wording_counts_as_missing(self, tmp_path, monkeypatch):
+        class RealWordingApi:
+            def __init__(self, **kwargs):
+                pass
+
+            def run(self, path):
+                raise ValueError(f"Could not find run <Run {path} (None)>")
+
+        monkeypatch.setitem(
+            sys.modules, "wandb", types.SimpleNamespace(Api=RealWordingApi)
+        )
+        monkeypatch.setattr(wi, "wandb_enabled", lambda: True)
+        assert wi.ensure_fresh_wandb_id(tmp_path, RUN, "proj", None) == RUN
+        assert not (tmp_path / wi.WANDB_ID_FILE).exists()
+
+
+def test_real_wording_prints_no_warning(tmp_path, monkeypatch, capsys):
+    class RealWordingApi:
+        def __init__(self, **kwargs):
+            pass
+
+        def run(self, path):
+            raise ValueError("Could not find run <Run x (None)>")
+
+    monkeypatch.setitem(sys.modules, "wandb", types.SimpleNamespace(Api=RealWordingApi))
+    monkeypatch.setattr(wi, "wandb_enabled", lambda: True)
+    wi.ensure_fresh_wandb_id(tmp_path, RUN, "proj", None)
+    assert "could not check" not in capsys.readouterr().out
