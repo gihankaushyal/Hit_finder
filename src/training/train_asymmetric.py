@@ -23,7 +23,8 @@ Run naming convention (--run-name-prefix, REQUIRED, no default):
     pipeline generations can never collide under the same name. If a
     checkpoint already exists under the resolved name, the script exits and
     asks you to pass --resume-training (continue), --override-training
-    (discard and restart) or --inference-only (evaluate best.pt without training).
+    (discard and restart; the old W&B run is kept and tagged 'overridden', and the
+    restart logs to <run_name>-o<N>) or --inference-only (evaluate best.pt without training).
 
 Usage:
     python -m src.training.train_asymmetric --config configs/supervised/resnet18_asymmetric.yaml --run-name-prefix resnet18-asymmetric-v2
@@ -58,6 +59,7 @@ from src.training.run_naming import (
     validate_run_name_prefix,
 )
 from src.training.inference_results import INFERENCE_RESULTS_NAME, RESULTS_NAME
+from src.training.wandb_identity import override_hook_from_cfg
 from src.utils.config import load_config
 
 
@@ -80,6 +82,7 @@ def _check_checkpoint_collisions(
         override_training,
         extra_delete=(RESULTS_NAME, INFERENCE_RESULTS_NAME),
         inference_only=inference_only,
+        on_override=override_hook_from_cfg(cfg),
     )
 
 
@@ -309,7 +312,8 @@ if __name__ == "__main__":
         help=(
             "When a checkpoint exists for the resolved run name, discard it "
             "(best.pt, results.json and results.inference.json) and start that fold from scratch under the "
-            "same run name. Mutually exclusive with --resume-training and --inference-only."
+            "same run name. The old W&B run is kept and tagged 'overridden'; the restart logs to '<run_name>-o<N>'. "
+            "Mutually exclusive with --resume-training and --inference-only."
         ),
     )
     resume_group.add_argument(

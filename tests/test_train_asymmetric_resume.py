@@ -136,3 +136,23 @@ def test_resume_epoch_overflow_skips_loop(tmp_path: Path, capsys):
     captured = capsys.readouterr()
     assert "Warning" in captured.out
     assert "Nothing left to train" in captured.out
+
+
+def test_track1_override_rotates_wandb_id(tmp_path: Path, monkeypatch):
+    from src.training.train_asymmetric import _check_checkpoint_collisions
+
+    monkeypatch.chdir(tmp_path)
+    tagged = []
+    monkeypatch.setattr(
+        "src.training.wandb_identity.tag_overridden",
+        lambda project, entity, run_id: tagged.append(run_id) or True,
+    )
+    cfg = {"seed": 42, "wandb": {"project": "p"}}
+    name = "resnet18-asymmetric-v2-fold1-seed42"
+    run_dir = tmp_path / "checkpoints" / name
+    run_dir.mkdir(parents=True)
+    (run_dir / "best.pt").write_bytes(b"x")
+    _check_checkpoint_collisions([1], cfg, "resnet18-asymmetric-v2", False, True)
+    assert (run_dir / "wandb_id.txt").read_text().strip() == f"{name}-o2"
+    assert tagged == [name]
+    assert not (run_dir / "best.pt").exists()

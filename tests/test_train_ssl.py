@@ -379,3 +379,74 @@ class TestOverrideIsDeferred:
         with pytest.raises(SystemExit) as exc:
             read_pretrain_epoch(path)
         assert str(path) in str(exc.value)
+
+
+class TestOverrideRotatesWandbId:
+    @staticmethod
+    def _patch_tag(monkeypatch):
+        tagged = []
+        monkeypatch.setattr(
+            "src.training.wandb_identity.tag_overridden",
+            lambda project, entity, run_id: tagged.append(run_id) or True,
+        )
+        return tagged
+
+    def test_pretrain_override_rotates_wandb_id(self, tmp_path, monkeypatch):
+        from src.training.train_ssl_pretrain import prepare_pretrain_run
+
+        tagged = self._patch_tag(monkeypatch)
+        cfg = _tiny_cfg(tmp_path / "ckpt")
+        cfg["wandb"] = {"project": "p"}
+        run_dir = Path(cfg["checkpoint_dir"]) / "mae-vits16-v2-fold1-seed42"
+        run_dir.mkdir(parents=True)
+        (run_dir / "last.pt").write_bytes(b"x")
+        prepare_pretrain_run("mae-vits16-v2", 1, cfg, override_training=True)
+        assert (run_dir / "wandb_id.txt").read_text().strip() == (
+            "mae-vits16-v2-fold1-seed42-o2"
+        )
+        assert tagged == ["mae-vits16-v2-fold1-seed42"]
+
+    def test_pretrain_dry_run_writes_no_id(self, tmp_path, monkeypatch):
+        from src.training.train_ssl_pretrain import prepare_pretrain_run
+
+        tagged = self._patch_tag(monkeypatch)
+        cfg = _tiny_cfg(tmp_path / "ckpt")
+        cfg["wandb"] = {"project": "p"}
+        run_dir = Path(cfg["checkpoint_dir"]) / "mae-vits16-v2-fold1-seed42"
+        run_dir.mkdir(parents=True)
+        (run_dir / "last.pt").write_bytes(b"x")
+        prepare_pretrain_run(
+            "mae-vits16-v2", 1, cfg, override_training=True, dry_run=True
+        )
+        assert not (run_dir / "wandb_id.txt").exists()
+        assert (run_dir / "last.pt").exists()
+        assert tagged == []
+
+    def test_finetune_override_rotates_wandb_id(self, tmp_path, monkeypatch):
+        from src.training.train_ssl_finetune import prepare_finetune_run
+
+        monkeypatch.chdir(tmp_path)
+        tagged = self._patch_tag(monkeypatch)
+        cfg = {"seed": 42, "wandb": {"project": "p"}}
+        name = "vits16-mae-finetune-v2-fold1-seed42"
+        run_dir = tmp_path / "checkpoints" / name
+        run_dir.mkdir(parents=True)
+        (run_dir / "best.pt").write_bytes(b"x")
+        prepare_finetune_run("vits16-mae-v2", 1, cfg, override_training=True)
+        assert (run_dir / "wandb_id.txt").read_text().strip() == f"{name}-o2"
+        assert tagged == [name]
+
+    def test_finetune_dry_run_writes_no_id(self, tmp_path, monkeypatch):
+        from src.training.train_ssl_finetune import prepare_finetune_run
+
+        monkeypatch.chdir(tmp_path)
+        tagged = self._patch_tag(monkeypatch)
+        cfg = {"seed": 42, "wandb": {"project": "p"}}
+        run_dir = tmp_path / "checkpoints" / "vits16-mae-finetune-v2-fold1-seed42"
+        run_dir.mkdir(parents=True)
+        (run_dir / "best.pt").write_bytes(b"x")
+        prepare_finetune_run(
+            "vits16-mae-v2", 1, cfg, override_training=True, dry_run=True
+        )
+        assert not (run_dir / "wandb_id.txt").exists()
+        assert tagged == []
