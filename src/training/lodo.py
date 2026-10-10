@@ -224,18 +224,7 @@ def _train_fold(
             num_classes=cfg["model"]["num_classes"],
         ).to(device)
 
-    run = None
-    if inference_only:
-        # No config/tags: resuming a closed-out run must not rewrite its config.
-        if wandb_enabled():
-            run = wandb.init(
-                project=cfg["wandb"]["project"],
-                entity=cfg["wandb"].get("entity"),
-                id=run_name,
-                name=run_name,
-                resume="allow",
-            )
-    else:
+    if not inference_only:
         wandb.init(
             project=cfg["wandb"]["project"],
             entity=cfg["wandb"].get("entity"),
@@ -428,12 +417,31 @@ def _train_fold(
     )
 
     if inference_only:
-        if run is not None:
-            for key, value in summary_updates(
-                in_domain_m, cross_m, inference_threshold
-            ).items():
-                run.summary[key] = value
-            wandb.finish()
+        # Touch the closed-out W&B run only now that the metrics exist, so a failed
+        # evaluation cannot leave it marked crashed. No config or tags are sent, and
+        # the settings stop the resumed run from re-uploading metadata, console
+        # output, system stats or code.
+        if wandb_enabled():
+            run = wandb.init(
+                project=cfg["wandb"]["project"],
+                entity=cfg["wandb"].get("entity"),
+                id=run_name,
+                name=run_name,
+                resume="allow",
+                settings=wandb.Settings(
+                    console="off",
+                    x_disable_stats=True,
+                    x_disable_meta=True,
+                    save_code=False,
+                ),
+            )
+            try:
+                for key, value in summary_updates(
+                    in_domain_m, cross_m, inference_threshold
+                ).items():
+                    run.summary[key] = value
+            finally:
+                wandb.finish()
     else:
         wandb.log(
             {

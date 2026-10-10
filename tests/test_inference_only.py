@@ -120,6 +120,9 @@ class _FakeWandb:
         self.init_calls.append(kwargs)
         return self.run
 
+    def Settings(self, **kwargs) -> dict:  # noqa: N802 - mirrors wandb.Settings
+        return kwargs
+
     def define_metric(self, *args, **kwargs) -> None:
         pass
 
@@ -221,15 +224,23 @@ class TestTrainFoldInferenceOnly:
         assert side["inference"]["aggregation"] == "vote"
         assert side["inference"]["checkpoint_epoch"] == 7
 
-    def test_a_second_inference_overwrites_only_the_side_file(self, harness):
+    def test_a_second_inference_overwrites_only_the_side_file(
+        self, harness, monkeypatch
+    ):
         fake, ckpt_dir, make_checkpoint = harness
         make_checkpoint(results="{}")
+        state = {"ap": 0.9}
+        monkeypatch.setattr(
+            lodo, "run_patch_agg", lambda *a, **kw: {**METRICS, "ap": state["ap"]}
+        )
         lodo._train_fold(cfg=_cfg(), inference_only=True, **_fold_args())
-        first = (ckpt_dir / INFERENCE_RESULTS_NAME).read_text()
+        first = json.loads((ckpt_dir / INFERENCE_RESULTS_NAME).read_text())
+        state["ap"] = 0.5
         lodo._train_fold(cfg=_cfg(), inference_only=True, **_fold_args())
-        assert (ckpt_dir / INFERENCE_RESULTS_NAME).exists()
+        second = json.loads((ckpt_dir / INFERENCE_RESULTS_NAME).read_text())
+        assert first["cross"]["ap"] == 0.9
+        assert second["cross"]["ap"] == 0.5
         assert (ckpt_dir / RESULTS_NAME).read_text() == "{}"
-        assert json.loads(first)["cross"]["ap"] == 0.9
 
     def test_writes_summary_keys_and_logs_no_training_metrics(self, harness):
         fake, ckpt_dir, make_checkpoint = harness
@@ -240,6 +251,13 @@ class TestTrainFoldInferenceOnly:
         assert init["id"] == RUN_NAME and init["name"] == RUN_NAME
         assert init["resume"] == "allow"
         assert "config" not in init  # never rewrite the closed run's config
+        # the resumed run must not re-upload metadata, console output, stats or code
+        assert init["settings"] == {
+            "console": "off",
+            "x_disable_stats": True,
+            "x_disable_meta": True,
+            "save_code": False,
+        }
         assert fake.run.summary["inference/cross/ap"] == 0.9
         assert fake.run.summary["inference/in_domain/auc"] == 0.95
         assert fake.logged == []
@@ -253,6 +271,21 @@ class TestTrainFoldInferenceOnly:
         lodo._train_fold(cfg=_cfg(), inference_only=True, **_fold_args())
         assert fake.init_calls == []
         assert (ckpt_dir / RESULTS_NAME).exists()
+
+    def test_a_failed_evaluation_leaves_the_wandb_run_untouched(
+        self, harness, monkeypatch
+    ):
+        fake, ckpt_dir, make_checkpoint = harness
+        make_checkpoint()
+
+        def _boom(*args, **kwargs):
+            raise RuntimeError("evaluation failed")
+
+        monkeypatch.setattr(lodo, "run_patch_agg", _boom)
+        with pytest.raises(RuntimeError, match="evaluation failed"):
+            lodo._train_fold(cfg=_cfg(), inference_only=True, **_fold_args())
+        assert fake.init_calls == []  # a crashed pass must not mark the closed run
+        assert not (ckpt_dir / RESULTS_NAME).exists()
 
     def test_backbone_mismatch_is_still_rejected(self, harness):
         fake, ckpt_dir, make_checkpoint = harness
