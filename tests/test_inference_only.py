@@ -273,3 +273,61 @@ class TestTrainFoldRefusesSilentRetraining:
         make_checkpoint()
         with pytest.raises(RuntimeError, match="resume_training or inference_only"):
             lodo._train_fold(cfg=_cfg(), **_fold_args())
+
+
+def _run_module(module: str, *args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [sys.executable, "-m", module, *args],
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+
+
+class TestTrack1Cli:
+    BASE = [
+        "--config",
+        "configs/supervised/resnet18_asymmetric.yaml",
+        "--run-name-prefix",
+        "resnet18-asymmetric-v2",
+    ]
+
+    @pytest.mark.parametrize("other", ["--resume-training", "--override-training"])
+    def test_flag_is_mutually_exclusive_with_the_other_two(self, other):
+        proc = _run_module(
+            "src.training.train_asymmetric", *self.BASE, "--inference-only", other
+        )
+        assert proc.returncode == 2
+        assert "not allowed with argument" in proc.stderr
+
+    def test_help_lists_the_flag(self):
+        proc = _run_module("src.training.train_asymmetric", "--help")
+        assert "--inference-only" in proc.stdout
+
+
+class TestTrack1Wrapper:
+    def test_inference_only_passes_with_an_existing_checkpoint(
+        self, tmp_path, monkeypatch
+    ):
+        from src.training.train_asymmetric import _check_checkpoint_collisions
+
+        monkeypatch.chdir(tmp_path)
+        run_dir = tmp_path / "checkpoints" / RUN_NAME
+        run_dir.mkdir(parents=True)
+        (run_dir / "best.pt").write_bytes(b"x")
+        (run_dir / RESULTS_NAME).write_text("{}")
+        _check_checkpoint_collisions(
+            [1], _cfg(), RUN_PREFIX, False, False, inference_only=True
+        )
+        assert (run_dir / "best.pt").exists()
+        assert (run_dir / RESULTS_NAME).exists()
+
+    def test_inference_only_without_a_checkpoint_exits(self, tmp_path, monkeypatch):
+        from src.training.train_asymmetric import _check_checkpoint_collisions
+
+        monkeypatch.chdir(tmp_path)
+        with pytest.raises(SystemExit):
+            _check_checkpoint_collisions(
+                [1], _cfg(), RUN_PREFIX, False, False, inference_only=True
+            )
