@@ -228,6 +228,103 @@ class TestJobScripts:
         assert text.index("PROBE_FLAGS[${fold}]=") < text.rindex("MISSING=0")
 
 
+def _track1_run(fold: int) -> str:
+    return f"resnet18-asymmetric-v2-fold{fold}-seed42"
+
+
+def _train_jobs(stub) -> list[str]:
+    return [line for line in _log(stub) if "submit_asymmetric_lodo_fold.sh" in line]
+
+
+class TestTrack1SeedLookup:
+    ARGS = ["--run-name-prefix", "resnet18-asymmetric-v2", "--folds", "1"]
+
+    def test_nested_seed_is_ignored(self, sandbox):
+        """An indented `seed:` must not be mistaken for the top-level seed."""
+        work, env, stub = sandbox
+        cfg = work / "configs" / "supervised" / "resnet18_asymmetric.yaml"
+        cfg.write_text("model:\n  seed: 5\n" + cfg.read_text())
+        _best_pt(work, TRACK1_RUN)  # seed 42 checkpoint exists -> the prompt must fire
+        proc = _run(work, env, TRACK1_ALL, *self.ARGS, stdin="override\n")
+        assert proc.returncode == 0, proc.stderr
+        assert "RESUME_FLAG=--override-training" in _train_jobs(stub)[0]
+
+    def test_missing_seed_is_a_clear_error_and_submits_nothing(self, sandbox):
+        work, env, stub = sandbox
+        for rel in (
+            "configs/base.yaml",
+            "configs/supervised/resnet18_asymmetric.yaml",
+        ):
+            path = work / rel
+            path.write_text(
+                "\n".join(
+                    line
+                    for line in path.read_text().splitlines()
+                    if not line.startswith("seed:")
+                )
+                + "\n"
+            )
+        proc = _run(work, env, TRACK1_ALL, *self.ARGS)
+        assert proc.returncode == 1
+        assert "top-level integer 'seed:'" in proc.stderr
+        assert "repository root" in proc.stderr
+        assert _log(stub) == []
+        assert not (work / "logs").exists()  # no stray logs/ before the check
+
+
+class TestTrack1TwoPass:
+    def test_eof_at_a_later_prompt_submits_nothing(self, sandbox):
+        work, env, stub = sandbox
+        _best_pt(work, _track1_run(2))
+        proc = _run(
+            work,
+            env,
+            TRACK1_ALL,
+            "--run-name-prefix",
+            "resnet18-asymmetric-v2",
+            "--folds",
+            "1",
+            "2",
+            "3",
+            stdin="",
+        )
+        assert proc.returncode == 1
+        assert "nothing submitted" in proc.stderr.lower()
+        assert _log(stub) == []  # fold 1's chain must not be queued already
+
+    def test_three_folds_get_their_own_answers(self, sandbox):
+        work, env, stub = sandbox
+        _best_pt(work, _track1_run(2))
+        proc = _run(
+            work,
+            env,
+            TRACK1_ALL,
+            "--run-name-prefix",
+            "resnet18-asymmetric-v2",
+            "--folds",
+            "1",
+            "2",
+            "3",
+            stdin="override\n",
+        )
+        assert proc.returncode == 0, proc.stderr
+        jobs = _train_jobs(stub)
+        assert len(jobs) == 3
+        flags = [
+            "--override-training" if "--override-training" in j else "--resume-training"
+            for j in jobs
+        ]
+        assert flags == [
+            "--resume-training",
+            "--override-training",
+            "--resume-training",
+        ]
+        stages = [l for l in _log(stub) if "stage_frame_cache.sh" in l]
+        cleanups = [l for l in _log(stub) if "cleanup_ssl_stage.sh" in l]
+        assert len(stages) == 3 and len(cleanups) == 3
+        assert "afterany" in stages[1] and "afterany" in stages[2]
+
+
 @pytest.fixture
 def job_sandbox(sandbox):
     """`sandbox` plus stubs so a *job* script runs to its python call."""

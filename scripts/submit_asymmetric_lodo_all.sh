@@ -72,33 +72,50 @@ for fold in "${FOLDS[@]}"; do
     fi
 done
 
-mkdir -p logs
 CACHE_NVME="/tmp/sfx_frame_cache"
 CONFIG="configs/supervised/resnet18_asymmetric.yaml"
 # seed lives in base.yaml and may be overridden in the model config (load_config()
 # deep-merges base.yaml with model values winning) — check the model file first.
-SEED="$(grep -E '^\s*seed:' "${CONFIG}" configs/base.yaml 2>/dev/null | head -1 | awk '{print $2}')"
+# Only a top-level `seed:` counts (python reads cfg["seed"]); nested keys are ignored.
+SEED="$({ grep -hE '^seed:' "${CONFIG}" configs/base.yaml 2>/dev/null || true; } | head -1 | awk '{print $2}')" || SEED=""
+if [[ ! "${SEED}" =~ ^[0-9]+$ ]]; then
+    echo "Error: could not read a top-level integer 'seed:' from ${CONFIG} or configs/base.yaml." >&2
+    echo "Run this script from the repository root." >&2
+    exit 1
+fi
+
+mkdir -p logs
 
 # Sequential fold slots: stage(N) → train(N) → cleanup(N) → stage(N+1) → …
 # Each fold's cache working set fills NVMe, so folds cannot overlap.
-PREV_DEP=""
+# Pass 1: resolve every resume/override/inference answer before submitting anything.
+# Interactive prompt — only possible here (a terminal); the SLURM batch job this
+# submits has no tty and cannot prompt.
+declare -A RESUME_FLAGS
 for fold in "${FOLDS[@]}"; do
-    # Interactive resume/override prompt — only possible here (a terminal);
-    # the SLURM batch job this submits has no tty and cannot prompt.
     CKPT_PATH="checkpoints/${RUN_NAME_PREFIX}-fold${fold}-seed${SEED}/best.pt"
-    RESUME_FLAG="--resume-training"
+    RESUME_FLAGS[${fold}]="--resume-training"
     if [[ -f "${CKPT_PATH}" ]]; then
         echo "Checkpoint already exists for fold ${fold}: ${CKPT_PATH}"
         while true; do
-            read -r -p "Type 'resume' to continue training, 'override' to discard the checkpoint and restart under a new W&B run (the old run is kept, tagged overridden), or 'inference' to evaluate the existing best.pt only: " choice
+            if ! read -r -p "Type 'resume' to continue training, 'override' to discard the checkpoint and restart under a new W&B run (the old run is kept, tagged overridden), or 'inference' to evaluate the existing best.pt only: " choice; then
+                echo "No answer read — nothing submitted." >&2
+                exit 1
+            fi
             case "${choice}" in
-                resume) RESUME_FLAG="--resume-training"; break ;;
-                override) RESUME_FLAG="--override-training"; break ;;
-                inference) RESUME_FLAG="--inference-only"; break ;;
+                resume) RESUME_FLAGS[${fold}]="--resume-training"; break ;;
+                override) RESUME_FLAGS[${fold}]="--override-training"; break ;;
+                inference) RESUME_FLAGS[${fold}]="--inference-only"; break ;;
                 *) echo "Please type exactly 'resume', 'override' or 'inference'." ;;
             esac
         done
     fi
+done
+
+# Pass 2: submit.
+PREV_DEP=""
+for fold in "${FOLDS[@]}"; do
+    RESUME_FLAG="${RESUME_FLAGS[${fold}]}"
 
     if [ -n "${PREV_DEP}" ]; then
         STAGE_JID=$(sbatch --parsable --dependency=afterany:"${PREV_DEP}" \
