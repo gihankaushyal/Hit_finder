@@ -44,6 +44,20 @@ class TestRotate:
         assert (old, new) == (f"{RUN}-o2", f"{RUN}-o3")
 
 
+class TestRotateIsAtomic:
+    def test_failed_replace_keeps_old_file(self, tmp_path, monkeypatch):
+        (tmp_path / wi.WANDB_ID_FILE).write_text(f"{RUN}-o2\n")
+
+        def boom(src, dst):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(wi.os, "replace", boom)
+        with pytest.raises(OSError):
+            wi.rotate_wandb_id(tmp_path, RUN)
+        assert wi.resolve_wandb_id(tmp_path, RUN) == f"{RUN}-o2"
+        assert [p.name for p in tmp_path.iterdir()] == [wi.WANDB_ID_FILE]
+
+
 class FakeRun:
     def __init__(self, tags):
         self.tags = tags

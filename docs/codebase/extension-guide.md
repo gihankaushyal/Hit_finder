@@ -320,3 +320,10 @@ name). `src/training/wandb_identity.py` owns it: `check_checkpoint_collisions` c
 read the file through `resolve_wandb_id`. Several W&B runs can share one display name, so
 tools should filter on the `overridden` tag (`scripts/plot_hit_frac.py` does) or read the
 file; never group by name alone.
+
+Known limits: the id is rotated before the checkpoint is deleted, so if the delete then fails
+the directory keeps its old checkpoint under the new id (rerun `--override-training` or fix the
+permission first). In offline mode the old run cannot be tagged, so tag it by hand after
+`wandb sync`. Removing `checkpoints/<run_name>/` by hand also removes `wandb_id.txt`; the next
+start then logs to the original run id. Track 1 applies `--override-training` to every requested
+fold up front (as before this change), unlike the SSL entry points, which defer it.

@@ -13,6 +13,7 @@ is the run name. The previous attempt's run is kept and tagged ``overridden``.
 
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 
@@ -40,10 +41,17 @@ def next_wandb_id(run_name: str, current: str) -> str:
 
 
 def rotate_wandb_id(run_dir: str | Path, run_name: str) -> tuple[str, str]:
-    """Write the next attempt's id to the id file; return ``(old_id, new_id)``."""
+    """Write the next attempt's id to the id file (atomically); return ``(old_id, new_id)``."""
     old = resolve_wandb_id(run_dir, run_name)
     new = next_wandb_id(run_name, old)
-    (Path(run_dir) / WANDB_ID_FILE).write_text(new + "\n")
+    id_file = Path(run_dir) / WANDB_ID_FILE
+    tmp_file = id_file.with_name(id_file.name + ".tmp")
+    tmp_file.write_text(new + "\n")
+    try:
+        os.replace(tmp_file, id_file)  # atomic: a kill never leaves a truncated id
+    except OSError:
+        tmp_file.unlink(missing_ok=True)
+        raise
     return old, new
 
 
