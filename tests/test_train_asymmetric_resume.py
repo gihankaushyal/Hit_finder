@@ -156,3 +156,87 @@ def test_track1_override_rotates_wandb_id(tmp_path: Path, monkeypatch):
     assert (run_dir / "wandb_id.txt").read_text().strip() == f"{name}-o2"
     assert tagged == [name]
     assert not (run_dir / "best.pt").exists()
+
+
+class TestTrack1PerFoldOverride:
+    PREFIX = "resnet18-asymmetric-v2"
+
+    def _drive(self, tmp_path: Path, monkeypatch, fake_train_fold):
+        from src.training import train_asymmetric as ta
+
+        monkeypatch.chdir(tmp_path)
+        cfg = {
+            "seed": 42,
+            "wandb": {"project": "p"},
+            "training": {"num_workers": 0},
+            "hitfinder": {"backend": "mock"},
+        }
+        monkeypatch.setattr(ta, "load_config", lambda path: cfg)
+        monkeypatch.setattr(ta, "get_hitfinder", lambda c: None)
+        monkeypatch.setattr(ta, "frame_cache_from_cfg", lambda c: None)
+        monkeypatch.setattr(
+            ta,
+            "build_sessions",
+            lambda lodo_cfg: ([{"detector": "AGIPD", "frame_count": 1}], {}),
+        )
+        cfg["lodo"] = {"detector_dirs": {"AGIPD": "x"}}
+        monkeypatch.setattr(
+            ta,
+            "build_lodo_folds",
+            lambda: [
+                {"fold_id": 1, "test_detector": "AGIPD"},
+                {"fold_id": 2, "test_detector": "AGIPD"},
+            ],
+        )
+        monkeypatch.setattr(
+            ta, "build_session_stratified_split", lambda *a, **k: {"splits": {}}
+        )
+        monkeypatch.setattr(ta, "save_split_artifact", lambda *a, **k: None)
+        monkeypatch.setattr(ta, "_train_fold", fake_train_fold)
+        ta.main(
+            "cfg.yaml",
+            self.PREFIX,
+            device="cpu",
+            override_training=True,
+        )
+
+    def test_override_is_deferred_per_fold_and_ordered_before_id_resolution(
+        self, tmp_path: Path, monkeypatch
+    ):
+        from src.training.wandb_identity import resolve_wandb_id
+
+        names = {i: f"{self.PREFIX}-fold{i}-seed42" for i in (1, 2)}
+        dirs = {i: tmp_path / "checkpoints" / names[i] for i in (1, 2)}
+        for d in dirs.values():
+            d.mkdir(parents=True)
+            (d / "best.pt").write_bytes(b"x")
+        seen = []
+
+        def fake_train_fold(fold, *a, **k):
+            fid = fold["fold_id"]
+            # FIX 6: the id must already be rotated when _train_fold runs
+            seen.append((fid, resolve_wandb_id(dirs[fid], names[fid])))
+            raise RuntimeError("fold 1 crashed")
+
+        with pytest.raises(RuntimeError):
+            self._drive(tmp_path, monkeypatch, fake_train_fold)
+        assert seen == [(1, f"{names[1]}-o2")]
+        assert not (dirs[1] / "best.pt").exists()
+        assert (dirs[2] / "best.pt").exists()
+        assert not (dirs[2] / "wandb_id.txt").exists()
+
+    def test_unresolved_collision_fails_fast_touching_nothing(
+        self, tmp_path: Path, monkeypatch
+    ):
+        from src.training import train_asymmetric as ta
+
+        d = tmp_path / "checkpoints" / f"{self.PREFIX}-fold2-seed42"
+        d.mkdir(parents=True)
+        (d / "best.pt").write_bytes(b"x")
+        cfg = {"seed": 42, "wandb": {"project": "p"}}
+        monkeypatch.chdir(tmp_path)
+        with pytest.raises(SystemExit):
+            ta._check_checkpoint_collisions(
+                [2], cfg, self.PREFIX, False, False, dry_run=True
+            )
+        assert (d / "best.pt").exists()

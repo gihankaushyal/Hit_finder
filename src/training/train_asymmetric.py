@@ -70,6 +70,7 @@ def _check_checkpoint_collisions(
     resume_training: bool,
     override_training: bool,
     inference_only: bool = False,
+    dry_run: bool = False,
 ) -> None:
     run_suffix = cfg.get("wandb", {}).get("run_suffix", "")
     check_checkpoint_collisions(
@@ -82,6 +83,7 @@ def _check_checkpoint_collisions(
         override_training,
         extra_delete=(RESULTS_NAME, INFERENCE_RESULTS_NAME),
         inference_only=inference_only,
+        dry_run=dry_run,
         on_override=override_hook_from_cfg(cfg),
     )
 
@@ -206,12 +208,23 @@ def main(
             resume_training,
             override_training,
             inference_only,
+            dry_run=True,  # fail fast; the real pass runs per fold, just before it starts
         )
 
         artifacts_dir = Path("checkpoints") / "asymmetric_splits"
         artifacts_dir.mkdir(parents=True, exist_ok=True)
 
         for fold in all_folds:
+            # Real (deleting/rotating) pass for THIS fold only, so a crash on an
+            # earlier fold never leaves later folds' checkpoints already deleted.
+            _check_checkpoint_collisions(
+                [fold["fold_id"]],
+                cfg,
+                run_name_prefix,
+                resume_training,
+                override_training,
+                inference_only,
+            )
             split_artifact = build_session_stratified_split(
                 sessions,
                 test_detector=fold["test_detector"],
