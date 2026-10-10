@@ -14,8 +14,9 @@ For fine-tune / probe the mode is inserted before the version, giving
 ``vits16-mae-finetune-v2`` or ``vits16-mae-probe-v2``.
 
 If a checkpoint already exists under the resolved run name, the entry point
-exits unless ``--resume-training`` (continue) or ``--override-training``
-(discard and restart) was passed.
+exits unless ``--resume-training`` (continue), ``--override-training``
+(discard and restart) or ``--inference-only`` (evaluate it without training;
+the checkpoint must exist) was passed. The three are mutually exclusive.
 """
 
 from __future__ import annotations
@@ -85,25 +86,41 @@ def check_checkpoint_collisions(
     extra_delete: tuple[str, ...] = (),
     checkpoint_root: str | Path = CHECKPOINT_ROOT,
     dry_run: bool = False,
+    inference_only: bool = False,
 ) -> None:
     """Gate on checkpoints that already exist under the resolved run names.
 
     `run_names` maps fold id -> run name. For each run whose
     `<checkpoint_root>/<run_name>/<checkpoint_name>` exists: with
     `override_training` the checkpoint and every match of the `extra_delete`
-    glob patterns in that run directory are deleted; with `resume_training`
-    nothing is touched; with neither the process exits. Extras are only removed
-    when the primary checkpoint exists. Passing both `resume_training` and
-    `override_training` is an error (ValueError). With `dry_run` nothing is ever
-    deleted: an unresolved collision still exits, so callers can fail early and
-    defer the destructive part until just before training starts.
+    glob patterns in that run directory are deleted; with `resume_training` or
+    `inference_only` nothing is touched; with none of the three the process
+    exits. Extras are only removed when the primary checkpoint exists.
+
+    `inference_only` inverts the missing case: every run must already have the
+    checkpoint (there is nothing to evaluate otherwise), so a missing one exits.
+
+    Passing more than one of `resume_training`, `override_training` and
+    `inference_only` is an error (ValueError). With `dry_run` nothing is ever
+    deleted: an unresolved collision (or a missing inference checkpoint) still
+    exits, so callers can fail early and defer the destructive part until just
+    before training starts.
     """
-    if resume_training and override_training:
-        raise ValueError("resume_training and override_training are mutually exclusive")
+    if sum((resume_training, override_training, inference_only)) > 1:
+        raise ValueError(
+            "resume_training, override_training and inference_only are mutually exclusive"
+        )
     for fold_id, run_name in run_names.items():
         run_dir = Path(checkpoint_root) / run_name
         ckpt_path = run_dir / checkpoint_name
         if not ckpt_path.exists():
+            if inference_only:
+                raise SystemExit(
+                    f"--inference-only needs an existing checkpoint, none found for "
+                    f"fold {fold_id}: {ckpt_path}\n\n"
+                    "Train this fold first, or pass --resume-training / "
+                    "--override-training instead."
+                )
             continue
         if override_training:
             if dry_run:
@@ -115,9 +132,10 @@ def check_checkpoint_collisions(
                     if stale.is_file() or stale.is_symlink():
                         stale.unlink()
             ckpt_path.unlink()
-        elif not resume_training:
+        elif not resume_training and not inference_only:
             raise SystemExit(
                 f"Checkpoint already exists for fold {fold_id}: {ckpt_path}\n\n"
-                "Re-run with --resume-training to continue training from it, or "
-                f"--override-training to discard it and start fold {fold_id} from scratch."
+                "Re-run with --resume-training to continue training from it, "
+                f"--override-training to discard it and start fold {fold_id} from "
+                "scratch, or --inference-only to evaluate it without training."
             )
