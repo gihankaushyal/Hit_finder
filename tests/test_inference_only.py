@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -83,23 +84,51 @@ class TestSummaryUpdates:
         assert all(k.startswith("inference/") for k in updates)
 
 
+class _SetupWandb:
+    """Stand-in for the wandb module: `setup().settings.mode` is configurable."""
+
+    def __init__(self, mode: str | None = "online", broken: bool = False) -> None:
+        self._mode = mode
+        self._broken = broken
+
+    def setup(self):
+        if self._broken:
+            raise RuntimeError("wandb service unavailable")
+        return types.SimpleNamespace(settings=types.SimpleNamespace(mode=self._mode))
+
+
 class TestWandbEnabled:
     @pytest.mark.parametrize("mode", ["offline", "disabled", "OFFLINE", "Disabled"])
-    def test_off_for_offline_modes(self, monkeypatch, mode):
+    def test_off_for_offline_env_modes(self, monkeypatch, mode):
         monkeypatch.setenv("WANDB_MODE", mode)
+        monkeypatch.setitem(sys.modules, "wandb", _SetupWandb("online"))
         assert wandb_enabled() is False
 
-    @pytest.mark.parametrize("mode", [None, "", "online"])
-    def test_on_otherwise(self, monkeypatch, mode):
-        if mode is None:
+    @pytest.mark.parametrize("env", [None, "", "online"])
+    def test_on_when_nothing_turns_it_off(self, monkeypatch, env):
+        if env is None:
             monkeypatch.delenv("WANDB_MODE", raising=False)
         else:
-            monkeypatch.setenv("WANDB_MODE", mode)
+            monkeypatch.setenv("WANDB_MODE", env)
+        monkeypatch.setitem(sys.modules, "wandb", _SetupWandb("online"))
+        assert wandb_enabled() is True
+
+    @pytest.mark.parametrize("mode", ["offline", "disabled"])
+    def test_off_when_set_with_the_wandb_offline_command(self, monkeypatch, mode):
+        """`wandb offline` stores the mode in a settings file, not in the environment."""
+        monkeypatch.delenv("WANDB_MODE", raising=False)
+        monkeypatch.setitem(sys.modules, "wandb", _SetupWandb(mode))
+        assert wandb_enabled() is False
+
+    def test_assumed_on_when_the_settings_cannot_be_read(self, monkeypatch):
+        monkeypatch.delenv("WANDB_MODE", raising=False)
+        monkeypatch.setitem(sys.modules, "wandb", _SetupWandb(broken=True))
         assert wandb_enabled() is True
 
 
 RUN_PREFIX = "resnet18-asymmetric-v2"
 RUN_NAME = f"{RUN_PREFIX}-fold1-seed42"
+BUILD_KWARGS: list[dict] = []
 
 
 class _FakeRun:
@@ -115,9 +144,12 @@ class _FakeWandb:
         self.init_calls: list[dict] = []
         self.logged: list = []
         self.finished = False
+        self.fail_init = False
 
     def init(self, **kwargs):
         self.init_calls.append(kwargs)
+        if self.fail_init:
+            raise ConnectionError("no network")
         return self.run
 
     def Settings(self, **kwargs) -> dict:  # noqa: N802 - mirrors wandb.Settings
@@ -174,7 +206,13 @@ def harness(tmp_path, monkeypatch):
         raise AssertionError("the training loader must not be built")
 
     monkeypatch.setattr(lodo, "asymmetric_loader", _no_training_loader)
-    monkeypatch.setattr(lodo, "build_supervised_model", lambda **kw: nn.Linear(4, 2))
+    BUILD_KWARGS.clear()
+
+    def _build(**kwargs):
+        BUILD_KWARGS.append(kwargs)
+        return nn.Linear(4, 2)
+
+    monkeypatch.setattr(lodo, "build_supervised_model", _build)
     monkeypatch.setattr(lodo, "run_patch_agg", lambda *a, **kw: dict(METRICS))
     ckpt_dir = tmp_path / "checkpoints" / RUN_NAME
 
@@ -286,6 +324,25 @@ class TestTrainFoldInferenceOnly:
             lodo._train_fold(cfg=_cfg(), inference_only=True, **_fold_args())
         assert fake.init_calls == []  # a crashed pass must not mark the closed run
         assert not (ckpt_dir / RESULTS_NAME).exists()
+
+    def test_a_wandb_failure_never_loses_the_result(self, harness, capsys):
+        fake, ckpt_dir, make_checkpoint = harness
+        fake.fail_init = True
+        make_checkpoint()
+        result = lodo._train_fold(cfg=_cfg(), inference_only=True, **_fold_args())
+        assert (ckpt_dir / RESULTS_NAME).exists()  # written before W&B is touched
+        assert result["ap"] == 0.9
+        assert (
+            "[wandb] could not record the inference summary" in capsys.readouterr().out
+        )
+
+    def test_no_pretrained_weights_are_requested_for_inference(self, harness):
+        fake, ckpt_dir, make_checkpoint = harness
+        make_checkpoint()
+        cfg = _cfg()
+        cfg["model"]["pretrained"] = True  # the default in the real configs
+        lodo._train_fold(cfg=cfg, inference_only=True, **_fold_args())
+        assert BUILD_KWARGS[-1]["pretrained"] is False
 
     def test_backbone_mismatch_is_still_rejected(self, harness):
         fake, ckpt_dir, make_checkpoint = harness
@@ -407,3 +464,18 @@ def test_pretrain_cli_has_no_inference_flag():
     )
     assert proc.returncode == 2
     assert "unrecognized arguments: --inference-only" in proc.stderr
+
+    def test_override_also_removes_a_previous_inference_result(
+        self, tmp_path, monkeypatch
+    ):
+        from src.training.train_asymmetric import _check_checkpoint_collisions
+
+        monkeypatch.chdir(tmp_path)
+        run_dir = tmp_path / "checkpoints" / RUN_NAME
+        run_dir.mkdir(parents=True)
+        for name in ("best.pt", RESULTS_NAME, INFERENCE_RESULTS_NAME):
+            (run_dir / name).write_text("x")
+        _check_checkpoint_collisions([1], _cfg(), RUN_PREFIX, False, True)
+        assert not (run_dir / "best.pt").exists()
+        assert not (run_dir / RESULTS_NAME).exists()
+        assert not (run_dir / INFERENCE_RESULTS_NAME).exists()

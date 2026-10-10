@@ -88,6 +88,42 @@ def build_sessions(
     return sessions, session_map
 
 
+def _write_inference_summary(cfg: dict, run_name: str, updates: dict) -> None:
+    """Record an inference pass in the closed-out W&B run's summary, if W&B is on.
+
+    Runs after the result file is written, so a W&B failure can never lose the
+    metrics: it only warns. The run is touched only now that the metrics exist, so
+    a failed evaluation cannot leave it marked crashed. No config or tags are sent,
+    and the settings stop the resumed run from re-uploading metadata, console
+    output, system stats or code.
+    """
+    import wandb
+
+    if not wandb_enabled():
+        return
+    try:
+        run = wandb.init(
+            project=cfg["wandb"]["project"],
+            entity=cfg["wandb"].get("entity"),
+            id=run_name,
+            name=run_name,
+            resume="allow",
+            settings=wandb.Settings(
+                console="off",
+                x_disable_stats=True,
+                x_disable_meta=True,
+                save_code=False,
+            ),
+        )
+        try:
+            for key, value in updates.items():
+                run.summary[key] = value
+        finally:
+            wandb.finish()
+    except Exception as exc:  # the local result file is already written
+        print(f"  [wandb] could not record the inference summary: {exc!r}")
+
+
 def _train_fold(
     fold: dict,
     split_artifact: dict,
@@ -220,7 +256,8 @@ def _train_fold(
     else:
         model = build_supervised_model(
             backbone=backbone,
-            pretrained=cfg["model"]["pretrained"],
+            # best.pt supplies every weight; skip the pretrained-weights download.
+            pretrained=cfg["model"]["pretrained"] and not inference_only,
             num_classes=cfg["model"]["num_classes"],
         ).to(device)
 
@@ -416,33 +453,7 @@ def _train_fold(
         f"  Cross-detector:    AP={cross_m['ap']:.4f}  AUC={cross_m['auc_roc']:.4f}  F1={cross_m['f1']:.4f}"
     )
 
-    if inference_only:
-        # Touch the closed-out W&B run only now that the metrics exist, so a failed
-        # evaluation cannot leave it marked crashed. No config or tags are sent, and
-        # the settings stop the resumed run from re-uploading metadata, console
-        # output, system stats or code.
-        if wandb_enabled():
-            run = wandb.init(
-                project=cfg["wandb"]["project"],
-                entity=cfg["wandb"].get("entity"),
-                id=run_name,
-                name=run_name,
-                resume="allow",
-                settings=wandb.Settings(
-                    console="off",
-                    x_disable_stats=True,
-                    x_disable_meta=True,
-                    save_code=False,
-                ),
-            )
-            try:
-                for key, value in summary_updates(
-                    in_domain_m, cross_m, inference_threshold
-                ).items():
-                    run.summary[key] = value
-            finally:
-                wandb.finish()
-    else:
+    if not inference_only:
         wandb.log(
             {
                 "in_domain/ap": in_domain_m["ap"],
@@ -488,6 +499,13 @@ def _train_fold(
     with open(results_path, "w") as f:
         json.dump(result, f, indent=2)
     print(f"  Results saved → {results_path}")
+
+    if inference_only:
+        _write_inference_summary(
+            cfg,
+            run_name,
+            summary_updates(in_domain_m, cross_m, inference_threshold),
+        )
 
     return {
         "test_detector": fold["test_detector"],

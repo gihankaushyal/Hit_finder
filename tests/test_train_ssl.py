@@ -314,6 +314,19 @@ class TestFinetuneRunNaming:
         )
         assert "run_suffix" not in load_config(str(cfg_path))["wandb"]
 
+    def test_override_also_removes_a_previous_inference_result(
+        self, tmp_path, monkeypatch
+    ):
+        from src.training.train_ssl_finetune import prepare_finetune_run
+
+        monkeypatch.chdir(tmp_path)
+        run_dir = self._existing_run(tmp_path, "vits16-mae-finetune-v2-fold1-seed42")
+        (run_dir / "results.inference.json").write_text("{}")
+        prepare_finetune_run("vits16-mae-v2", 1, {"seed": 42}, override_training=True)
+        assert not (run_dir / "best.pt").exists()
+        assert not (run_dir / "results.json").exists()
+        assert not (run_dir / "results.inference.json").exists()
+
     def test_inference_only_needs_an_existing_checkpoint_and_deletes_nothing(
         self, tmp_path, monkeypatch
     ):

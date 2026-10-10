@@ -132,6 +132,31 @@ PREFIX_VERSION="${RUN_NAME_PREFIX##*-v}"
 FINETUNE_PREFIX="${PREFIX_BASE}-finetune-v${PREFIX_VERSION}"
 PROBE_PREFIX="${PREFIX_BASE}-probe-v${PREFIX_VERSION}"
 
+# Early preflight: a fold with a requested job that has no best.pt always trains,
+# whatever the answers, so a missing or mistyped pretrain checkpoint is reported
+# before any prompt. (Folds with an existing best.pt are checked after the prompts,
+# because an 'inference' answer needs no pretrain checkpoint.)
+EARLY_MISSING=0
+for fold in "${FOLDS[@]}"; do
+    trains_anyway=false
+    if $RUN_FINETUNE && [[ ! -f "checkpoints/${FINETUNE_PREFIX}-fold${fold}-seed${SEED}/best.pt" ]]; then
+        trains_anyway=true
+    fi
+    if $RUN_PROBE && [[ ! -f "checkpoints/${PROBE_PREFIX}-fold${fold}-seed${SEED}/best.pt" ]]; then
+        trains_anyway=true
+    fi
+    $trains_anyway || continue
+    PRETRAIN_CKPT="checkpoints/${PRETRAIN_RUN_PREFIX}-fold${fold}-seed${SEED}/last.pt"
+    if [[ ! -f "${PRETRAIN_CKPT}" ]]; then
+        echo "Error: pretrain checkpoint not found for fold ${fold}: ${PRETRAIN_CKPT}" >&2
+        EARLY_MISSING=$(( EARLY_MISSING + 1 ))
+    fi
+done
+if [ "${EARLY_MISSING}" -gt 0 ]; then
+    echo "Nothing submitted: ${EARLY_MISSING} fold(s) have no pretrain checkpoint under '${PRETRAIN_RUN_PREFIX}'." >&2
+    exit 1
+fi
+
 # Interactive resume/override prompt — only possible here (a terminal); the
 # SLURM batch jobs this submits have no tty and cannot prompt. Sets RESUME_FLAG.
 resolve_resume_flag() {

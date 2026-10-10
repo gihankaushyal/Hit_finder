@@ -58,5 +58,18 @@ def summary_updates(
 
 
 def wandb_enabled() -> bool:
-    """False when W&B is offline or disabled, so nothing is sent."""
-    return os.environ.get("WANDB_MODE", "").lower() not in WANDB_OFF_MODES
+    """False when W&B is offline or disabled, so nothing is sent.
+
+    Checks WANDB_MODE and W&B's own resolved settings, which also cover a mode set
+    with the `wandb offline` / `wandb disabled` commands (stored in a settings file,
+    not in the environment). If the settings cannot be read, W&B is assumed on.
+    """
+    if os.environ.get("WANDB_MODE", "").lower() in WANDB_OFF_MODES:
+        return False
+    try:
+        import wandb
+
+        mode = str(wandb.setup().settings.mode).lower()
+    except Exception:
+        return True
+    return mode not in WANDB_OFF_MODES

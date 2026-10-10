@@ -160,6 +160,18 @@ class TestFinetuneOrchestrator:
         assert "'inference'" in proc.stdout
         assert "Please type exactly" in proc.stdout
 
+    def test_a_fold_that_trains_anyway_is_checked_before_any_prompt(self, sandbox):
+        """Fine-tune finished (would prompt), probe never ran (trains) and the pretrain
+        checkpoint is missing: report that first, not after the user answered."""
+        work, env, stub = sandbox
+        _best_pt(work, FINETUNE_RUN)
+        proc = _run(work, env, FINETUNE_ALL, *FT_ARGS, stdin="")
+        assert proc.returncode == 1
+        assert "pretrain checkpoint not found" in proc.stderr
+        assert "No answer read" not in proc.stderr
+        assert "Type 'resume'" not in proc.stdout
+        assert _log(stub) == []
+
     def test_eof_at_the_prompt_submits_nothing(self, sandbox):
         work, env, stub = sandbox
         _best_pt(work, FINETUNE_RUN)
@@ -213,4 +225,4 @@ class TestJobScripts:
 
     def test_finetune_orchestrator_runs_its_preflight_after_the_prompts(self):
         text = (SCRIPTS / FINETUNE_ALL).read_text()
-        assert text.index("PROBE_FLAGS[${fold}]=") < text.index("MISSING=0")
+        assert text.index("PROBE_FLAGS[${fold}]=") < text.rindex("MISSING=0")

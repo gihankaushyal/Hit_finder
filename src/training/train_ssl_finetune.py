@@ -49,6 +49,7 @@ from src.training.run_naming import (
     fold_run_name,
     validate_run_name_prefix,
 )
+from src.training.inference_results import INFERENCE_RESULTS_NAME, RESULTS_NAME
 from src.utils.config import load_config
 
 SPLIT_DIR = Path("checkpoints") / "asymmetric_splits"
@@ -104,7 +105,7 @@ def prepare_finetune_run(
         "best.pt",
         resume_training,
         override_training,
-        extra_delete=("results.json",),
+        extra_delete=(RESULTS_NAME, INFERENCE_RESULTS_NAME),
         dry_run=dry_run,
         inference_only=inference_only,
     )
@@ -165,7 +166,7 @@ def main() -> None:
         action="store_true",
         help=(
             "When best.pt exists for the resolved run name, discard it and "
-            "results.json and start that fold from scratch under the same run name."
+            "results.json and results.inference.json and start that fold from scratch under the same run name."
         ),
     )
     resume_group.add_argument(

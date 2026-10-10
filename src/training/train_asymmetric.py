@@ -57,6 +57,7 @@ from src.training.run_naming import (
     fold_run_name,
     validate_run_name_prefix,
 )
+from src.training.inference_results import INFERENCE_RESULTS_NAME, RESULTS_NAME
 from src.utils.config import load_config
 
 
@@ -77,7 +78,7 @@ def _check_checkpoint_collisions(
         "best.pt",
         resume_training,
         override_training,
-        extra_delete=("results.json",),
+        extra_delete=(RESULTS_NAME, INFERENCE_RESULTS_NAME),
         inference_only=inference_only,
     )
 
@@ -307,7 +308,7 @@ if __name__ == "__main__":
         default=False,
         help=(
             "When a checkpoint exists for the resolved run name, discard it "
-            "(best.pt and results.json) and start that fold from scratch under the "
+            "(best.pt, results.json and results.inference.json) and start that fold from scratch under the "
             "same run name. Mutually exclusive with --resume-training and --inference-only."
         ),
     )
