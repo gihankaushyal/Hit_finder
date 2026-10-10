@@ -8,14 +8,18 @@ Run naming convention (--run-name-prefix, REQUIRED, no default):
     The mode is inserted before the version, so the run names are
     vits16-mae-finetune-v2-fold{N}-seed{S} and, with --linear-probe,
     vits16-mae-probe-v2-fold{N}-seed{S}. If best.pt already exists under the
-    resolved name, the script exits and asks for --resume-training (continue)
-    or --override-training (discard best.pt and results.json, then restart).
+    resolved name, the script exits and asks for --resume-training (continue),
+    --override-training (discard best.pt and results.json, then restart) or
+    --inference-only (evaluate best.pt without training; no pretrain checkpoint needed).
 
 Usage:
     python -m src.training.train_ssl_finetune --config configs/ssl/mae_finetune.yaml \
         --fold 1 --run-name-prefix vits16-mae-v2 \
         --pretrain-checkpoint checkpoints/mae-vits16-v2-fold1-seed42/last.pt
     # add --linear-probe to freeze the encoder
+    # re-evaluate a finished run (no --pretrain-checkpoint needed):
+    python -m src.training.train_ssl_finetune --config configs/ssl/mae_finetune.yaml \
+        --fold 1 --run-name-prefix vits16-mae-v2 --inference-only
 """
 
 from __future__ import annotations
@@ -52,10 +56,14 @@ SPLIT_DIR = Path("checkpoints") / "asymmetric_splits"
 
 def build_finetune_model_builder(
     cfg: dict,
-    pretrain_checkpoint: str | Path,
+    pretrain_checkpoint: str | Path | None,
     linear_probe: bool = False,
 ) -> Callable[[], nn.Module]:
-    """Return a zero-argument callable that builds a ViTClassifier from the MAE checkpoint."""
+    """Return a zero-argument callable that builds a ViTClassifier from the MAE checkpoint.
+
+    `pretrain_checkpoint=None` builds the same architecture without loading MAE weights
+    (inference: best.pt supplies every weight).
+    """
 
     def _builder() -> nn.Module:
         return build_ssl_classifier(
@@ -72,6 +80,7 @@ def prepare_finetune_run(
     linear_probe: bool = False,
     resume_training: bool = False,
     override_training: bool = False,
+    inference_only: bool = False,
     dry_run: bool = False,
 ) -> str:
     """Validate the prefix, apply the checkpoint gate and return the expanded prefix.
@@ -97,6 +106,7 @@ def prepare_finetune_run(
         override_training,
         extra_delete=("results.json",),
         dry_run=dry_run,
+        inference_only=inference_only,
     )
     return prefix
 
@@ -122,7 +132,14 @@ def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--config", required=True)
     p.add_argument("--fold", type=int, required=True)
-    p.add_argument("--pretrain-checkpoint", required=True)
+    p.add_argument(
+        "--pretrain-checkpoint",
+        default=None,
+        help=(
+            "MAE pretrain last.pt to initialise from. Required unless "
+            "--inference-only (best.pt already holds every weight)."
+        ),
+    )
     p.add_argument("--linear-probe", action="store_true")
     p.add_argument("--device", default=None)
     p.add_argument(
@@ -151,6 +168,15 @@ def main() -> None:
             "results.json and start that fold from scratch under the same run name."
         ),
     )
+    resume_group.add_argument(
+        "--inference-only",
+        action="store_true",
+        help=(
+            "Evaluate the existing best.pt on the in-domain and cross-detector sets "
+            "without training. Writes results.json if the run has none, else "
+            "results.inference.json. Needs no --pretrain-checkpoint."
+        ),
+    )
     p.add_argument(
         "--cache-root",
         default=None,
@@ -168,6 +194,8 @@ def main() -> None:
         help="Disable the frame cache and recompute assembly/hitfinder/GCN live.",
     )
     args = p.parse_args()
+    if not args.inference_only and args.pretrain_checkpoint is None:
+        p.error("--pretrain-checkpoint is required unless --inference-only is given")
 
     cfg = load_config(args.config)
 
@@ -177,10 +205,12 @@ def main() -> None:
         SSL_FINETUNE_CONVENTION,
         SSL_FINETUNE_EXAMPLE,
     )
-    # Read the pretrain checkpoint early so a bad path fails before any setup.
-    pretrain_epoch = read_pretrain_epoch(args.pretrain_checkpoint)
-    print(f"[pretrain] {args.pretrain_checkpoint} — stored epoch {pretrain_epoch}")
     probe = args.linear_probe
+    pretrain_epoch = None
+    if not args.inference_only:
+        # Read the pretrain checkpoint early so a bad path fails before any setup.
+        pretrain_epoch = read_pretrain_epoch(args.pretrain_checkpoint)
+        print(f"[pretrain] {args.pretrain_checkpoint} — stored epoch {pretrain_epoch}")
     prefix = prepare_finetune_run(
         args.run_name_prefix,
         args.fold,
@@ -188,11 +218,13 @@ def main() -> None:
         linear_probe=probe,
         resume_training=args.resume_training,
         override_training=args.override_training,
+        inference_only=args.inference_only,
         dry_run=True,  # fail fast; the real override happens just before training
     )
-    # _train_fold passes cfg to wandb.init(config=...), so these land in the run config.
-    cfg["pretrain_checkpoint"] = str(args.pretrain_checkpoint)
-    cfg["pretrain_epoch"] = pretrain_epoch
+    if not args.inference_only:
+        # _train_fold passes cfg to wandb.init(config=...), so these land in the run config.
+        cfg["pretrain_checkpoint"] = str(args.pretrain_checkpoint)
+        cfg["pretrain_epoch"] = pretrain_epoch
 
     cache_cfg = cfg.setdefault("cache", {})
     if args.cache_root is not None:
@@ -228,6 +260,7 @@ def main() -> None:
         linear_probe=probe,
         resume_training=args.resume_training,
         override_training=args.override_training,
+        inference_only=args.inference_only,
     )
     result = _train_fold(
         fold,
@@ -238,16 +271,25 @@ def main() -> None:
         device,
         resume_training=args.resume_training,
         model_builder=build_finetune_model_builder(
-            cfg, args.pretrain_checkpoint, linear_probe=probe
+            cfg,
+            None if args.inference_only else args.pretrain_checkpoint,
+            linear_probe=probe,
         ),
         run_name_prefix=prefix,
         extra_results={
             "track": "ssl",
             "probe": probe,
-            "pretrain_checkpoint": str(args.pretrain_checkpoint),
-            "pretrain_epoch": pretrain_epoch,
+            **(
+                {}
+                if args.inference_only
+                else {
+                    "pretrain_checkpoint": str(args.pretrain_checkpoint),
+                    "pretrain_epoch": pretrain_epoch,
+                }
+            ),
         },
         frame_cache=frame_cache,
+        inference_only=args.inference_only,
     )
     print(result)
 

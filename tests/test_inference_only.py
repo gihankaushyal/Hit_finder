@@ -331,3 +331,46 @@ class TestTrack1Wrapper:
             _check_checkpoint_collisions(
                 [1], _cfg(), RUN_PREFIX, False, False, inference_only=True
             )
+
+
+class TestSslFinetuneCli:
+    BASE = [
+        "--config",
+        "configs/ssl/mae_finetune.yaml",
+        "--fold",
+        "1",
+        "--run-name-prefix",
+        "vits16-mae-v2",
+    ]
+
+    @pytest.mark.parametrize("other", ["--resume-training", "--override-training"])
+    def test_flag_is_mutually_exclusive_with_the_other_two(self, other):
+        proc = _run_module(
+            "src.training.train_ssl_finetune", *self.BASE, "--inference-only", other
+        )
+        assert proc.returncode == 2
+        assert "not allowed with argument" in proc.stderr
+
+    def test_pretrain_checkpoint_is_required_without_the_flag(self):
+        proc = _run_module("src.training.train_ssl_finetune", *self.BASE)
+        assert proc.returncode == 2
+        assert "--pretrain-checkpoint" in proc.stderr
+
+    def test_help_lists_the_flag(self):
+        proc = _run_module("src.training.train_ssl_finetune", "--help")
+        assert "--inference-only" in proc.stdout
+
+
+def test_pretrain_cli_has_no_inference_flag():
+    proc = _run_module(
+        "src.training.train_ssl_pretrain",
+        "--config",
+        "configs/ssl/mae_pretrain.yaml",
+        "--fold",
+        "1",
+        "--run-name-prefix",
+        "mae-vits16-v2",
+        "--inference-only",
+    )
+    assert proc.returncode == 2
+    assert "unrecognized arguments: --inference-only" in proc.stderr
