@@ -111,6 +111,56 @@ def _run_path(project: str, entity: str | None, run_id: str) -> str:
     return f"{entity}/{project}/{run_id}" if entity else f"{project}/{run_id}"
 
 
+MAX_FRESH_ID_ATTEMPTS = 20
+
+
+def ensure_fresh_wandb_id(
+    run_dir: str | Path, run_name: str, project: str | None, entity: str | None
+) -> str:
+    """The id for a FRESH training start: never one whose W&B run already exists.
+
+    Reusing an existing run id with ``step=epoch`` drops or splices metrics, which
+    happens when the checkpoint dir was removed by hand or a crash left no
+    checkpoint. Existing runs on the chain are tagged ``overridden`` and the id file
+    is rotated past them. If W&B cannot be queried the current id is kept.
+    """
+    if project is None or not wandb_enabled():
+        return resolve_wandb_id(run_dir, run_name)
+    import wandb
+
+    for _ in range(MAX_FRESH_ID_ATTEMPTS):
+        run_id = resolve_wandb_id(run_dir, run_name)
+        try:
+            wandb.Api(timeout=WANDB_API_TIMEOUT_S).run(
+                _run_path(project, entity, run_id)
+            )
+        except Exception as exc:
+            if "not found" in str(exc).lower():
+                return run_id
+            print(
+                f"  [wandb] could not check whether run {run_id!r} exists ({exc!r}); "
+                "keeping it."
+            )
+            return run_id
+        tag_overridden(project, entity, run_id)
+        _, new = rotate_wandb_id(run_dir, run_name)
+        print(f"  [wandb] run {run_id!r} already exists; fresh start uses {new!r}.")
+    return resolve_wandb_id(run_dir, run_name)
+
+
+def wandb_id_for_training(
+    run_dir: str | Path,
+    run_name: str,
+    project: str | None,
+    entity: str | None,
+    resuming: bool,
+) -> str:
+    """Id for the training `wandb.init`: current id when resuming, else a fresh one."""
+    if resuming:
+        return resolve_wandb_id(run_dir, run_name)
+    return ensure_fresh_wandb_id(run_dir, run_name, project, entity)
+
+
 def tag_overridden(project: str | None, entity: str | None, run_id: str) -> bool:
     """Add the ``overridden`` tag to a W&B run. Never raises: a failure only warns."""
     return _set_overridden_tag(project, entity, run_id, True)

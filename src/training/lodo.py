@@ -39,7 +39,7 @@ from src.training.inference_results import (
     wandb_enabled,
 )
 from src.training.train_supervised import _set_seeds, train_one_epoch
-from src.training.wandb_identity import resolve_wandb_id
+from src.training.wandb_identity import resolve_wandb_id, wandb_id_for_training
 
 
 def _build_intra_split(sessions: list[dict]) -> dict:
@@ -187,6 +187,8 @@ def _train_fold(
     crops_per_frame = cfg.get("asymmetric", {}).get("crops_per_frame", 1)
 
     ckpt_dir = Path("checkpoints") / run_name
+    # Must run AFTER check_checkpoint_collisions' real (non-dry) pass, which may
+    # rotate wandb_id.txt; resolving earlier would log to the superseded run.
     wandb_id = resolve_wandb_id(ckpt_dir, run_name)
     ckpt_path = ckpt_dir / "best.pt"
     if inference_only:
@@ -268,6 +270,13 @@ def _train_fold(
         ).to(device)
 
     if not inference_only:
+        wandb_id = wandb_id_for_training(
+            ckpt_dir,
+            run_name,
+            cfg["wandb"]["project"],
+            cfg["wandb"].get("entity"),
+            resuming=resume_training_from_ckpt,
+        )
         wandb.init(
             project=cfg["wandb"]["project"],
             entity=cfg["wandb"].get("entity"),

@@ -197,3 +197,50 @@ def test_wandb_identity_imports_no_heavy_deps():
         "sys.exit(1 if bad else 0)"
     )
     assert subprocess.run([sys.executable, "-c", code]).returncode == 0
+
+
+class TestEnsureFreshWandbId:
+    def test_no_existing_run_keeps_id(self, tmp_path, fake_wandb):
+        assert wi.ensure_fresh_wandb_id(tmp_path, RUN, "proj", None) == RUN
+        assert not (tmp_path / wi.WANDB_ID_FILE).exists()
+
+    def test_skips_existing_chain_and_writes_file(self, tmp_path, fake_wandb):
+        FakeApi.runs[f"proj/{RUN}"] = FakeRun([])
+        FakeApi.runs[f"proj/{RUN}-o2"] = FakeRun([])
+        got = wi.ensure_fresh_wandb_id(tmp_path, RUN, "proj", None)
+        assert got == f"{RUN}-o3"
+        assert wi.resolve_wandb_id(tmp_path, RUN) == f"{RUN}-o3"
+        assert FakeApi.runs[f"proj/{RUN}"].tags == [wi.OVERRIDDEN_TAG]
+        assert FakeApi.runs[f"proj/{RUN}-o2"].tags == [wi.OVERRIDDEN_TAG]
+
+    def test_unknown_error_keeps_id_and_warns(
+        self, tmp_path, fake_wandb, capsys, monkeypatch
+    ):
+        def boom(self, path):
+            raise ConnectionError("network down")
+
+        monkeypatch.setattr(FakeApi, "run", boom)
+        got = wi.ensure_fresh_wandb_id(tmp_path, RUN, "proj", None)
+        assert got == RUN
+        assert "[wandb]" in capsys.readouterr().out
+
+    def test_disabled_makes_no_api_call(self, tmp_path, fake_wandb, monkeypatch):
+        monkeypatch.setattr(wi, "wandb_enabled", lambda: False)
+        assert wi.ensure_fresh_wandb_id(tmp_path, RUN, "proj", None) == RUN
+        assert FakeApi.paths == []
+
+    def test_no_project_makes_no_api_call(self, tmp_path, fake_wandb):
+        assert wi.ensure_fresh_wandb_id(tmp_path, RUN, None, None) == RUN
+        assert FakeApi.paths == []
+
+
+class TestWandbIdForTraining:
+    def test_resume_keeps_current_id_without_api(self, tmp_path, fake_wandb):
+        FakeApi.runs[f"proj/{RUN}"] = FakeRun([])
+        got = wi.wandb_id_for_training(tmp_path, RUN, "proj", None, resuming=True)
+        assert got == RUN and FakeApi.paths == []
+
+    def test_fresh_start_rotates_past_existing_run(self, tmp_path, fake_wandb):
+        FakeApi.runs[f"proj/{RUN}"] = FakeRun([])
+        got = wi.wandb_id_for_training(tmp_path, RUN, "proj", None, resuming=False)
+        assert got == f"{RUN}-o2"

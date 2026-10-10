@@ -762,3 +762,55 @@ class TestRecordedWandbId:
         lodo._train_fold(cfg=_cfg(), inference_only=True, **_fold_args())
         assert fetched == [RUN_NAME]
         assert fake.init_calls[0]["id"] == RUN_NAME
+
+
+class TestTrainFoldFreshStartWandbId:
+    """A fresh start must not reuse a W&B run id that already exists."""
+
+    class _Stop(Exception):
+        pass
+
+    def _arrange(self, harness, monkeypatch, existing):
+        from types import SimpleNamespace
+
+        from src.training import wandb_identity as wi
+
+        fake, ckpt_dir, make_checkpoint = harness
+        monkeypatch.setattr(wi, "wandb_enabled", lambda: True)
+        monkeypatch.setattr(
+            lodo, "asymmetric_loader", lambda **kw: SimpleNamespace(dataset=[])
+        )
+
+        class Api:
+            def __init__(self, **kw):
+                pass
+
+            def run(self, path):
+                if path in existing:
+                    return SimpleNamespace(tags=[], update=lambda: None)
+                raise RuntimeError("not found")
+
+        fake.Api = Api
+        stop = self._Stop
+
+        def _init(**kwargs):
+            fake.init_calls.append(kwargs)
+            raise stop()
+
+        fake.init = _init
+        return fake, make_checkpoint
+
+    def test_fresh_start_with_existing_run_rotates(self, harness, monkeypatch):
+        fake, _ = self._arrange(harness, monkeypatch, {f"scratch/{RUN_NAME}"})
+        with pytest.raises(self._Stop):
+            lodo._train_fold(cfg=_cfg(), **_fold_args())
+        assert fake.init_calls[0]["id"] == f"{RUN_NAME}-o2"
+
+    def test_genuine_resume_keeps_current_id(self, harness, monkeypatch):
+        fake, make_checkpoint = self._arrange(
+            harness, monkeypatch, {f"scratch/{RUN_NAME}"}
+        )
+        make_checkpoint()
+        with pytest.raises(Exception):
+            lodo._train_fold(cfg=_cfg(), resume_training=True, **_fold_args())
+        assert fake.init_calls[0]["id"] == RUN_NAME

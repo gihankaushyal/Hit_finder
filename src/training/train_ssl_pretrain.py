@@ -43,7 +43,7 @@ from src.training.run_naming import (
     validate_run_name_prefix,
 )
 from src.training.train_supervised import _set_seeds
-from src.training.wandb_identity import override_hook_from_cfg, resolve_wandb_id
+from src.training.wandb_identity import override_hook_from_cfg, wandb_id_for_training
 from src.utils.config import load_config
 
 CHECKPOINT_DIR_DEFAULT = "checkpoints"
@@ -135,7 +135,13 @@ def run_pretrain(
         opt.load_state_dict(state["optimizer_state_dict"])
         start_epoch = state["epoch"] + 1
 
-    wandb_id = resolve_wandb_id(ckpt_dir, run_name)
+    wandb_id = wandb_id_for_training(
+        ckpt_dir,
+        run_name,
+        cfg["wandb"].get("project"),
+        cfg["wandb"].get("entity"),
+        resuming=resume and last_path.exists(),
+    )
     wandb.init(
         project=cfg["wandb"]["project"],
         entity=cfg["wandb"].get("entity"),

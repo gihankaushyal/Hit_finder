@@ -477,3 +477,75 @@ class TestPretrainWandbId:
             run_pretrain(cfg, {"s0": synthetic_cxi}, ["s0"], "mae-test-fold0", "cpu")
         assert exc.value.kwargs["id"] == "mae-test-fold0-o2"
         assert exc.value.kwargs["name"] == "mae-test-fold0"
+
+
+class _ExistingRunApi:
+    def __init__(self, existing, **kwargs):
+        self.existing = existing
+
+    def run(self, path):
+        if path in self.existing:
+            return type("R", (), {"tags": [], "update": lambda self: None})()
+        raise RuntimeError("not found")
+
+
+class TestPretrainFreshStartWandbId:
+    def _setup(self, tmp_path, monkeypatch, existing):
+        import wandb
+        from src.training import wandb_identity as wi
+
+        cfg = _tiny_cfg(tmp_path / "ckpt")
+        run_dir = Path(cfg["checkpoint_dir"]) / "mae-test-fold0"
+        run_dir.mkdir(parents=True)
+        monkeypatch.setattr(wi, "wandb_enabled", lambda: True)
+        monkeypatch.setattr(
+            wandb, "Api", lambda **kw: _ExistingRunApi(existing, **kw), raising=False
+        )
+
+        def _init(**kwargs):
+            raise _InitCalled(kwargs)
+
+        monkeypatch.setattr(wandb, "init", _init)
+        return cfg, run_dir
+
+    def test_fresh_start_with_existing_run_rotates(
+        self, synthetic_cxi, tmp_path, monkeypatch
+    ):
+        cfg, _ = self._setup(
+            tmp_path, monkeypatch, {"sfx-hitfinder-test/mae-test-fold0"}
+        )
+        with pytest.raises(_InitCalled) as exc:
+            run_pretrain(cfg, {"s0": synthetic_cxi}, ["s0"], "mae-test-fold0", "cpu")
+        assert exc.value.kwargs["id"] == "mae-test-fold0-o2"
+
+    def test_genuine_resume_keeps_current_id(
+        self, synthetic_cxi, tmp_path, monkeypatch
+    ):
+        cfg, run_dir = self._setup(
+            tmp_path, monkeypatch, {"sfx-hitfinder-test/mae-test-fold0"}
+        )
+        import torch
+
+        # a real last.pt makes resume genuine; produce one via a tiny model
+        from src.models.ssl import build_mae_model
+
+        model = build_mae_model(cfg)
+        opt = torch.optim.AdamW(model.parameters())
+        torch.save(
+            {
+                "epoch": 1,
+                "model_state_dict": model.state_dict(),
+                "optimizer_state_dict": opt.state_dict(),
+            },
+            run_dir / "last.pt",
+        )
+        with pytest.raises(_InitCalled) as exc:
+            run_pretrain(
+                cfg,
+                {"s0": synthetic_cxi},
+                ["s0"],
+                "mae-test-fold0",
+                "cpu",
+                resume=True,
+            )
+        assert exc.value.kwargs["id"] == "mae-test-fold0"
