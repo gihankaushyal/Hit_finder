@@ -120,3 +120,13 @@ class TestOverrideHook:
         hook = wi.override_hook_from_cfg({"wandb": {"project": "p", "entity": "e"}})
         assert (hook.project, hook.entity) == ("p", "e")
         assert wi.override_hook_from_cfg({}).project is None
+
+
+def test_plot_script_filters_the_same_tag():
+    from pathlib import Path
+
+    text = (
+        Path(__file__).resolve().parent.parent / "scripts" / "plot_hit_frac.py"
+    ).read_text()
+    assert f'OVERRIDDEN_TAG = "{wi.OVERRIDDEN_TAG}"' in text
+    assert "OVERRIDDEN_TAG not in" in text

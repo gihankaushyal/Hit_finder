@@ -90,7 +90,7 @@ for fold in "${FOLDS[@]}"; do
     if [[ -f "${CKPT_PATH}" ]]; then
         echo "Checkpoint already exists for fold ${fold}: ${CKPT_PATH}"
         while true; do
-            read -r -p "Type 'resume' to continue training, 'override' to discard and restart, or 'inference' to evaluate the existing best.pt only: " choice
+            read -r -p "Type 'resume' to continue training, 'override' to discard the checkpoint and restart under a new W&B run (the old run is kept, tagged overridden), or 'inference' to evaluate the existing best.pt only: " choice
             case "${choice}" in
                 resume) RESUME_FLAG="--resume-training"; break ;;
                 override) RESUME_FLAG="--override-training"; break ;;

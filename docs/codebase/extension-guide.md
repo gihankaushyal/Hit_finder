@@ -300,3 +300,23 @@ python -u -m src.training.train_ssl_finetune --config configs/ssl/mae_finetune.y
 ```
 
 The orchestrators (`submit_asymmetric_lodo_all.sh`, `submit_ssl_finetune_all.sh`) offer it as the `inference` answer when `best.pt` already exists.
+
+## W&B Run Ids After `--override-training` {#override-wandb-ids}
+
+Logging to an existing W&B run id with `step=epoch` after an override loses data (measured on
+wandb 0.27.0): a shorter second attempt is dropped entirely, a longer one loses its first
+epochs, and a deleted run's id can never be reused. So each override gets a new run id:
+
+| Attempt | W&B id | Display name |
+|---|---|---|
+| first (and every legacy run) | `<run_name>` | `<run_name>` |
+| after one override | `<run_name>-o2` | `<run_name>` |
+| after two overrides | `<run_name>-o3` | `<run_name>` |
+
+The live id is stored in `checkpoints/<run_name>/wandb_id.txt` (absent = id equals the run
+name). `src/training/wandb_identity.py` owns it: `check_checkpoint_collisions` calls an
+`OverrideHook` before deleting anything; the hook rotates the id and tags the previous run
+`overridden` (kept, not deleted). Resume, `--inference-only` and the completeness check all
+read the file through `resolve_wandb_id`. Several W&B runs can share one display name, so
+tools should filter on the `overridden` tag (`scripts/plot_hit_frac.py` does) or read the
+file; never group by name alone.

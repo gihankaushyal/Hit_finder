@@ -14,11 +14,17 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import wandb
 
+OVERRIDDEN_TAG = "overridden"  # keep equal to src/training/wandb_identity.py
+
 
 def main(name_prefix: str, project: str, entity: str | None, out: Path) -> None:
     api = wandb.Api()
     path = f"{entity}/{project}" if entity else project
-    runs = [r for r in api.runs(path) if r.name.startswith(f"{name_prefix}-fold")]
+    runs = [
+        r
+        for r in api.runs(path)
+        if r.name.startswith(f"{name_prefix}-fold") and OVERRIDDEN_TAG not in r.tags
+    ]
     if not runs:
         raise SystemExit(
             f"No runs found with name prefix '{name_prefix}-fold' in {path}"

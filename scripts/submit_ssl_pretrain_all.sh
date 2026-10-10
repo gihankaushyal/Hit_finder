@@ -109,7 +109,7 @@ for fold in "${FOLDS[@]}"; do
     if [[ -f "${CKPT_PATH}" ]]; then
         echo "Checkpoint already exists for fold ${fold}: ${CKPT_PATH}"
         while true; do
-            if ! read -r -p "Type 'resume' to continue training, or 'override' to discard and restart: " choice; then
+            if ! read -r -p "Type 'resume' to continue training, or 'override' to discard the checkpoint and restart under a new W&B run (the old run is kept, tagged overridden): " choice; then
                 echo "No answer read — nothing submitted." >&2
                 exit 1
             fi

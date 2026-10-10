@@ -165,7 +165,7 @@ resolve_resume_flag() {
     if [[ -f "${ckpt}" ]]; then
         echo "Checkpoint already exists for ${label}: ${ckpt}"
         while true; do
-            if ! read -r -p "Type 'resume' to continue training, 'override' to discard and restart, or 'inference' to evaluate the existing best.pt only: " choice; then
+            if ! read -r -p "Type 'resume' to continue training, 'override' to discard the checkpoint and restart under a new W&B run (the old run is kept, tagged overridden), or 'inference' to evaluate the existing best.pt only: " choice; then
                 echo "No answer read — nothing submitted." >&2
                 exit 1
             fi
