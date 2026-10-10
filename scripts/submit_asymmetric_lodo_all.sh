@@ -16,7 +16,8 @@
 # e.g. resnet18-asymmetric-v2. See src/training/train_asymmetric.py's module
 # docstring for the full rationale. Before submitting each fold, this script
 # checks checkpoints/<prefix>-fold<N>-seed<S>/best.pt; if it already exists it
-# prompts interactively — type "resume" or "override" — since this script runs
+# prompts interactively — type "resume", "override" or "inference" (evaluate the
+# existing best.pt only) — since this script runs
 # directly in your terminal (unlike the SLURM batch jobs it submits, which have
 # no tty and cannot prompt).
 #
@@ -89,11 +90,12 @@ for fold in "${FOLDS[@]}"; do
     if [[ -f "${CKPT_PATH}" ]]; then
         echo "Checkpoint already exists for fold ${fold}: ${CKPT_PATH}"
         while true; do
-            read -r -p "Type 'resume' to continue training, or 'override' to discard and restart: " choice
+            read -r -p "Type 'resume' to continue training, 'override' to discard and restart, or 'inference' to evaluate the existing best.pt only: " choice
             case "${choice}" in
                 resume) RESUME_FLAG="--resume-training"; break ;;
                 override) RESUME_FLAG="--override-training"; break ;;
-                *) echo "Please type exactly 'resume' or 'override'." ;;
+                inference) RESUME_FLAG="--inference-only"; break ;;
+                *) echo "Please type exactly 'resume', 'override' or 'inference'." ;;
             esac
         done
     fi

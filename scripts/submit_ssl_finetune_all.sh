@@ -15,11 +15,13 @@
 # Run naming convention (--run-name-prefix, REQUIRED): <backbone>-mae-v<N>
 # e.g. vits16-mae-v2, expanded to <backbone>-mae-finetune-v<N> and
 # <backbone>-mae-probe-v<N>. --pretrain-run-prefix (REQUIRED) names the pretrain
-# run whose checkpoints are loaded, e.g. mae-vits16-v2; every requested fold
-# must already have checkpoints/<pretrain-prefix>-fold<N>-seed<S>/last.pt or
-# nothing is submitted. For every requested fold this script checks the
+# run whose checkpoints are loaded, e.g. mae-vits16-v2; every fold that will
+# train must already have checkpoints/<pretrain-prefix>-fold<N>-seed<S>/last.pt
+# or nothing is submitted (folds answered `inference` need no pretrain
+# checkpoint). For every requested fold this script checks the
 # fine-tune and the probe best.pt; where one already exists it prompts
-# interactively — type "resume" or "override" — since this script runs directly
+# interactively — type "resume", "override" or "inference" (evaluate the
+# existing best.pt only) — since this script runs directly
 # in your terminal (unlike the SLURM batch jobs it submits, which have no tty
 # and cannot prompt). All questions are asked first, before anything is
 # submitted, so Ctrl-C or EOF at a prompt queues nothing.
@@ -130,21 +132,6 @@ PREFIX_VERSION="${RUN_NAME_PREFIX##*-v}"
 FINETUNE_PREFIX="${PREFIX_BASE}-finetune-v${PREFIX_VERSION}"
 PROBE_PREFIX="${PREFIX_BASE}-probe-v${PREFIX_VERSION}"
 
-# Preflight: every requested fold needs its pretrain checkpoint. Checked for all
-# folds before anything is submitted, so a gap never leaves a half-built chain.
-MISSING=0
-for fold in "${FOLDS[@]}"; do
-    PRETRAIN_CKPT="checkpoints/${PRETRAIN_RUN_PREFIX}-fold${fold}-seed${SEED}/last.pt"
-    if [[ ! -f "${PRETRAIN_CKPT}" ]]; then
-        echo "Error: pretrain checkpoint not found for fold ${fold}: ${PRETRAIN_CKPT}" >&2
-        MISSING=$(( MISSING + 1 ))
-    fi
-done
-if [ "${MISSING}" -gt 0 ]; then
-    echo "Nothing submitted: ${MISSING} fold(s) have no pretrain checkpoint under '${PRETRAIN_RUN_PREFIX}'." >&2
-    exit 1
-fi
-
 # Interactive resume/override prompt — only possible here (a terminal); the
 # SLURM batch jobs this submits have no tty and cannot prompt. Sets RESUME_FLAG.
 resolve_resume_flag() {
@@ -153,14 +140,15 @@ resolve_resume_flag() {
     if [[ -f "${ckpt}" ]]; then
         echo "Checkpoint already exists for ${label}: ${ckpt}"
         while true; do
-            if ! read -r -p "Type 'resume' to continue training, or 'override' to discard and restart: " choice; then
+            if ! read -r -p "Type 'resume' to continue training, 'override' to discard and restart, or 'inference' to evaluate the existing best.pt only: " choice; then
                 echo "No answer read — nothing submitted." >&2
                 exit 1
             fi
             case "${choice}" in
                 resume) RESUME_FLAG="--resume-training"; break ;;
                 override) RESUME_FLAG="--override-training"; break ;;
-                *) echo "Please type exactly 'resume' or 'override'." ;;
+                inference) RESUME_FLAG="--inference-only"; break ;;
+                *) echo "Please type exactly 'resume', 'override' or 'inference'." ;;
             esac
         done
     fi
@@ -183,6 +171,31 @@ for fold in "${FOLDS[@]}"; do
         PROBE_FLAGS[${fold}]="${RESUME_FLAG}"
     fi
 done
+
+# Preflight: every fold that will train needs its pretrain checkpoint. Folds whose
+# answers are all 'inference' only evaluate an existing best.pt and need none (the
+# pretrain run may be archived). Checked for all folds before anything is
+# submitted, so a gap never leaves a half-built chain.
+MISSING=0
+for fold in "${FOLDS[@]}"; do
+    needs_pretrain=false
+    if $RUN_FINETUNE && [[ "${FINETUNE_FLAGS[${fold}]}" != "--inference-only" ]]; then
+        needs_pretrain=true
+    fi
+    if $RUN_PROBE && [[ "${PROBE_FLAGS[${fold}]}" != "--inference-only" ]]; then
+        needs_pretrain=true
+    fi
+    $needs_pretrain || continue
+    PRETRAIN_CKPT="checkpoints/${PRETRAIN_RUN_PREFIX}-fold${fold}-seed${SEED}/last.pt"
+    if [[ ! -f "${PRETRAIN_CKPT}" ]]; then
+        echo "Error: pretrain checkpoint not found for fold ${fold}: ${PRETRAIN_CKPT}" >&2
+        MISSING=$(( MISSING + 1 ))
+    fi
+done
+if [ "${MISSING}" -gt 0 ]; then
+    echo "Nothing submitted: ${MISSING} fold(s) have no pretrain checkpoint under '${PRETRAIN_RUN_PREFIX}'." >&2
+    exit 1
+fi
 
 # Pass 2: submit.
 PREV_DEP=""
