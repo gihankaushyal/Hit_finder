@@ -6,7 +6,10 @@
 # headroom. Results land in docs/figures/crop_shortcut/ as JSON.
 #
 # Usage:
-#   sbatch scripts/submit_crop_shortcut_diag.sh [max_frames]
+#   sbatch scripts/submit_crop_shortcut_diag.sh [max_frames] [run_version]
+#
+#   run_version  pipeline generation of the Stage B runs to inspect (default v2), i.e.
+#                checkpoints/vits16-mae-{finetune,probe}-<run_version>-fold<N>-seed42/best.pt
 #SBATCH --job-name=sfx-crop-diag
 #SBATCH -p general
 #SBATCH -q grp_cxfel
@@ -24,6 +27,7 @@ set -euo pipefail
 # Held-out detectors are hit-dominated, so a large pool is needed before enough
 # peak-free frames accumulate to form the condition-A/B negative set.
 MAX_FRAMES="${1:-1200}"
+RUN_VERSION="${2:-v2}"
 OUT_DIR="docs/figures/crop_shortcut"
 
 module load mamba/latest
@@ -32,7 +36,7 @@ mkdir -p logs "${OUT_DIR}"
 
 for FOLD in 1 2 3 4; do
     for ARM in finetune probe; do
-        CKPT="checkpoints/vits16-mae-${ARM}-fold${FOLD}-seed42-v2/best.pt"
+        CKPT="checkpoints/vits16-mae-${ARM}-${RUN_VERSION}-fold${FOLD}-seed42/best.pt"
         if [ ! -f "${CKPT}" ]; then
             echo "[skip] fold ${FOLD} ${ARM}: no checkpoint at ${CKPT}"
             continue

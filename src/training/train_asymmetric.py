@@ -34,7 +34,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import re
 from pathlib import Path
 
 import numpy as np
@@ -49,23 +48,15 @@ from src.evaluation.benchmark import (
 )
 from src.hitfinders import get_hitfinder
 from src.training.lodo import _build_intra_split, _train_fold, build_sessions
+from src.training.run_naming import (
+    ASYMMETRIC_CONVENTION,
+    ASYMMETRIC_EXAMPLE,
+    ASYMMETRIC_PREFIX_RE,
+    check_checkpoint_collisions,
+    fold_run_name,
+    validate_run_name_prefix,
+)
 from src.utils.config import load_config
-
-_RUN_NAME_PREFIX_RE = re.compile(r"^[a-z0-9]+-asymmetric-v\d+$")
-
-
-def _validate_run_name_prefix(prefix: str) -> None:
-    if not _RUN_NAME_PREFIX_RE.match(prefix):
-        raise SystemExit(
-            f"Invalid --run-name-prefix: {prefix!r}\n\n"
-            "Run names must follow the convention:\n\n"
-            "    <backbone>-asymmetric-v<N>\n\n"
-            "<N> identifies the pipeline generation that produced this run, incremented\n"
-            "whenever the preprocessing/pipeline changes in a way that invalidates a direct\n"
-            "numeric comparison with the previous generation (e.g. v1 = pre-frame-cache,\n"
-            "v2 = frame-cache-backed).\n\n"
-            "Example: --run-name-prefix resnet18-asymmetric-v2"
-        )
 
 
 def _check_checkpoint_collisions(
@@ -75,24 +66,17 @@ def _check_checkpoint_collisions(
     resume_training: bool,
     override_training: bool,
 ) -> None:
-    seed = cfg["seed"]
     run_suffix = cfg.get("wandb", {}).get("run_suffix", "")
-    for fold_id in fold_ids:
-        run_name = f"{run_name_prefix}-fold{fold_id}-seed{seed}{run_suffix}"
-        ckpt_path = Path("checkpoints") / run_name / "best.pt"
-        if not ckpt_path.exists():
-            continue
-        if override_training:
-            ckpt_path.unlink()
-            results_path = ckpt_path.parent / "results.json"
-            if results_path.exists():
-                results_path.unlink()
-        elif not resume_training:
-            raise SystemExit(
-                f"Checkpoint already exists for fold {fold_id}: {ckpt_path}\n\n"
-                "Re-run with --resume-training to continue training from it, or "
-                f"--override-training to discard it and start fold {fold_id} from scratch."
-            )
+    check_checkpoint_collisions(
+        {
+            fold_id: fold_run_name(run_name_prefix, fold_id, cfg["seed"], run_suffix)
+            for fold_id in fold_ids
+        },
+        "best.pt",
+        resume_training,
+        override_training,
+        extra_delete=("results.json",),
+    )
 
 
 def main(
@@ -108,7 +92,12 @@ def main(
     cache_nvme: str | None = None,
     no_cache: bool = False,
 ) -> None:
-    _validate_run_name_prefix(run_name_prefix)
+    validate_run_name_prefix(
+        run_name_prefix,
+        ASYMMETRIC_PREFIX_RE,
+        ASYMMETRIC_CONVENTION,
+        ASYMMETRIC_EXAMPLE,
+    )
     cfg = load_config(config_path)
     if tags is not None:
         cfg.setdefault("wandb", {})["tags"] = tags

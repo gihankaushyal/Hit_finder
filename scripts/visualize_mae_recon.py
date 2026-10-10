@@ -2,7 +2,7 @@
 
 Usage:
     python scripts/visualize_mae_recon.py \
-        --checkpoint checkpoints/mae-vits16-fold1-seed42/last.pt \
+        --checkpoint checkpoints/mae-vits16-v2-fold1-seed42/last.pt \
         --config configs/ssl/mae_pretrain.yaml --fold 1 \
         --n-samples 8 --out docs/figures/mae_recon/fold1.png
 """
