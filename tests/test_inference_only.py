@@ -96,3 +96,180 @@ class TestWandbEnabled:
         else:
             monkeypatch.setenv("WANDB_MODE", mode)
         assert wandb_enabled() is True
+
+
+RUN_PREFIX = "resnet18-asymmetric-v2"
+RUN_NAME = f"{RUN_PREFIX}-fold1-seed42"
+
+
+class _FakeRun:
+    def __init__(self) -> None:
+        self.summary: dict = {}
+
+
+class _FakeWandb:
+    """Records calls; `init` returns a run whose `summary` is a plain dict."""
+
+    def __init__(self) -> None:
+        self.run = _FakeRun()
+        self.init_calls: list[dict] = []
+        self.logged: list = []
+        self.finished = False
+
+    def init(self, **kwargs):
+        self.init_calls.append(kwargs)
+        return self.run
+
+    def define_metric(self, *args, **kwargs) -> None:
+        pass
+
+    def log(self, *args, **kwargs) -> None:
+        self.logged.append((args, kwargs))
+
+    def finish(self) -> None:
+        self.finished = True
+
+
+def _cfg() -> dict:
+    return {
+        "seed": 42,
+        "model": {"backbone": "resnet18", "pretrained": False, "num_classes": 2},
+        "training": {"batch_size": 2, "num_workers": 0, "epochs": 1},
+        "lodo": {},
+        "hitfinder": {"backend": "mock"},
+        "wandb": {"project": "scratch"},
+    }
+
+
+def _fold_args() -> dict:
+    return dict(
+        fold={"fold_id": 1, "test_detector": "AGIPD"},
+        split_artifact={
+            "splits": {
+                "s_train": SPLIT_TRAIN,
+                "s_val": SPLIT_VAL,
+                "s_in": SPLIT_IN_DOMAIN_TEST,
+                "s_cross": SPLIT_CROSS_DETECTOR,
+            }
+        },
+        session_map={},
+        hitfinder=None,
+        device="cpu",
+        run_name_prefix=RUN_PREFIX,
+    )
+
+
+@pytest.fixture
+def harness(tmp_path, monkeypatch):
+    """chdir to a temp dir, fake wandb, make building the training loader fatal."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("WANDB_MODE", raising=False)
+    fake = _FakeWandb()
+    monkeypatch.setitem(sys.modules, "wandb", fake)
+
+    def _no_training_loader(**kwargs):
+        raise AssertionError("the training loader must not be built")
+
+    monkeypatch.setattr(lodo, "asymmetric_loader", _no_training_loader)
+    monkeypatch.setattr(lodo, "build_supervised_model", lambda **kw: nn.Linear(4, 2))
+    monkeypatch.setattr(lodo, "run_patch_agg", lambda *a, **kw: dict(METRICS))
+    ckpt_dir = tmp_path / "checkpoints" / RUN_NAME
+
+    def make_checkpoint(backbone: str = "resnet18", results: str | None = None):
+        ckpt_dir.mkdir(parents=True)
+        torch.save(
+            {
+                "epoch": 7,
+                "model_state_dict": nn.Linear(4, 2).state_dict(),
+                "val_f1": 0.61,
+                "inference_threshold": 0.4,
+                "backbone": backbone,
+                "num_classes": 2,
+            },
+            ckpt_dir / "best.pt",
+        )
+        if results is not None:
+            (ckpt_dir / RESULTS_NAME).write_text(results)
+
+    return fake, ckpt_dir, make_checkpoint
+
+
+class TestTrainFoldInferenceOnly:
+    def test_skips_the_training_loader_and_writes_results_json_when_absent(
+        self, harness
+    ):
+        fake, ckpt_dir, make_checkpoint = harness
+        make_checkpoint()
+        result = lodo._train_fold(cfg=_cfg(), inference_only=True, **_fold_args())
+        data = json.loads((ckpt_dir / RESULTS_NAME).read_text())
+        assert data["fold_id"] == 1
+        assert data["inference_threshold"] == 0.4
+        assert data["cross"]["ap"] == 0.9
+        assert data["in_domain"]["f1"] == 0.8
+        assert "inference" not in data
+        assert not (ckpt_dir / INFERENCE_RESULTS_NAME).exists()
+        assert result["ap"] == 0.9
+
+    def test_keeps_an_existing_results_json_and_writes_the_side_file(self, harness):
+        fake, ckpt_dir, make_checkpoint = harness
+        original = '{"fold_id": 1, "cross": {"ap": 0.123}}'
+        make_checkpoint(results=original)
+        lodo._train_fold(cfg=_cfg(), inference_only=True, **_fold_args())
+        assert (ckpt_dir / RESULTS_NAME).read_text() == original
+        side = json.loads((ckpt_dir / INFERENCE_RESULTS_NAME).read_text())
+        assert side["cross"]["ap"] == 0.9
+        assert side["inference"]["aggregation"] == "vote"
+        assert side["inference"]["checkpoint_epoch"] == 7
+
+    def test_a_second_inference_overwrites_only_the_side_file(self, harness):
+        fake, ckpt_dir, make_checkpoint = harness
+        make_checkpoint(results="{}")
+        lodo._train_fold(cfg=_cfg(), inference_only=True, **_fold_args())
+        first = (ckpt_dir / INFERENCE_RESULTS_NAME).read_text()
+        lodo._train_fold(cfg=_cfg(), inference_only=True, **_fold_args())
+        assert (ckpt_dir / INFERENCE_RESULTS_NAME).exists()
+        assert (ckpt_dir / RESULTS_NAME).read_text() == "{}"
+        assert json.loads(first)["cross"]["ap"] == 0.9
+
+    def test_writes_summary_keys_and_logs_no_training_metrics(self, harness):
+        fake, ckpt_dir, make_checkpoint = harness
+        make_checkpoint()
+        lodo._train_fold(cfg=_cfg(), inference_only=True, **_fold_args())
+        assert len(fake.init_calls) == 1
+        init = fake.init_calls[0]
+        assert init["id"] == RUN_NAME and init["name"] == RUN_NAME
+        assert init["resume"] == "allow"
+        assert "config" not in init  # never rewrite the closed run's config
+        assert fake.run.summary["inference/cross/ap"] == 0.9
+        assert fake.run.summary["inference/in_domain/auc"] == 0.95
+        assert fake.logged == []
+        assert fake.finished is True
+
+    @pytest.mark.parametrize("mode", ["disabled", "offline"])
+    def test_sends_nothing_when_wandb_is_off(self, harness, monkeypatch, mode):
+        fake, ckpt_dir, make_checkpoint = harness
+        monkeypatch.setenv("WANDB_MODE", mode)
+        make_checkpoint()
+        lodo._train_fold(cfg=_cfg(), inference_only=True, **_fold_args())
+        assert fake.init_calls == []
+        assert (ckpt_dir / RESULTS_NAME).exists()
+
+    def test_backbone_mismatch_is_still_rejected(self, harness):
+        fake, ckpt_dir, make_checkpoint = harness
+        make_checkpoint(backbone="resnet50")
+        with pytest.raises(RuntimeError, match="backbone"):
+            lodo._train_fold(cfg=_cfg(), inference_only=True, **_fold_args())
+
+    def test_missing_checkpoint_raises_and_creates_nothing(self, harness, tmp_path):
+        fake, ckpt_dir, make_checkpoint = harness
+        with pytest.raises(FileNotFoundError, match="best.pt"):
+            lodo._train_fold(cfg=_cfg(), inference_only=True, **_fold_args())
+        assert not ckpt_dir.exists()
+
+
+class TestTrainFoldRefusesSilentRetraining:
+    def test_existing_checkpoint_without_a_mode_is_refused(self, harness):
+        fake, ckpt_dir, make_checkpoint = harness
+        make_checkpoint()
+        with pytest.raises(RuntimeError, match="resume_training or inference_only"):
+            lodo._train_fold(cfg=_cfg(), **_fold_args())

@@ -28,6 +28,14 @@ from src.evaluation.benchmark import (
 )
 from src.hitfinders.base import Hitfinder
 from src.models.supervised import build_supervised_model
+from src.training.inference_results import (
+    INFERENCE_RESULTS_NAME,
+    RESULTS_NAME,
+    inference_block,
+    inference_result_path,
+    summary_updates,
+    wandb_enabled,
+)
 from src.training.train_supervised import _set_seeds, train_one_epoch
 
 
@@ -93,6 +101,7 @@ def _train_fold(
     run_name_prefix: str | None = None,
     extra_results: dict | None = None,
     frame_cache: FrameCache | None = None,
+    inference_only: bool = False,
 ) -> dict:
     """Train one LODO fold and return metrics.
 
@@ -105,6 +114,11 @@ def _train_fold(
     `frame_cache`: optional two-tier FrameCache. When supplied, its manifest is
       verified against `cfg` before any training starts, and it is forwarded to
       the training loader and to every run_patch_agg call.
+    `inference_only`: evaluate an existing best.pt on the in-domain and
+      cross-detector sets without training. The training loader, optimizer and
+      epoch loop are never built; W&B (when enabled) only receives run-summary
+      entries under `inference/`; the result goes to results.json if the run
+      has none, else to results.inference.json (see inference_results.py).
     """
     import wandb
 
@@ -131,21 +145,40 @@ def _train_fold(
     hard_neg_max_attempts = cfg.get("asymmetric", {}).get("hard_neg_max_attempts", 50)
     crops_per_frame = cfg.get("asymmetric", {}).get("crops_per_frame", 1)
 
-    train_ids = [sid for sid, s in split_artifact["splits"].items() if s == SPLIT_TRAIN]
+    ckpt_dir = Path("checkpoints") / run_name
+    ckpt_path = ckpt_dir / "best.pt"
+    if inference_only:
+        if not ckpt_path.exists():
+            raise FileNotFoundError(
+                f"--inference-only needs an existing checkpoint: {ckpt_path}"
+            )
+    else:
+        ckpt_dir.mkdir(parents=True, exist_ok=True)
+        if ckpt_path.exists() and not resume_training:
+            raise RuntimeError(
+                f"{ckpt_path} already exists: pass resume_training or inference_only "
+                "(the entry points gate this before calling _train_fold)."
+            )
+    resume_training_from_ckpt = ckpt_path.exists() and resume_training
 
-    train_dl = asymmetric_loader(
-        session_map=session_map,
-        session_ids=train_ids,
-        hitfinder=hitfinder,
-        batch_size=batch_size,
-        num_workers=num_workers,
-        shuffle=True,
-        label_key=label_key,
-        frame_cache=frame_cache,
-        hit_frac=hit_frac,
-        hard_neg_max_attempts=hard_neg_max_attempts,
-        crops_per_frame=crops_per_frame,
-    )
+    train_dl = None
+    if not inference_only:
+        train_ids = [
+            sid for sid, s in split_artifact["splits"].items() if s == SPLIT_TRAIN
+        ]
+        train_dl = asymmetric_loader(
+            session_map=session_map,
+            session_ids=train_ids,
+            hitfinder=hitfinder,
+            batch_size=batch_size,
+            num_workers=num_workers,
+            shuffle=True,
+            label_key=label_key,
+            frame_cache=frame_cache,
+            hit_frac=hit_frac,
+            hard_neg_max_attempts=hard_neg_max_attempts,
+            crops_per_frame=crops_per_frame,
+        )
 
     bench_cfg = cfg.get("benchmark", {})
     patch_stride = bench_cfg.get("patch_stride", 224)
@@ -160,8 +193,15 @@ def _train_fold(
         sid for sid, s in split_artifact["splits"].items() if s == SPLIT_CROSS_DETECTOR
     ]
 
-    n_train_frames = len(train_dl.dataset)
-    n_train = n_train_frames * crops_per_frame
+    if inference_only:
+        train_desc = "train=skipped (inference only)"
+    else:
+        n_train_frames = len(train_dl.dataset)
+        n_train = n_train_frames * crops_per_frame
+        train_desc = (
+            f"train={n_train} crops ({n_train_frames} frames x {crops_per_frame} "
+            "crops/frame)"
+        )
     n_val = len(val_ids)
     n_indomain = len(in_domain_ids)
     n_cross = len(cross_ids)
@@ -169,7 +209,7 @@ def _train_fold(
     print(
         f"\n{'='*60}\n"
         f"Fold {fold_id}  |  held-out: {fold['test_detector']}\n"
-        f"  train={n_train} crops ({n_train_frames} frames x {crops_per_frame} crops/frame)  "
+        f"  {train_desc}  "
         f"val={n_val} sessions  in_domain_test={n_indomain} sessions  cross={n_cross} sessions\n"
         f"{'='*60}"
     )
@@ -184,32 +224,35 @@ def _train_fold(
             num_classes=cfg["model"]["num_classes"],
         ).to(device)
 
-    ckpt_dir = Path("checkpoints") / run_name
-    ckpt_dir.mkdir(parents=True, exist_ok=True)
-
-    ckpt_path = ckpt_dir / "best.pt"
-    resume_eval_only = ckpt_path.exists() and not resume_training
-    resume_training_from_ckpt = ckpt_path.exists() and resume_training
-
-    wandb.init(
-        project=cfg["wandb"]["project"],
-        entity=cfg["wandb"].get("entity"),
-        id=run_name,
-        name=run_name,
-        config={**cfg, "fold_id": fold_id, "test_detector": fold["test_detector"]},
-        tags=cfg["wandb"].get("tags", []),
-        resume="allow",
-    )
-    wandb.define_metric("epoch")
-    wandb.define_metric("train/*", step_metric="epoch")
-    wandb.define_metric("val/*", step_metric="epoch")
-
-    wandb.log({"hitfinder/backend": cfg["hitfinder"]["backend"]})
-
-    if resume_eval_only:
-        print(
-            f"  Checkpoint found at {ckpt_path} — skipping training, resuming from evaluation."
+    run = None
+    if inference_only:
+        # No config/tags: resuming a closed-out run must not rewrite its config.
+        if wandb_enabled():
+            run = wandb.init(
+                project=cfg["wandb"]["project"],
+                entity=cfg["wandb"].get("entity"),
+                id=run_name,
+                name=run_name,
+                resume="allow",
+            )
+    else:
+        wandb.init(
+            project=cfg["wandb"]["project"],
+            entity=cfg["wandb"].get("entity"),
+            id=run_name,
+            name=run_name,
+            config={**cfg, "fold_id": fold_id, "test_detector": fold["test_detector"]},
+            tags=cfg["wandb"].get("tags", []),
+            resume="allow",
         )
+        wandb.define_metric("epoch")
+        wandb.define_metric("train/*", step_metric="epoch")
+        wandb.define_metric("val/*", step_metric="epoch")
+
+        wandb.log({"hitfinder/backend": cfg["hitfinder"]["backend"]})
+
+    if inference_only:
+        print(f"  --inference-only: evaluating {ckpt_path}; no training.")
     else:
         optimizer = torch.optim.AdamW(
             model.parameters(),
@@ -384,18 +427,26 @@ def _train_fold(
         f"  Cross-detector:    AP={cross_m['ap']:.4f}  AUC={cross_m['auc_roc']:.4f}  F1={cross_m['f1']:.4f}"
     )
 
-    wandb.log(
-        {
-            "in_domain/ap": in_domain_m["ap"],
-            "in_domain/auc": in_domain_m["auc_roc"],
-            "in_domain/f1": in_domain_m["f1"],
-            "cross/ap": cross_m["ap"],
-            "cross/auc": cross_m["auc_roc"],
-            "cross/f1": cross_m["f1"],
-            "inference_threshold": inference_threshold,
-        }
-    )
-    wandb.finish()
+    if inference_only:
+        if run is not None:
+            for key, value in summary_updates(
+                in_domain_m, cross_m, inference_threshold
+            ).items():
+                run.summary[key] = value
+            wandb.finish()
+    else:
+        wandb.log(
+            {
+                "in_domain/ap": in_domain_m["ap"],
+                "in_domain/auc": in_domain_m["auc_roc"],
+                "in_domain/f1": in_domain_m["f1"],
+                "cross/ap": cross_m["ap"],
+                "cross/auc": cross_m["auc_roc"],
+                "cross/f1": cross_m["f1"],
+                "inference_threshold": inference_threshold,
+            }
+        )
+        wandb.finish()
 
     result: dict = {
         "fold_id": fold_id,
@@ -415,7 +466,17 @@ def _train_fold(
         },
     }
     result.update(extra_results or {})
-    results_path = ckpt_dir / "results.json"
+    if inference_only:
+        results_path = inference_result_path(ckpt_dir)
+        if results_path.name == INFERENCE_RESULTS_NAME:
+            result["inference"] = inference_block(
+                aggregation=aggregation,
+                patch_stride=patch_stride,
+                min_hit_patches=min_hit_patches,
+                checkpoint=ckpt,
+            )
+    else:
+        results_path = ckpt_dir / RESULTS_NAME
     with open(results_path, "w") as f:
         json.dump(result, f, indent=2)
     print(f"  Results saved → {results_path}")
