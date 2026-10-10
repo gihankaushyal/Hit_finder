@@ -9,7 +9,8 @@ Run naming convention (--run-name-prefix, REQUIRED, no default):
     and the checkpoint directory (checkpoints/mae-vits16-v2-fold{N}-seed{S}/).
     If last.pt already exists under the resolved name, the script exits and
     asks for --resume-training (continue) or --override-training (discard
-    last.pt and the epoch*.pt snapshots, then restart).
+    last.pt and the epoch*.pt snapshots, then restart; the old W&B run is kept and
+    tagged 'overridden', the restart logs to <run_name>-o<N>).
 
 Usage:
     python -m src.training.train_ssl_pretrain --config configs/ssl/mae_pretrain.yaml \
@@ -42,6 +43,7 @@ from src.training.run_naming import (
     validate_run_name_prefix,
 )
 from src.training.train_supervised import _set_seeds
+from src.training.wandb_identity import override_hook_from_cfg, wandb_id_for_training
 from src.utils.config import load_config
 
 CHECKPOINT_DIR_DEFAULT = "checkpoints"
@@ -77,6 +79,7 @@ def prepare_pretrain_run(
         extra_delete=(EPOCH_SNAPSHOT_GLOB,),
         checkpoint_root=cfg.get("checkpoint_dir", CHECKPOINT_DIR_DEFAULT),
         dry_run=dry_run,
+        on_override=override_hook_from_cfg(cfg),
     )
     return run_name
 
@@ -132,10 +135,17 @@ def run_pretrain(
         opt.load_state_dict(state["optimizer_state_dict"])
         start_epoch = state["epoch"] + 1
 
+    wandb_id = wandb_id_for_training(
+        ckpt_dir,
+        run_name,
+        cfg["wandb"].get("project"),
+        cfg["wandb"].get("entity"),
+        resuming=resume and last_path.exists(),
+    )
     wandb.init(
         project=cfg["wandb"]["project"],
         entity=cfg["wandb"].get("entity"),
-        id=run_name,
+        id=wandb_id,
         name=run_name,
         config=cfg,
         tags=cfg["wandb"].get("tags", []),
@@ -251,7 +261,8 @@ def main() -> None:
         action="store_true",
         help=(
             "When last.pt exists for the resolved run name, discard it and the "
-            "epoch*.pt snapshots and start from scratch under the same run name."
+            "epoch*.pt snapshots and start from scratch under the same run name. The old W&B run is kept "
+            "and tagged 'overridden'; the restart logs to '<run_name>-o<N>'."
         ),
     )
     p.add_argument(

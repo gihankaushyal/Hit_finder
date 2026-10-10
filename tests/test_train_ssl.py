@@ -379,3 +379,173 @@ class TestOverrideIsDeferred:
         with pytest.raises(SystemExit) as exc:
             read_pretrain_epoch(path)
         assert str(path) in str(exc.value)
+
+
+class TestOverrideRotatesWandbId:
+    @staticmethod
+    def _patch_tag(monkeypatch):
+        tagged = []
+        monkeypatch.setattr(
+            "src.training.wandb_identity.tag_overridden",
+            lambda project, entity, run_id: tagged.append(run_id) or True,
+        )
+        return tagged
+
+    def test_pretrain_override_rotates_wandb_id(self, tmp_path, monkeypatch):
+        from src.training.train_ssl_pretrain import prepare_pretrain_run
+
+        tagged = self._patch_tag(monkeypatch)
+        cfg = _tiny_cfg(tmp_path / "ckpt")
+        cfg["wandb"] = {"project": "p"}
+        run_dir = Path(cfg["checkpoint_dir"]) / "mae-vits16-v2-fold1-seed42"
+        run_dir.mkdir(parents=True)
+        (run_dir / "last.pt").write_bytes(b"x")
+        prepare_pretrain_run("mae-vits16-v2", 1, cfg, override_training=True)
+        assert (run_dir / "wandb_id.txt").read_text().strip() == (
+            "mae-vits16-v2-fold1-seed42-o2"
+        )
+        assert tagged == ["mae-vits16-v2-fold1-seed42"]
+
+    def test_pretrain_dry_run_writes_no_id(self, tmp_path, monkeypatch):
+        from src.training.train_ssl_pretrain import prepare_pretrain_run
+
+        tagged = self._patch_tag(monkeypatch)
+        cfg = _tiny_cfg(tmp_path / "ckpt")
+        cfg["wandb"] = {"project": "p"}
+        run_dir = Path(cfg["checkpoint_dir"]) / "mae-vits16-v2-fold1-seed42"
+        run_dir.mkdir(parents=True)
+        (run_dir / "last.pt").write_bytes(b"x")
+        prepare_pretrain_run(
+            "mae-vits16-v2", 1, cfg, override_training=True, dry_run=True
+        )
+        assert not (run_dir / "wandb_id.txt").exists()
+        assert (run_dir / "last.pt").exists()
+        assert tagged == []
+
+    def test_finetune_override_rotates_wandb_id(self, tmp_path, monkeypatch):
+        from src.training.train_ssl_finetune import prepare_finetune_run
+
+        monkeypatch.chdir(tmp_path)
+        tagged = self._patch_tag(monkeypatch)
+        cfg = {"seed": 42, "wandb": {"project": "p"}}
+        name = "vits16-mae-finetune-v2-fold1-seed42"
+        run_dir = tmp_path / "checkpoints" / name
+        run_dir.mkdir(parents=True)
+        (run_dir / "best.pt").write_bytes(b"x")
+        prepare_finetune_run("vits16-mae-v2", 1, cfg, override_training=True)
+        assert (run_dir / "wandb_id.txt").read_text().strip() == f"{name}-o2"
+        assert tagged == [name]
+
+    def test_finetune_dry_run_writes_no_id(self, tmp_path, monkeypatch):
+        from src.training.train_ssl_finetune import prepare_finetune_run
+
+        monkeypatch.chdir(tmp_path)
+        tagged = self._patch_tag(monkeypatch)
+        cfg = {"seed": 42, "wandb": {"project": "p"}}
+        run_dir = tmp_path / "checkpoints" / "vits16-mae-finetune-v2-fold1-seed42"
+        run_dir.mkdir(parents=True)
+        (run_dir / "best.pt").write_bytes(b"x")
+        prepare_finetune_run(
+            "vits16-mae-v2", 1, cfg, override_training=True, dry_run=True
+        )
+        assert not (run_dir / "wandb_id.txt").exists()
+        assert tagged == []
+
+
+class _InitCalled(Exception):
+    def __init__(self, kwargs: dict) -> None:
+        super().__init__("wandb.init called")
+        self.kwargs = kwargs
+
+
+class TestPretrainWandbId:
+    def test_wandb_init_uses_the_recorded_id(
+        self, synthetic_cxi, tmp_path, monkeypatch
+    ):
+        import wandb
+
+        cfg = _tiny_cfg(tmp_path / "ckpt")
+        run_dir = Path(cfg["checkpoint_dir"]) / "mae-test-fold0"
+        run_dir.mkdir(parents=True)
+        (run_dir / "wandb_id.txt").write_text("mae-test-fold0-o2\n")
+
+        def _init(**kwargs):
+            raise _InitCalled(kwargs)
+
+        monkeypatch.setattr(wandb, "init", _init)
+        with pytest.raises(_InitCalled) as exc:
+            run_pretrain(cfg, {"s0": synthetic_cxi}, ["s0"], "mae-test-fold0", "cpu")
+        assert exc.value.kwargs["id"] == "mae-test-fold0-o2"
+        assert exc.value.kwargs["name"] == "mae-test-fold0"
+
+
+class _ExistingRunApi:
+    def __init__(self, existing, **kwargs):
+        self.existing = existing
+
+    def run(self, path):
+        if path in self.existing:
+            return type("R", (), {"tags": [], "update": lambda self: None})()
+        raise RuntimeError("not found")
+
+
+class TestPretrainFreshStartWandbId:
+    def _setup(self, tmp_path, monkeypatch, existing):
+        import wandb
+        from src.training import wandb_identity as wi
+
+        cfg = _tiny_cfg(tmp_path / "ckpt")
+        run_dir = Path(cfg["checkpoint_dir"]) / "mae-test-fold0"
+        run_dir.mkdir(parents=True)
+        monkeypatch.setattr(wi, "wandb_enabled", lambda: True)
+        monkeypatch.setattr(
+            wandb, "Api", lambda **kw: _ExistingRunApi(existing, **kw), raising=False
+        )
+
+        def _init(**kwargs):
+            raise _InitCalled(kwargs)
+
+        monkeypatch.setattr(wandb, "init", _init)
+        return cfg, run_dir
+
+    def test_fresh_start_with_existing_run_rotates(
+        self, synthetic_cxi, tmp_path, monkeypatch
+    ):
+        cfg, _ = self._setup(
+            tmp_path, monkeypatch, {"sfx-hitfinder-test/mae-test-fold0"}
+        )
+        with pytest.raises(_InitCalled) as exc:
+            run_pretrain(cfg, {"s0": synthetic_cxi}, ["s0"], "mae-test-fold0", "cpu")
+        assert exc.value.kwargs["id"] == "mae-test-fold0-o2"
+
+    def test_genuine_resume_keeps_current_id(
+        self, synthetic_cxi, tmp_path, monkeypatch
+    ):
+        cfg, run_dir = self._setup(
+            tmp_path, monkeypatch, {"sfx-hitfinder-test/mae-test-fold0"}
+        )
+        import torch
+
+        # a real last.pt makes resume genuine; produce one via a tiny model
+        from src.models.ssl import build_mae_model
+
+        model = build_mae_model(cfg)
+        opt = torch.optim.AdamW(model.parameters())
+        torch.save(
+            {
+                "epoch": 1,
+                "model_state_dict": model.state_dict(),
+                "optimizer_state_dict": opt.state_dict(),
+            },
+            run_dir / "last.pt",
+        )
+        with pytest.raises(_InitCalled) as exc:
+            run_pretrain(
+                cfg,
+                {"s0": synthetic_cxi},
+                ["s0"],
+                "mae-test-fold0",
+                "cpu",
+                resume=True,
+            )
+        assert exc.value.kwargs["id"] == "mae-test-fold0"

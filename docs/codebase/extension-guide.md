@@ -300,3 +300,43 @@ python -u -m src.training.train_ssl_finetune --config configs/ssl/mae_finetune.y
 ```
 
 The orchestrators (`submit_asymmetric_lodo_all.sh`, `submit_ssl_finetune_all.sh`) offer it as the `inference` answer when `best.pt` already exists.
+
+## W&B Run Ids After `--override-training` {#override-wandb-ids}
+
+Logging to an existing W&B run id with `step=epoch` after an override loses data (measured on
+wandb 0.27.0): a shorter second attempt is dropped entirely, a longer one loses its first
+epochs, and a deleted run's id can never be reused. So each override gets a new run id:
+
+| Attempt | W&B id | Display name |
+|---|---|---|
+| first (and every legacy run) | `<run_name>` | `<run_name>` |
+| after one override | `<run_name>-o2` | `<run_name>` |
+| after two overrides | `<run_name>-o3` | `<run_name>` |
+
+The live id is stored in `checkpoints/<run_name>/wandb_id.txt` (absent = id equals the run
+name). `src/training/wandb_identity.py` owns it: `check_checkpoint_collisions` calls an
+`OverrideHook` before deleting anything; the hook rotates the id and tags the previous run
+`overridden` (kept, not deleted). Resume, `--inference-only` and the completeness check all
+read the file through `resolve_wandb_id`. Several W&B runs can share one display name, so
+tools should filter on the `overridden` tag (`scripts/plot_hit_frac.py` does) or read the
+file; never group by name alone.
+
+Behaviour worth knowing:
+
+- **Failed delete rolls back.** The hook returns a rollback callable. If deleting the
+  checkpoint or its extras raises, `check_checkpoint_collisions` restores `wandb_id.txt`
+  (or removes it if it did not exist), best-effort removes the `overridden` tag from the old
+  run, and re-raises. The checkpoint is deleted last, so it survives for a rerun.
+- **Plots pick the highest attempt per name, tag or not.** `select_current_runs` drops
+  `overridden`-tagged runs, then keeps only the highest attempt (`<name>` = 1,
+  `<name>-oN` = N) among runs sharing a display name. Offline mode, where the old run cannot be
+  tagged, is therefore covered; `scripts/plot_hit_frac.py` uses it.
+- **A fresh start never reuses an existing W&B run id.** Before the training `wandb.init`,
+  `wandb_id_for_training` (Track 1 `_train_fold`, SSL pretrain) asks W&B whether the current id
+  exists; if so it tags that run `overridden` and rotates past it (e.g. after `rm -rf` of the
+  checkpoint dir, or a crash before `best.pt`). Genuine resumes and inference keep the current
+  id. If W&B cannot be queried, the current id is kept with a warning.
+- **Track 1 override is per fold.** `train_asymmetric` runs the gate once up front with
+  `dry_run=True` (fail fast, nothing deleted or rotated) and the real gate for each fold just
+  before that fold starts, so a crash on fold 1 leaves fold 2's checkpoint and id untouched.
+  `_train_fold` resolves the id after that real pass; keep that order.

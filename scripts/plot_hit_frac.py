@@ -9,16 +9,23 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import wandb
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from src.training.wandb_identity import select_current_runs  # noqa: E402
+
 
 def main(name_prefix: str, project: str, entity: str | None, out: Path) -> None:
     api = wandb.Api()
     path = f"{entity}/{project}" if entity else project
-    runs = [r for r in api.runs(path) if r.name.startswith(f"{name_prefix}-fold")]
+    runs = select_current_runs(
+        r for r in api.runs(path) if r.name.startswith(f"{name_prefix}-fold")
+    )
     if not runs:
         raise SystemExit(
             f"No runs found with name prefix '{name_prefix}-fold' in {path}"

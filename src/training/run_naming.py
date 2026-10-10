@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import Callable
 
 CHECKPOINT_ROOT = Path("checkpoints")
 
@@ -87,6 +88,7 @@ def check_checkpoint_collisions(
     checkpoint_root: str | Path = CHECKPOINT_ROOT,
     dry_run: bool = False,
     inference_only: bool = False,
+    on_override: Callable[[str, Path], Callable[[], None] | None] | None = None,
 ) -> None:
     """Gate on checkpoints that already exist under the resolved run names.
 
@@ -105,6 +107,10 @@ def check_checkpoint_collisions(
     deleted: an unresolved collision (or a missing inference checkpoint) still
     exits, so callers can fail early and defer the destructive part until just
     before training starts.
+
+    `on_override(run_name, run_dir)` is called for each run about to be
+    overridden, before anything is deleted, never in `dry_run`. It may return a rollback
+    callable, invoked (then the error re-raised) if a deletion fails.
     """
     if sum((resume_training, override_training, inference_only)) > 1:
         raise ValueError(
@@ -125,13 +131,19 @@ def check_checkpoint_collisions(
         if override_training:
             if dry_run:
                 continue
-            # Extras first, primary checkpoint last: if an extra fails to delete,
-            # the checkpoint survives so a rerun still sees the collision.
-            for pattern in extra_delete:
-                for stale in run_dir.glob(pattern):
-                    if stale.is_file() or stale.is_symlink():
-                        stale.unlink()
-            ckpt_path.unlink()
+            rollback = on_override(run_name, run_dir) if on_override else None
+            try:
+                # Extras first, primary checkpoint last: if an extra fails to
+                # delete, the checkpoint survives so a rerun still sees the collision.
+                for pattern in extra_delete:
+                    for stale in run_dir.glob(pattern):
+                        if stale.is_file() or stale.is_symlink():
+                            stale.unlink()
+                ckpt_path.unlink()
+            except BaseException:
+                if rollback is not None:
+                    rollback()
+                raise
         elif not resume_training and not inference_only:
             raise SystemExit(
                 f"Checkpoint already exists for fold {fold_id}: {ckpt_path}\n\n"

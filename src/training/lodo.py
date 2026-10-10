@@ -39,6 +39,7 @@ from src.training.inference_results import (
     wandb_enabled,
 )
 from src.training.train_supervised import _set_seeds, train_one_epoch
+from src.training.wandb_identity import resolve_wandb_id, wandb_id_for_training
 
 
 def _build_intra_split(sessions: list[dict]) -> dict:
@@ -90,7 +91,9 @@ def build_sessions(
     return sessions, session_map
 
 
-def _write_inference_summary(cfg: dict, run_name: str, updates: dict) -> None:
+def _write_inference_summary(
+    cfg: dict, run_name: str, updates: dict, wandb_id: str | None = None
+) -> None:
     """Record an inference pass in the closed-out W&B run's summary, if W&B is on.
 
     Runs after the result file is written, so a W&B failure can never lose the
@@ -107,7 +110,7 @@ def _write_inference_summary(cfg: dict, run_name: str, updates: dict) -> None:
         run = wandb.init(
             project=cfg["wandb"]["project"],
             entity=cfg["wandb"].get("entity"),
-            id=run_name,
+            id=wandb_id or run_name,
             name=run_name,
             resume="allow",
             settings=wandb.Settings(
@@ -184,6 +187,9 @@ def _train_fold(
     crops_per_frame = cfg.get("asymmetric", {}).get("crops_per_frame", 1)
 
     ckpt_dir = Path("checkpoints") / run_name
+    # Must run AFTER check_checkpoint_collisions' real (non-dry) pass, which may
+    # rotate wandb_id.txt; resolving earlier would log to the superseded run.
+    wandb_id = resolve_wandb_id(ckpt_dir, run_name)
     ckpt_path = ckpt_dir / "best.pt"
     if inference_only:
         if not ckpt_path.exists():
@@ -264,10 +270,17 @@ def _train_fold(
         ).to(device)
 
     if not inference_only:
+        wandb_id = wandb_id_for_training(
+            ckpt_dir,
+            run_name,
+            cfg["wandb"]["project"],
+            cfg["wandb"].get("entity"),
+            resuming=resume_training_from_ckpt,
+        )
         wandb.init(
             project=cfg["wandb"]["project"],
             entity=cfg["wandb"].get("entity"),
-            id=run_name,
+            id=wandb_id,
             name=run_name,
             config={**cfg, "fold_id": fold_id, "test_detector": fold["test_detector"]},
             tags=cfg["wandb"].get("tags", []),
@@ -425,7 +438,7 @@ def _train_fold(
             configured_epochs=epochs,
             checkpoint_epoch=ckpt.get("epoch"),
             history=fetch_wandb_history(
-                cfg["wandb"]["project"], cfg["wandb"].get("entity"), run_name
+                cfg["wandb"]["project"], cfg["wandb"].get("entity"), wandb_id
             ),
         )
         for warning in training_check["warnings"]:
@@ -521,6 +534,7 @@ def _train_fold(
             cfg,
             run_name,
             summary_updates(in_domain_m, cross_m, inference_threshold),
+            wandb_id=wandb_id,
         )
 
     return {
