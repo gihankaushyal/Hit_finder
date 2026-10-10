@@ -284,7 +284,8 @@ Add a hyperparameter variant for MAE pretraining (different mask ratio, patch si
 
 Evaluate an existing `best.pt` on its in-domain and cross-detector sets without training — for example to complete a run whose evaluation crashed, or to re-score with a changed `benchmark` setting. `--inference-only` is the third mode next to `--resume-training` and `--override-training` (mutually exclusive) and needs `best.pt` to exist. A plain rerun on a finished fold still exits.
 
-- If the run has no `results.json`, it is written (this completes the run). If one exists it is kept untouched and the new numbers go to `results.inference.json`, which records the aggregation, stride and checkpoint epoch. `scripts/aggregate_lodo_results.py` reads only `results.json`.
+- If the run has no `results.json`, it is written (this completes the run). If one exists it is kept untouched and the new numbers go to `results.inference.json`. Either way the file carries an `inference` block with the aggregation, stride, checkpoint epoch and a `training_check`. `scripts/aggregate_lodo_results.py` reads only `results.json`.
+- `training_check` tells you whether the run behind `best.pt` actually finished. It reads the run's W&B history read-only (the run is not resumed) and records the W&B state, the last logged epoch against the configured epochs, and whether the train loss had flattened (improved by less than 1% over the last 5 logged epochs). A run that did not finish prints `[inference] WARNING` lines first: `status: "incomplete"` means the numbers are provisional. If W&B is offline or unreachable the status is `unknown` and only the epoch counts are compared.
 - W&B (when enabled) gets run-summary entries under `inference/…` only; training curves are not touched.
 - MAE pretraining has no `best.pt` and no evaluation, so it has no inference mode.
 

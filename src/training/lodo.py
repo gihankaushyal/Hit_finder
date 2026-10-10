@@ -31,6 +31,8 @@ from src.models.supervised import build_supervised_model
 from src.training.inference_results import (
     INFERENCE_RESULTS_NAME,
     RESULTS_NAME,
+    assess_training,
+    fetch_wandb_history,
     inference_block,
     inference_result_path,
     summary_updates,
@@ -417,6 +419,18 @@ def _train_fold(
 
     model.load_state_dict(ckpt["model_state_dict"])
 
+    training_check = None
+    if inference_only:
+        training_check = assess_training(
+            configured_epochs=epochs,
+            checkpoint_epoch=ckpt.get("epoch"),
+            history=fetch_wandb_history(
+                cfg["wandb"]["project"], cfg["wandb"].get("entity"), run_name
+            ),
+        )
+        for warning in training_check["warnings"]:
+            print(f"  [inference] WARNING: {warning}")
+
     _saved_thresh = ckpt.get("inference_threshold", float("nan"))
     inference_threshold: float = _saved_thresh if not np.isnan(_saved_thresh) else 0.5
     print(
@@ -487,13 +501,15 @@ def _train_fold(
     result.update(extra_results or {})
     if inference_only:
         results_path = inference_result_path(ckpt_dir)
-        if results_path.name == INFERENCE_RESULTS_NAME:
-            result["inference"] = inference_block(
-                aggregation=aggregation,
-                patch_stride=patch_stride,
-                min_hit_patches=min_hit_patches,
-                checkpoint=ckpt,
-            )
+        # Always recorded, so a results.json completed by an inference pass is
+        # distinguishable from one written by a finished training run.
+        result["inference"] = inference_block(
+            aggregation=aggregation,
+            patch_stride=patch_stride,
+            min_hit_patches=min_hit_patches,
+            checkpoint=ckpt,
+            training_check=training_check,
+        )
     else:
         results_path = ckpt_dir / RESULTS_NAME
     with open(results_path, "w") as f:

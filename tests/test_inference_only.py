@@ -24,9 +24,14 @@ from src.evaluation.benchmark import (
 from src.training import lodo
 from src.training.inference_results import (
     INFERENCE_RESULTS_NAME,
+    LOSS_FLAT_REL_TOL,
+    LOSS_FLAT_WINDOW,
     RESULTS_NAME,
+    assess_training,
+    fetch_wandb_history,
     inference_block,
     inference_result_path,
+    loss_flatness,
     summary_updates,
     wandb_enabled,
 )
@@ -56,6 +61,7 @@ class TestInferenceBlock:
             patch_stride=224,
             min_hit_patches=3,
             checkpoint={"epoch": 12, "val_f1": 0.77},
+            training_check={"status": "unknown"},
         )
         assert block["aggregation"] == "vote"
         assert block["patch_stride"] == 224
@@ -63,13 +69,213 @@ class TestInferenceBlock:
         assert block["checkpoint_epoch"] == 12
         assert block["checkpoint_val_f1"] == 0.77
         assert block["evaluated_at"].endswith("+00:00")
+        assert block["training_check"] == {"status": "unknown"}
 
     def test_tolerates_a_checkpoint_without_epoch_or_f1(self):
         block = inference_block(
-            aggregation="max", patch_stride=112, min_hit_patches=3, checkpoint={}
+            aggregation="max",
+            patch_stride=112,
+            min_hit_patches=3,
+            checkpoint={},
+            training_check={"status": "unknown"},
         )
         assert block["checkpoint_epoch"] is None
         assert block["checkpoint_val_f1"] is None
+
+
+def _history(state="crashed", losses=None, f1s=None, start_epoch=1):
+    losses = losses if losses is not None else [1.0, 0.9, 0.8, 0.7, 0.6, 0.5, 0.4]
+    f1s = f1s if f1s is not None else [0.5] * len(losses)
+    return {
+        "state": state,
+        "epochs": list(range(start_epoch, start_epoch + len(losses))),
+        "train_loss": losses,
+        "val_f1": f1s,
+    }
+
+
+class TestLossFlatness:
+    def test_still_decreasing_is_not_flat(self):
+        out = loss_flatness([1.0, 0.9, 0.8, 0.7, 0.6, 0.5])
+        assert out["flat"] is False
+        assert out["window"] == LOSS_FLAT_WINDOW
+        assert out["relative_improvement"] == pytest.approx((0.9 - 0.5) / 0.9)
+
+    def test_a_plateau_is_flat(self):
+        out = loss_flatness([1.0, 0.5, 0.300, 0.2995, 0.2992, 0.2990, 0.2989])
+        assert out["flat"] is True
+        assert out["relative_improvement"] < LOSS_FLAT_REL_TOL
+
+    def test_the_boundary_is_not_flat(self):
+        # exactly LOSS_FLAT_REL_TOL improvement over the window -> still improving
+        start = 1.0
+        end = start * (1 - LOSS_FLAT_REL_TOL)
+        out = loss_flatness([start, 0.995, 0.993, 0.992, end])
+        assert out["flat"] is False
+
+    def test_a_rising_loss_is_flat(self):
+        assert loss_flatness([0.5, 0.5, 0.5, 0.6, 0.7])["flat"] is True
+
+    def test_too_few_points_is_unknown(self):
+        assert loss_flatness([1.0, 0.9, 0.8, 0.7]) is None
+
+    def test_non_finite_values_are_ignored(self):
+        out = loss_flatness([1.0, float("nan"), 0.9, 0.8, 0.7, 0.6, 0.5])
+        assert out["flat"] is False
+
+    def test_zero_start_does_not_divide_by_zero(self):
+        assert loss_flatness([0.0] * 6)["flat"] is True
+
+
+class TestAssessTraining:
+    def test_finished_run_is_complete_and_silent(self):
+        check = assess_training(
+            configured_epochs=100,
+            checkpoint_epoch=40,
+            history=_history(state="finished"),
+        )
+        assert check["status"] == "complete"
+        assert check["warnings"] == []
+        assert check["configured_epochs"] == 100
+        assert check["checkpoint_epoch"] == 40
+
+    def test_crashed_run_still_improving_warns_about_an_undertrained_checkpoint(self):
+        check = assess_training(
+            configured_epochs=100, checkpoint_epoch=9, history=_history()
+        )
+        assert check["status"] == "incomplete"
+        assert check["wandb_state"] == "crashed"
+        assert check["last_logged_epoch"] == 7
+        assert check["train_loss_flat"]["flat"] is False
+        text = " ".join(check["warnings"])
+        assert "did not finish" in text and "7/100" in text
+        assert "still decreasing" in text
+
+    def test_crashed_run_with_flat_loss_says_so(self):
+        losses = [1.0, 0.5, 0.3, 0.2990, 0.2989, 0.2988, 0.2988, 0.2987]
+        check = assess_training(
+            configured_epochs=100,
+            checkpoint_epoch=6,
+            history=_history(losses=losses),
+        )
+        assert check["status"] == "incomplete"
+        assert check["train_loss_flat"]["flat"] is True
+        assert "flattened" in " ".join(check["warnings"])
+
+    def test_crashed_run_with_too_few_epochs_cannot_judge_the_trend(self):
+        check = assess_training(
+            configured_epochs=100,
+            checkpoint_epoch=2,
+            history=_history(losses=[1.0, 0.9]),
+        )
+        assert check["train_loss_flat"] is None
+        assert "too few" in " ".join(check["warnings"])
+
+    def test_no_history_and_an_early_checkpoint_warns_it_cannot_verify(self):
+        check = assess_training(configured_epochs=100, checkpoint_epoch=9, history=None)
+        assert check["status"] == "unknown"
+        text = " ".join(check["warnings"])
+        assert "epoch 9 of 100" in text and "cannot verify" in text
+
+    def test_no_history_and_the_last_epoch_checkpoint_is_quiet(self):
+        check = assess_training(
+            configured_epochs=100, checkpoint_epoch=100, history=None
+        )
+        assert check["status"] == "unknown"
+        assert check["warnings"] == []
+
+    def test_missing_checkpoint_epoch_is_tolerated(self):
+        check = assess_training(
+            configured_epochs=100, checkpoint_epoch=None, history=None
+        )
+        assert check["status"] == "unknown"
+        assert check["checkpoint_epoch"] is None
+
+
+class _FakeApiRun:
+    def __init__(self, state="crashed", rows=None):
+        self.state = state
+        self._rows = (
+            rows
+            if rows is not None
+            else [
+                {"epoch": e, "train/loss": 1.0 / e, "val/f1": 0.1 * e}
+                for e in (3, 1, 2)
+            ]
+        )
+
+    def scan_history(self, keys=None):
+        self.scan_keys = keys
+        return iter(self._rows)
+
+
+class _FakeApiWandb:
+    """wandb stand-in exposing a read-only Api; records the requested path."""
+
+    def __init__(self, run=None, error=None):
+        self._run = run or _FakeApiRun()
+        self._error = error
+        self.paths: list[str] = []
+        self.run_inits = 0
+
+    def Api(self, timeout=None):  # noqa: N802 - mirrors wandb.Api
+        outer = self
+
+        class _Api:
+            def run(self, path):
+                outer.paths.append(path)
+                if outer._error:
+                    raise outer._error
+                return outer._run
+
+        return _Api()
+
+    def init(self, **kwargs):  # must never be used to read history
+        self.run_inits += 1
+
+    def setup(self):
+        return types.SimpleNamespace(settings=types.SimpleNamespace(mode="online"))
+
+
+class TestFetchWandbHistory:
+    def test_reads_state_and_sorted_per_epoch_series_read_only(self, monkeypatch):
+        monkeypatch.delenv("WANDB_MODE", raising=False)
+        fake = _FakeApiWandb()
+        monkeypatch.setitem(sys.modules, "wandb", fake)
+        out = fetch_wandb_history("proj", "ent", "run-1")
+        assert fake.paths == ["ent/proj/run-1"]
+        assert fake.run_inits == 0
+        assert out["state"] == "crashed"
+        assert out["epochs"] == [1, 2, 3]
+        assert out["train_loss"] == [1.0, 0.5, pytest.approx(1 / 3)]
+        assert out["val_f1"] == [
+            pytest.approx(0.1),
+            pytest.approx(0.2),
+            pytest.approx(0.3),
+        ]
+
+    def test_no_entity_uses_the_default_path(self, monkeypatch):
+        monkeypatch.delenv("WANDB_MODE", raising=False)
+        fake = _FakeApiWandb()
+        monkeypatch.setitem(sys.modules, "wandb", fake)
+        fetch_wandb_history("proj", None, "run-1")
+        assert fake.paths == ["proj/run-1"]
+
+    def test_any_api_failure_returns_none(self, monkeypatch, capsys):
+        monkeypatch.delenv("WANDB_MODE", raising=False)
+        monkeypatch.setitem(
+            sys.modules, "wandb", _FakeApiWandb(error=ConnectionError("no network"))
+        )
+        assert fetch_wandb_history("proj", None, "run-1") is None
+        assert "could not read the W&B history" in capsys.readouterr().out
+
+    @pytest.mark.parametrize("mode", ["offline", "disabled"])
+    def test_offline_modes_never_touch_the_network(self, monkeypatch, mode):
+        monkeypatch.setenv("WANDB_MODE", mode)
+        fake = _FakeApiWandb()
+        monkeypatch.setitem(sys.modules, "wandb", fake)
+        assert fetch_wandb_history("proj", None, "run-1") is None
+        assert fake.paths == []
 
 
 class TestSummaryUpdates:
@@ -247,7 +453,10 @@ class TestTrainFoldInferenceOnly:
         assert data["inference_threshold"] == 0.4
         assert data["cross"]["ap"] == 0.9
         assert data["in_domain"]["f1"] == 0.8
-        assert "inference" not in data
+        # the provenance block is always written, so a provisional results.json is
+        # distinguishable from one produced by a finished training run
+        assert data["inference"]["checkpoint_epoch"] == 7
+        assert data["inference"]["training_check"]["status"] == "unknown"
         assert not (ckpt_dir / INFERENCE_RESULTS_NAME).exists()
         assert result["ap"] == 0.9
 
@@ -261,6 +470,7 @@ class TestTrainFoldInferenceOnly:
         assert side["cross"]["ap"] == 0.9
         assert side["inference"]["aggregation"] == "vote"
         assert side["inference"]["checkpoint_epoch"] == 7
+        assert "training_check" in side["inference"]
 
     def test_a_second_inference_overwrites_only_the_side_file(
         self, harness, monkeypatch
@@ -324,6 +534,45 @@ class TestTrainFoldInferenceOnly:
             lodo._train_fold(cfg=_cfg(), inference_only=True, **_fold_args())
         assert fake.init_calls == []  # a crashed pass must not mark the closed run
         assert not (ckpt_dir / RESULTS_NAME).exists()
+
+    def test_an_unfinished_run_is_flagged_in_the_block_and_warned_about(
+        self, harness, monkeypatch, capsys
+    ):
+        fake, ckpt_dir, make_checkpoint = harness
+        make_checkpoint()
+        monkeypatch.setattr(lodo, "fetch_wandb_history", lambda *a, **kw: _history())
+        lodo._train_fold(cfg=_cfg(), inference_only=True, **_fold_args())
+        data = json.loads((ckpt_dir / RESULTS_NAME).read_text())
+        check = data["inference"]["training_check"]
+        assert check["status"] == "incomplete"
+        assert check["checkpoint_epoch"] == 7
+        assert check["configured_epochs"] == 1
+        out = capsys.readouterr().out
+        assert "[inference] WARNING" in out
+        assert "did not finish" in out
+
+    def test_a_finished_run_prints_no_warning(self, harness, monkeypatch, capsys):
+        fake, ckpt_dir, make_checkpoint = harness
+        make_checkpoint()
+        monkeypatch.setattr(
+            lodo, "fetch_wandb_history", lambda *a, **kw: _history(state="finished")
+        )
+        lodo._train_fold(cfg=_cfg(), inference_only=True, **_fold_args())
+        assert "WARNING" not in capsys.readouterr().out
+        data = json.loads((ckpt_dir / RESULTS_NAME).read_text())
+        assert data["inference"]["training_check"]["status"] == "complete"
+
+    def test_the_history_is_read_for_the_resolved_run_name(self, harness, monkeypatch):
+        fake, ckpt_dir, make_checkpoint = harness
+        make_checkpoint()
+        seen = {}
+
+        def _spy(project, entity, run_id):
+            seen.update(project=project, entity=entity, run_id=run_id)
+
+        monkeypatch.setattr(lodo, "fetch_wandb_history", _spy)
+        lodo._train_fold(cfg=_cfg(), inference_only=True, **_fold_args())
+        assert seen == {"project": "scratch", "entity": None, "run_id": RUN_NAME}
 
     def test_a_wandb_failure_never_loses_the_result(self, harness, capsys):
         fake, ckpt_dir, make_checkpoint = harness
