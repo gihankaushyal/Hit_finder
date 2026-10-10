@@ -21,7 +21,7 @@ from pathlib import Path
 from src.training.inference_results import WANDB_API_TIMEOUT_S, wandb_enabled
 
 WANDB_ID_FILE = "wandb_id.txt"
-OVERRIDDEN_TAG = "overridden"  # scripts/plot_hit_frac.py keeps its own copy
+OVERRIDDEN_TAG = "overridden"
 
 
 def resolve_wandb_id(run_dir: str | Path, run_name: str) -> str:
@@ -82,6 +82,29 @@ def _set_overridden_tag(
             f"  [wandb] could not {verb} {run_id!r} as overridden ({exc!r}); continuing."
         )
         return False
+
+
+def _attempt_number(name: str, run_id: str) -> int:
+    m = re.fullmatch(re.escape(name) + r"-o([0-9]+)", run_id)
+    return int(m.group(1)) if m else 1
+
+
+def select_current_runs(runs):
+    """Runs to plot: drop `overridden`-tagged ones, then keep the highest attempt per name.
+
+    The attempt number comes from the id (``<name>`` = 1, ``<name>-oN`` = N), so the
+    superseded attempt is dropped even when its tag was never written (offline mode).
+    """
+    best: dict[str, object] = {}
+    for run in runs:
+        if OVERRIDDEN_TAG in run.tags:
+            continue
+        cur = best.get(run.name)
+        if cur is None or _attempt_number(run.name, run.id) > _attempt_number(
+            cur.name, cur.id
+        ):
+            best[run.name] = run
+    return list(best.values())
 
 
 def _run_path(project: str, entity: str | None, run_id: str) -> str:

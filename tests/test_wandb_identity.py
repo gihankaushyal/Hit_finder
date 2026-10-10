@@ -154,11 +154,46 @@ class TestOverrideHook:
         assert wi.override_hook_from_cfg({}).project is None
 
 
-def test_plot_script_filters_the_same_tag():
+class _R:
+    def __init__(self, name, id, tags=()):
+        self.name, self.id, self.tags = name, id, list(tags)
+
+
+class TestSelectCurrentRuns:
+    def test_drops_tagged(self):
+        runs = [_R("a", "a", [wi.OVERRIDDEN_TAG]), _R("b", "b")]
+        assert [r.id for r in wi.select_current_runs(runs)] == ["b"]
+
+    def test_highest_attempt_wins_without_any_tag(self):
+        runs = [_R("a", "a"), _R("a", "a-o3"), _R("a", "a-o2")]
+        assert [r.id for r in wi.select_current_runs(runs)] == ["a-o3"]
+
+    def test_unrelated_names_untouched(self):
+        runs = [_R("a", "a"), _R("b", "b"), _R("c", "c-o2")]
+        assert {r.id for r in wi.select_current_runs(runs)} == {"a", "b", "c-o2"}
+
+    def test_unparseable_id_counts_as_one(self):
+        runs = [_R("a", "weird"), _R("a", "a-o2")]
+        assert [r.id for r in wi.select_current_runs(runs)] == ["a-o2"]
+
+
+def test_plot_script_uses_shared_selection():
     from pathlib import Path
 
     text = (
         Path(__file__).resolve().parent.parent / "scripts" / "plot_hit_frac.py"
     ).read_text()
-    assert f'OVERRIDDEN_TAG = "{wi.OVERRIDDEN_TAG}"' in text
-    assert "OVERRIDDEN_TAG not in" in text
+    assert "from src.training.wandb_identity import" in text
+    assert "select_current_runs" in text
+    assert 'OVERRIDDEN_TAG = "' not in text
+
+
+def test_wandb_identity_imports_no_heavy_deps():
+    import subprocess
+
+    code = (
+        "import sys; import src.training.wandb_identity; "
+        "bad=[m for m in ('torch','wandb','numpy','h5py') if m in sys.modules]; "
+        "sys.exit(1 if bad else 0)"
+    )
+    assert subprocess.run([sys.executable, "-c", code]).returncode == 0
