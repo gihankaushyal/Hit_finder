@@ -450,3 +450,30 @@ class TestOverrideRotatesWandbId:
         )
         assert not (run_dir / "wandb_id.txt").exists()
         assert tagged == []
+
+
+class _InitCalled(Exception):
+    def __init__(self, kwargs: dict) -> None:
+        super().__init__("wandb.init called")
+        self.kwargs = kwargs
+
+
+class TestPretrainWandbId:
+    def test_wandb_init_uses_the_recorded_id(
+        self, synthetic_cxi, tmp_path, monkeypatch
+    ):
+        import wandb
+
+        cfg = _tiny_cfg(tmp_path / "ckpt")
+        run_dir = Path(cfg["checkpoint_dir"]) / "mae-test-fold0"
+        run_dir.mkdir(parents=True)
+        (run_dir / "wandb_id.txt").write_text("mae-test-fold0-o2\n")
+
+        def _init(**kwargs):
+            raise _InitCalled(kwargs)
+
+        monkeypatch.setattr(wandb, "init", _init)
+        with pytest.raises(_InitCalled) as exc:
+            run_pretrain(cfg, {"s0": synthetic_cxi}, ["s0"], "mae-test-fold0", "cpu")
+        assert exc.value.kwargs["id"] == "mae-test-fold0-o2"
+        assert exc.value.kwargs["name"] == "mae-test-fold0"

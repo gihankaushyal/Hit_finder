@@ -728,3 +728,37 @@ def test_pretrain_cli_has_no_inference_flag():
         assert not (run_dir / "best.pt").exists()
         assert not (run_dir / RESULTS_NAME).exists()
         assert not (run_dir / INFERENCE_RESULTS_NAME).exists()
+
+
+class TestRecordedWandbId:
+    def test_inference_uses_the_recorded_id_for_history_and_summary(
+        self, harness, monkeypatch
+    ):
+        fake, ckpt_dir, make_checkpoint = harness
+        make_checkpoint()
+        (ckpt_dir / "wandb_id.txt").write_text(f"{RUN_NAME}-o2\n")
+        fetched: list[str] = []
+
+        def _history(project, entity, run_id):
+            fetched.append(run_id)
+            return None
+
+        monkeypatch.setattr(lodo, "fetch_wandb_history", _history)
+        lodo._train_fold(cfg=_cfg(), inference_only=True, **_fold_args())
+        assert fetched == [f"{RUN_NAME}-o2"]
+        assert len(fake.init_calls) == 1
+        assert fake.init_calls[0]["id"] == f"{RUN_NAME}-o2"
+        assert fake.init_calls[0]["name"] == RUN_NAME
+
+    def test_without_the_file_the_run_name_is_the_id(self, harness, monkeypatch):
+        fake, ckpt_dir, make_checkpoint = harness
+        make_checkpoint()
+        fetched: list[str] = []
+        monkeypatch.setattr(
+            lodo,
+            "fetch_wandb_history",
+            lambda project, entity, run_id: fetched.append(run_id),
+        )
+        lodo._train_fold(cfg=_cfg(), inference_only=True, **_fold_args())
+        assert fetched == [RUN_NAME]
+        assert fake.init_calls[0]["id"] == RUN_NAME
