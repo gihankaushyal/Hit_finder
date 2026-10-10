@@ -109,24 +109,17 @@ fi
 
 CACHE_NVME="/tmp/sfx_frame_cache"
 CONFIG="configs/ssl/mae_finetune.yaml"
-PRETRAIN_CONFIG="configs/ssl/mae_pretrain.yaml"
-# The pretrain checkpoint directory is named with the seed the pretrain run used, so
-# that seed comes from the pretrain config; the fine-tune/probe seed from this one.
 # seed lives in base.yaml and may be overridden in the model config (load_config()
 # deep-merges base.yaml with model values winning) — check the model file first.
 # Only a top-level `seed:` counts (python reads cfg["seed"]); nested keys are ignored.
-read_seed() {
-    local cfg="$1" seed
-    seed="$({ grep -hE '^seed:' "${cfg}" configs/base.yaml 2>/dev/null || true; } | head -1 | awk '{print $2}')" || seed=""
-    if [[ ! "${seed}" =~ ^[0-9]+$ ]]; then
-        echo "Error: could not read a top-level integer 'seed:' from ${cfg} or configs/base.yaml." >&2
-        echo "Run this script from the repository root." >&2
-        exit 1
-    fi
-    echo "${seed}"
-}
-SEED="$(read_seed "${CONFIG}")"
-PRETRAIN_SEED="$(read_seed "${PRETRAIN_CONFIG}")"
+# This script reads only the fine-tune config; tests/test_submit_script_parity.py
+# pins that its seed equals the pretrain config's, which names the pretrain checkpoint.
+SEED="$({ grep -hE '^seed:' "${CONFIG}" configs/base.yaml 2>/dev/null || true; } | head -1 | awk '{print $2}')" || SEED=""
+if [[ ! "${SEED}" =~ ^[0-9]+$ ]]; then
+    echo "Error: could not read a top-level integer 'seed:' from ${CONFIG} or configs/base.yaml." >&2
+    echo "Run this script from the repository root." >&2
+    exit 1
+fi
 
 mkdir -p logs
 
@@ -141,7 +134,7 @@ PROBE_PREFIX="${PREFIX_BASE}-probe-v${PREFIX_VERSION}"
 # folds before anything is submitted, so a gap never leaves a half-built chain.
 MISSING=0
 for fold in "${FOLDS[@]}"; do
-    PRETRAIN_CKPT="checkpoints/${PRETRAIN_RUN_PREFIX}-fold${fold}-seed${PRETRAIN_SEED}/last.pt"
+    PRETRAIN_CKPT="checkpoints/${PRETRAIN_RUN_PREFIX}-fold${fold}-seed${SEED}/last.pt"
     if [[ ! -f "${PRETRAIN_CKPT}" ]]; then
         echo "Error: pretrain checkpoint not found for fold ${fold}: ${PRETRAIN_CKPT}" >&2
         MISSING=$(( MISSING + 1 ))

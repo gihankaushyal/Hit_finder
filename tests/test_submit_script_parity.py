@@ -55,7 +55,7 @@ def test_bash_prefix_regex_matches_run_naming(script):
 
 
 def _shell_seed(config: str) -> str:
-    """The seed exactly as the submit scripts' `read_seed` grep finds it."""
+    """The seed exactly as the submit scripts' seed grep finds it."""
     out = subprocess.run(
         [
             "bash",
@@ -87,15 +87,8 @@ def test_pretrain_and_finetune_configs_share_a_seed():
 @pytest.mark.parametrize(
     "script", ["submit_ssl_finetune.sh", "submit_ssl_finetune_all.sh"]
 )
-def test_finetune_scripts_take_pretrain_seed_from_pretrain_config(script):
+def test_finetune_scripts_read_only_the_finetune_config(script):
+    """Each script reads its own YAML; the shared seed is pinned by the test above."""
     text = (SCRIPTS / script).read_text()
-    assert f'PRETRAIN_CONFIG="{PRETRAIN_CONFIG}"' in text
-    assert 'PRETRAIN_SEED="$(read_seed "${PRETRAIN_CONFIG}")"' in text
-    # The pretrain checkpoint path must use that seed, not the fine-tune one.
-    for line in text.splitlines():
-        if (
-            "/last.pt" in line
-            and "checkpoints/" in line
-            and "PRETRAIN_RUN_PREFIX" in line
-        ):
-            assert "seed${PRETRAIN_SEED}" in line, line
+    assert "mae_pretrain.yaml" not in text
+    assert f'CONFIG="{FINETUNE_CONFIG}"' in text

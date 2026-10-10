@@ -102,8 +102,14 @@ def prepare_finetune_run(
 
 
 def read_pretrain_epoch(pretrain_checkpoint: str | Path) -> int:
-    """Epoch stored in an MAE pretrain checkpoint (exposes a partial pretrain)."""
-    state = torch.load(pretrain_checkpoint, map_location="cpu", weights_only=True)
+    """Epoch stored in an MAE pretrain checkpoint (exposes a partial pretrain).
+
+    mmap=True maps the file instead of reading it, so the model and optimizer tensors
+    are never pulled into memory just to read one integer.
+    """
+    state = torch.load(
+        pretrain_checkpoint, map_location="cpu", weights_only=True, mmap=True
+    )
     if "epoch" not in state:
         raise SystemExit(
             f"{pretrain_checkpoint} has no 'epoch' key — it is not a train_ssl_pretrain "

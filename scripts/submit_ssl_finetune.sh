@@ -76,25 +76,18 @@ if [[ "${SLURM_RESTART_COUNT:-0}" -gt 0 && "${RESUME_FLAG}" == "--override-train
 fi
 
 CONFIG="configs/ssl/mae_finetune.yaml"
-PRETRAIN_CONFIG="configs/ssl/mae_pretrain.yaml"
-# The pretrain checkpoint directory is named with the seed the pretrain run used, so
-# that seed comes from the pretrain config; the fine-tune/probe seed from this one.
 # seed lives in base.yaml and may be overridden in the model config (load_config()
 # deep-merges base.yaml with model values winning) — check the model file first.
 # Only a top-level `seed:` counts (python reads cfg["seed"]); nested keys are ignored.
-read_seed() {
-    local cfg="$1" seed
-    seed="$({ grep -hE '^seed:' "${cfg}" configs/base.yaml 2>/dev/null || true; } | head -1 | awk '{print $2}')" || seed=""
-    if [[ ! "${seed}" =~ ^[0-9]+$ ]]; then
-        echo "Error: could not read a top-level integer 'seed:' from ${cfg} or configs/base.yaml." >&2
-        echo "Run this script from the repository root." >&2
-        exit 1
-    fi
-    echo "${seed}"
-}
-SEED="$(read_seed "${CONFIG}")"
-PRETRAIN_SEED="$(read_seed "${PRETRAIN_CONFIG}")"
-PRETRAIN_CKPT="checkpoints/${PRETRAIN_RUN_PREFIX}-fold${FOLD}-seed${PRETRAIN_SEED}/last.pt"
+# This script reads only the fine-tune config; tests/test_submit_script_parity.py
+# pins that its seed equals the pretrain config's, which names the pretrain checkpoint.
+SEED="$({ grep -hE '^seed:' "${CONFIG}" configs/base.yaml 2>/dev/null || true; } | head -1 | awk '{print $2}')" || SEED=""
+if [[ ! "${SEED}" =~ ^[0-9]+$ ]]; then
+    echo "Error: could not read a top-level integer 'seed:' from ${CONFIG} or configs/base.yaml." >&2
+    echo "Run this script from the repository root." >&2
+    exit 1
+fi
+PRETRAIN_CKPT="checkpoints/${PRETRAIN_RUN_PREFIX}-fold${FOLD}-seed${SEED}/last.pt"
 
 if [ ! -f "${PRETRAIN_CKPT}" ]; then
     echo "Error: pretrain checkpoint not found: ${PRETRAIN_CKPT}" >&2
