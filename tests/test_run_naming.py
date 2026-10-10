@@ -424,3 +424,90 @@ class TestDryRun:
                 checkpoint_root=tmp_path,
                 dry_run=True,
             )
+
+
+class TestInferenceOnlyGate:
+    def test_existing_checkpoint_passes_and_nothing_is_deleted(self, tmp_path):
+        run_dir = _make_run_dir(
+            tmp_path, "run-fold1-seed42", ["best.pt", "results.json"]
+        )
+        check_checkpoint_collisions(
+            {1: "run-fold1-seed42"},
+            "best.pt",
+            False,
+            False,
+            extra_delete=("results.json",),
+            checkpoint_root=tmp_path,
+            inference_only=True,
+        )
+        assert (run_dir / "best.pt").exists()
+        assert (run_dir / "results.json").exists()
+
+    def test_missing_checkpoint_exits_naming_the_path(self, tmp_path):
+        with pytest.raises(SystemExit) as exc:
+            check_checkpoint_collisions(
+                {2: "run-fold2-seed42"},
+                "best.pt",
+                False,
+                False,
+                checkpoint_root=tmp_path,
+                inference_only=True,
+            )
+        message = str(exc.value)
+        assert "fold 2" in message
+        assert str(tmp_path / "run-fold2-seed42" / "best.pt") in message
+        assert "--inference-only" in message
+
+    def test_missing_checkpoint_in_a_later_fold_is_found(self, tmp_path):
+        _make_run_dir(tmp_path, "run-fold1-seed42", ["best.pt"])
+        with pytest.raises(SystemExit):
+            check_checkpoint_collisions(
+                {1: "run-fold1-seed42", 2: "run-fold2-seed42"},
+                "best.pt",
+                False,
+                False,
+                checkpoint_root=tmp_path,
+                inference_only=True,
+            )
+
+    def test_dry_run_still_exits_when_the_checkpoint_is_missing(self, tmp_path):
+        with pytest.raises(SystemExit):
+            check_checkpoint_collisions(
+                {1: "run-fold1-seed42"},
+                "best.pt",
+                False,
+                False,
+                checkpoint_root=tmp_path,
+                dry_run=True,
+                inference_only=True,
+            )
+
+    @pytest.mark.parametrize(
+        "resume,override", [(True, False), (False, True), (True, True)]
+    )
+    def test_combined_with_another_flag_raises_and_deletes_nothing(
+        self, tmp_path, resume, override
+    ):
+        run_dir = _make_run_dir(tmp_path, "run-fold1-seed42", ["best.pt"])
+        with pytest.raises(ValueError, match="mutually exclusive"):
+            check_checkpoint_collisions(
+                {1: "run-fold1-seed42"},
+                "best.pt",
+                resume,
+                override,
+                checkpoint_root=tmp_path,
+                inference_only=True,
+            )
+        assert (run_dir / "best.pt").exists()
+
+    def test_collision_message_offers_inference_only(self, tmp_path):
+        _make_run_dir(tmp_path, "run-fold1-seed42", ["best.pt"])
+        with pytest.raises(SystemExit) as exc:
+            check_checkpoint_collisions(
+                {1: "run-fold1-seed42"},
+                "best.pt",
+                False,
+                False,
+                checkpoint_root=tmp_path,
+            )
+        assert "--inference-only" in str(exc.value)

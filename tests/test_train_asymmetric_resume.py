@@ -136,29 +136,3 @@ def test_resume_epoch_overflow_skips_loop(tmp_path: Path, capsys):
     captured = capsys.readouterr()
     assert "Warning" in captured.out
     assert "Nothing left to train" in captured.out
-
-
-def test_checkpoint_detection_split(tmp_path: Path):
-    """resume_eval_only and resume_training_from_ckpt are mutually exclusive."""
-    ckpt_path = tmp_path / "best.pt"
-    ckpt_path.touch()  # simulate existing checkpoint
-
-    # flag absent → eval-only
-    resume_training = False
-    resume_eval_only = ckpt_path.exists() and not resume_training
-    resume_training_from_ckpt = ckpt_path.exists() and resume_training
-    assert resume_eval_only is True
-    assert resume_training_from_ckpt is False
-
-    # flag present → resume training
-    resume_training = True
-    resume_eval_only = ckpt_path.exists() and not resume_training
-    resume_training_from_ckpt = ckpt_path.exists() and resume_training
-    assert resume_eval_only is False
-    assert resume_training_from_ckpt is True
-
-    # no checkpoint → both False regardless of flag
-    ckpt_path.unlink()
-    for flag in (True, False):
-        assert (ckpt_path.exists() and not flag) is False
-        assert (ckpt_path.exists() and flag) is False

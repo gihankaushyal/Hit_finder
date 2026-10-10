@@ -22,13 +22,14 @@ Run naming convention (--run-name-prefix, REQUIRED, no default):
     (checkpoints/resnet18-asymmetric-v2-fold{N}-seed{S}/) — so two different
     pipeline generations can never collide under the same name. If a
     checkpoint already exists under the resolved name, the script exits and
-    asks you to pass --resume-training (continue) or --override-training
-    (discard and restart).
+    asks you to pass --resume-training (continue), --override-training
+    (discard and restart) or --inference-only (evaluate best.pt without training).
 
 Usage:
     python -m src.training.train_asymmetric --config configs/supervised/resnet18_asymmetric.yaml --run-name-prefix resnet18-asymmetric-v2
     python -m src.training.train_asymmetric --config ... --run-name-prefix resnet18-asymmetric-v2 --folds 1   # single fold smoke test
     python -m src.training.train_asymmetric --config ... --run-name-prefix resnet18-asymmetric-v2 --device cpu
+    python -m src.training.train_asymmetric --config ... --run-name-prefix resnet18-asymmetric-v2 --folds 2 --inference-only   # re-evaluate a finished fold
 """
 
 from __future__ import annotations
@@ -56,6 +57,7 @@ from src.training.run_naming import (
     fold_run_name,
     validate_run_name_prefix,
 )
+from src.training.inference_results import INFERENCE_RESULTS_NAME, RESULTS_NAME
 from src.utils.config import load_config
 
 
@@ -65,6 +67,7 @@ def _check_checkpoint_collisions(
     run_name_prefix: str,
     resume_training: bool,
     override_training: bool,
+    inference_only: bool = False,
 ) -> None:
     run_suffix = cfg.get("wandb", {}).get("run_suffix", "")
     check_checkpoint_collisions(
@@ -75,7 +78,8 @@ def _check_checkpoint_collisions(
         "best.pt",
         resume_training,
         override_training,
-        extra_delete=("results.json",),
+        extra_delete=(RESULTS_NAME, INFERENCE_RESULTS_NAME),
+        inference_only=inference_only,
     )
 
 
@@ -88,6 +92,7 @@ def main(
     tags: list[str] | None = None,
     resume_training: bool = False,
     override_training: bool = False,
+    inference_only: bool = False,
     cache_root: str | None = None,
     cache_nvme: str | None = None,
     no_cache: bool = False,
@@ -150,7 +155,12 @@ def main(
         split_artifact = _build_intra_split(sessions)
         fold = {"fold_id": 0, "test_detector": split_artifact["test_detector"]}
         _check_checkpoint_collisions(
-            [0], cfg, run_name_prefix, resume_training, override_training
+            [0],
+            cfg,
+            run_name_prefix,
+            resume_training,
+            override_training,
+            inference_only,
         )
         artifacts_dir = Path("checkpoints") / "intra_splits"
         artifacts_dir.mkdir(parents=True, exist_ok=True)
@@ -166,6 +176,7 @@ def main(
             resume_training=resume_training,
             run_name_prefix=run_name_prefix,
             frame_cache=frame_cache,
+            inference_only=inference_only,
         )
         fold_results["fold_0"] = result
     else:
@@ -191,6 +202,7 @@ def main(
             run_name_prefix,
             resume_training,
             override_training,
+            inference_only,
         )
 
         artifacts_dir = Path("checkpoints") / "asymmetric_splits"
@@ -218,6 +230,7 @@ def main(
                 resume_training=resume_training,
                 run_name_prefix=run_name_prefix,
                 frame_cache=frame_cache,
+                inference_only=inference_only,
             )
             fold_results[f"fold_{fold['fold_id']}"] = result
 
@@ -295,8 +308,20 @@ if __name__ == "__main__":
         default=False,
         help=(
             "When a checkpoint exists for the resolved run name, discard it "
-            "(best.pt and results.json) and start that fold from scratch under the "
-            "same run name. Mutually exclusive with --resume-training."
+            "(best.pt, results.json and results.inference.json) and start that fold from scratch under the "
+            "same run name. Mutually exclusive with --resume-training and --inference-only."
+        ),
+    )
+    resume_group.add_argument(
+        "--inference-only",
+        action="store_true",
+        default=False,
+        help=(
+            "Evaluate the existing best.pt of each requested fold on its in-domain and "
+            "cross-detector sets without training. Writes results.json if the fold has "
+            "none, else results.inference.json (the closed-out results.json is kept). "
+            "Requires best.pt to exist. Mutually exclusive with --resume-training "
+            "and --override-training."
         ),
     )
     parser.add_argument("--cache-root", default=None)
@@ -313,6 +338,7 @@ if __name__ == "__main__":
         tags=tags,
         resume_training=args.resume_training,
         override_training=args.override_training,
+        inference_only=args.inference_only,
         cache_root=args.cache_root,
         cache_nvme=args.cache_nvme,
         no_cache=args.no_cache,

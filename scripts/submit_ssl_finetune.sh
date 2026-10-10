@@ -29,8 +29,10 @@
 # Environment variables (set automatically by submit_ssl_finetune_all.sh):
 #   CACHE_NVME    Path to this fold's NVMe-staged frame-cache tier
 #                 (default /tmp/sfx_frame_cache). See scripts/stage_frame_cache.sh.
-#   RESUME_FLAG   --resume-training (default) or --override-training. Decides what
-#                 happens when best.pt already exists for the resolved run name.
+#   RESUME_FLAG   --resume-training (default), --override-training or --inference-only.
+#                 Decides what happens when best.pt already exists for the resolved
+#                 run name. --inference-only evaluates it without training and needs
+#                 neither the pretrain checkpoint nor the pretrain_run_prefix to exist.
 #                 A requeued job (SLURM_RESTART_COUNT > 0) always resumes, even if
 #                 --override-training was requested, so it never deletes its own progress.
 #
@@ -88,8 +90,11 @@ if [[ ! "${SEED}" =~ ^[0-9]+$ ]]; then
     exit 1
 fi
 PRETRAIN_CKPT="checkpoints/${PRETRAIN_RUN_PREFIX}-fold${FOLD}-seed${SEED}/last.pt"
-
-if [ ! -f "${PRETRAIN_CKPT}" ]; then
+PRETRAIN_ARGS=(--pretrain-checkpoint "${PRETRAIN_CKPT}")
+if [[ "${RESUME_FLAG}" == "--inference-only" ]]; then
+    # best.pt already holds every weight; the pretrain checkpoint may be archived.
+    PRETRAIN_ARGS=()
+elif [ ! -f "${PRETRAIN_CKPT}" ]; then
     echo "Error: pretrain checkpoint not found: ${PRETRAIN_CKPT}" >&2
     exit 1
 fi
@@ -103,7 +108,7 @@ python -m src.training.train_ssl_finetune \
     --config "${CONFIG}" \
     --fold "${FOLD}" \
     --run-name-prefix "${RUN_NAME_PREFIX}" \
-    --pretrain-checkpoint "${PRETRAIN_CKPT}" \
+    "${PRETRAIN_ARGS[@]}" \
     --cache-nvme "${CACHE_NVME:-/tmp/sfx_frame_cache}" \
     "${RESUME_FLAG}" \
     "${EXTRA[@]}"

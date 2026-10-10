@@ -35,9 +35,9 @@
 # Environment variables (set automatically by submit_asymmetric_lodo_all.sh):
 #   CACHE_NVME    Path to this fold's NVMe-staged frame-cache tier
 #                 (default /tmp/sfx_frame_cache). See scripts/stage_frame_cache.sh.
-#   RESUME_FLAG   --resume-training or --override-training, resolved by the
-#                 orchestrator's interactive prompt (default --resume-training
-#                 when running this script standalone and no checkpoint exists).
+#   RESUME_FLAG   --resume-training (default), --override-training or
+#                 --inference-only (evaluate the existing best.pt without
+#                 training), resolved by the orchestrator's interactive prompt.
 #
 # See also:
 #   scripts/submit_asymmetric_lodo_all.sh   multi-fold submission with per-fold NVMe staging

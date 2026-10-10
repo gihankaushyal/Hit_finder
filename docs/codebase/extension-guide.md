@@ -277,3 +277,26 @@ Add a hyperparameter variant for MAE pretraining (different mask ratio, patch si
       cfg = load_config(str(cfg_path))
       assert cfg["model"]["mask_ratio"] == pytest.approx(0.80)
   ```
+
+---
+
+## Re-evaluate a Finished Run {#inference-only}
+
+Evaluate an existing `best.pt` on its in-domain and cross-detector sets without training — for example to complete a run whose evaluation crashed, or to re-score with a changed `benchmark` setting. `--inference-only` is the third mode next to `--resume-training` and `--override-training` (mutually exclusive) and needs `best.pt` to exist. A plain rerun on a finished fold still exits.
+
+- If the run has no `results.json`, it is written (this completes the run). If one exists it is kept untouched and the new numbers go to `results.inference.json`. Either way the file carries an `inference` block with the aggregation, stride, checkpoint epoch and a `training_check`. `scripts/aggregate_lodo_results.py` reads only `results.json`.
+- `training_check` tells you whether the run behind `best.pt` actually finished. It reads the run's W&B history read-only (the run is not resumed) and records the W&B state, the last logged epoch against the configured epochs, and whether the train loss had flattened (improved by less than 1% over the last 5 logged epochs). A run that did not finish prints `[inference] WARNING` lines first: `status: "incomplete"` means the numbers are provisional. If W&B is offline or unreachable the status is `unknown` and only the epoch counts are compared.
+- W&B (when enabled) gets run-summary entries under `inference/…` only; training curves are not touched.
+- MAE pretraining has no `best.pt` and no evaluation, so it has no inference mode.
+
+```bash
+# Track 1
+python -m src.training.train_asymmetric --config configs/supervised/resnet18_asymmetric.yaml \
+    --run-name-prefix resnet18-asymmetric-v2 --folds 2 --inference-only
+
+# Track 2 fine-tune / probe (no --pretrain-checkpoint needed)
+python -u -m src.training.train_ssl_finetune --config configs/ssl/mae_finetune.yaml \
+    --fold 1 --run-name-prefix vits16-mae-v2 --inference-only
+```
+
+The orchestrators (`submit_asymmetric_lodo_all.sh`, `submit_ssl_finetune_all.sh`) offer it as the `inference` answer when `best.pt` already exists.
