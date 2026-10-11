@@ -55,12 +55,18 @@ from src.training.run_naming import (
     ASYMMETRIC_EXAMPLE,
     ASYMMETRIC_PREFIX_RE,
     check_checkpoint_collisions,
+    effective_resume,
     fold_run_name,
     validate_run_name_prefix,
 )
 from src.training.inference_results import INFERENCE_RESULTS_NAME, RESULTS_NAME
 from src.training.wandb_identity import override_hook_from_cfg
 from src.utils.config import load_config
+
+
+def _fold_run_name(cfg: dict, run_name_prefix: str, fold_id: int) -> str:
+    run_suffix = cfg.get("wandb", {}).get("run_suffix", "")
+    return fold_run_name(run_name_prefix, fold_id, cfg["seed"], run_suffix)
 
 
 def _check_checkpoint_collisions(
@@ -71,11 +77,11 @@ def _check_checkpoint_collisions(
     override_training: bool,
     inference_only: bool = False,
     dry_run: bool = False,
-) -> None:
-    run_suffix = cfg.get("wandb", {}).get("run_suffix", "")
-    check_checkpoint_collisions(
+) -> set[str]:
+    """Run the shared gate; returns the run names whose override was already applied."""
+    return check_checkpoint_collisions(
         {
-            fold_id: fold_run_name(run_name_prefix, fold_id, cfg["seed"], run_suffix)
+            fold_id: _fold_run_name(cfg, run_name_prefix, fold_id)
             for fold_id in fold_ids
         },
         "best.pt",
@@ -159,7 +165,7 @@ def main(
             )
         split_artifact = _build_intra_split(sessions)
         fold = {"fold_id": 0, "test_detector": split_artifact["test_detector"]}
-        _check_checkpoint_collisions(
+        continued = _check_checkpoint_collisions(
             [0],
             cfg,
             run_name_prefix,
@@ -178,7 +184,9 @@ def main(
             hitfinder,
             device,
             num_workers_override=num_workers,
-            resume_training=resume_training,
+            resume_training=effective_resume(
+                resume_training, _fold_run_name(cfg, run_name_prefix, 0), continued
+            ),
             run_name_prefix=run_name_prefix,
             frame_cache=frame_cache,
             inference_only=inference_only,
@@ -217,7 +225,7 @@ def main(
         for fold in all_folds:
             # Real (deleting/rotating) pass for THIS fold only, so a crash on an
             # earlier fold never leaves later folds' checkpoints already deleted.
-            _check_checkpoint_collisions(
+            continued = _check_checkpoint_collisions(
                 [fold["fold_id"]],
                 cfg,
                 run_name_prefix,
@@ -243,7 +251,11 @@ def main(
                 hitfinder,
                 device,
                 num_workers_override=num_workers,
-                resume_training=resume_training,
+                resume_training=effective_resume(
+                    resume_training,
+                    _fold_run_name(cfg, run_name_prefix, fold["fold_id"]),
+                    continued,
+                ),
                 run_name_prefix=run_name_prefix,
                 frame_cache=frame_cache,
                 inference_only=inference_only,

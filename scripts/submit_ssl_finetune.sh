@@ -33,8 +33,9 @@
 #                 Decides what happens when best.pt already exists for the resolved
 #                 run name. --inference-only evaluates it without training and needs
 #                 neither the pretrain checkpoint nor the pretrain_run_prefix to exist.
-#                 A requeued job (SLURM_RESTART_COUNT > 0) always resumes, even if
-#                 --override-training was requested, so it never deletes its own progress.
+#                 A requeued job keeps its SLURM_JOB_ID, and the training entry point
+#                 applies --override-training only once per job id (override_applied.json),
+#                 so a requeue never deletes its own progress.
 #
 # See also:
 #   scripts/submit_ssl_finetune_all.sh   multi-fold submission with per-fold NVMe staging
@@ -68,14 +69,6 @@ PRETRAIN_RUN_PREFIX="${3:?pretrain_run_prefix required, e.g. mae-vits16-v2}"
 shift 3
 EXTRA=("$@")
 RESUME_FLAG="${RESUME_FLAG:---resume-training}"
-
-# A requeued job (SLURM_RESTART_COUNT > 0) re-runs with the same environment, so a
-# job started with --override-training would delete the checkpoint it wrote before
-# the node failure. Resume instead; the override already happened on the first start.
-if [[ "${SLURM_RESTART_COUNT:-0}" -gt 0 && "${RESUME_FLAG}" == "--override-training" ]]; then
-    echo "Requeued job (restart ${SLURM_RESTART_COUNT}): using --resume-training instead of --override-training." >&2
-    RESUME_FLAG="--resume-training"
-fi
 
 CONFIG="configs/ssl/mae_finetune.yaml"
 # seed lives in base.yaml and may be overridden in the model config (load_config()

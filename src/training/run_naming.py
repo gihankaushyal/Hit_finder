@@ -22,8 +22,15 @@ the checkpoint must exist) was passed. The three are mutually exclusive.
 from __future__ import annotations
 
 import re
+import sys
 from pathlib import Path
 from typing import Callable
+
+from src.training.override_marker import (
+    current_job_id,
+    override_already_applied,
+    write_override_marker,
+)
 
 CHECKPOINT_ROOT = Path("checkpoints")
 
@@ -89,7 +96,7 @@ def check_checkpoint_collisions(
     dry_run: bool = False,
     inference_only: bool = False,
     on_override: Callable[[str, Path], Callable[[], None] | None] | None = None,
-) -> None:
+) -> set[str]:
     """Gate on checkpoints that already exist under the resolved run names.
 
     `run_names` maps fold id -> run name. For each run whose
@@ -111,14 +118,29 @@ def check_checkpoint_collisions(
     `on_override(run_name, run_dir)` is called for each run about to be
     overridden, before anything is deleted, never in `dry_run`. It may return a rollback
     callable, invoked (then the error re-raised) if a deletion fails.
+
+    Returns the names of runs whose `--override-training` was already applied by this
+    launch (a requeue of the same `SLURM_JOB_ID`, see override_marker.py), whether or
+    not a new checkpoint was saved yet: nothing is rotated or deleted, and the caller must treat them as resumes
+    (`effective_resume`).
     """
     if sum((resume_training, override_training, inference_only)) > 1:
         raise ValueError(
             "resume_training, override_training and inference_only are mutually exclusive"
         )
+    continued: set[str] = set()
     for fold_id, run_name in run_names.items():
         run_dir = Path(checkpoint_root) / run_name
         ckpt_path = run_dir / checkpoint_name
+        if override_training and not dry_run and override_already_applied(run_dir):
+            # Checked before the exists() test: a requeue between the delete and the
+            # first save finds no checkpoint, and must not be treated as a fresh launch.
+            print(
+                f"  [override] already applied by job {current_job_id()} for "
+                f"{run_name}; continuing from the existing checkpoint."
+            )
+            continued.add(run_name)
+            continue
         if not ckpt_path.exists():
             if inference_only:
                 raise SystemExit(
@@ -144,6 +166,15 @@ def check_checkpoint_collisions(
                 if rollback is not None:
                     rollback()
                 raise
+            try:
+                write_override_marker(run_dir, run_name)
+            except OSError as exc:
+                # The delete already happened: failing now would protect nothing.
+                print(
+                    f"  [override] warning: could not write the override marker for "
+                    f"{run_name} ({exc}); a requeue of this job will override again.",
+                    file=sys.stderr,
+                )
         elif not resume_training and not inference_only:
             raise SystemExit(
                 f"Checkpoint already exists for fold {fold_id}: {ckpt_path}\n\n"
@@ -151,3 +182,9 @@ def check_checkpoint_collisions(
                 f"--override-training to discard it and start fold {fold_id} from "
                 "scratch, or --inference-only to evaluate it without training."
             )
+    return continued
+
+
+def effective_resume(resume_training: bool, run_name: str, continued: set[str]) -> bool:
+    """Resume when asked to, or when this launch already applied the run's override."""
+    return resume_training or run_name in continued

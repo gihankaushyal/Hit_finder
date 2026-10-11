@@ -161,7 +161,7 @@ def test_track1_override_rotates_wandb_id(tmp_path: Path, monkeypatch):
 class TestTrack1PerFoldOverride:
     PREFIX = "resnet18-asymmetric-v2"
 
-    def _drive(self, tmp_path: Path, monkeypatch, fake_train_fold):
+    def _drive(self, tmp_path: Path, monkeypatch, fake_train_fold, **main_kw):
         from src.training import train_asymmetric as ta
 
         monkeypatch.chdir(tmp_path)
@@ -198,6 +198,7 @@ class TestTrack1PerFoldOverride:
             self.PREFIX,
             device="cpu",
             override_training=True,
+            **main_kw,
         )
 
     def test_override_is_deferred_per_fold_and_ordered_before_id_resolution(
@@ -240,3 +241,82 @@ class TestTrack1PerFoldOverride:
                 [2], cfg, self.PREFIX, False, False, dry_run=True
             )
         assert (d / "best.pt").exists()
+
+    def _make_runs(self, tmp_path: Path, fold_ids):
+        dirs = {}
+        for i in fold_ids:
+            d = tmp_path / "checkpoints" / f"{self.PREFIX}-fold{i}-seed42"
+            d.mkdir(parents=True)
+            (d / "best.pt").write_bytes(b"x")
+            dirs[i] = d
+        return dirs
+
+    def _record(self, seen):
+        def fake_train_fold(fold, *a, **k):
+            seen[fold["fold_id"]] = k["resume_training"]
+            return {"ap": 0.5, "test_detector": "AGIPD"}
+
+        return fake_train_fold
+
+    def test_requeue_resumes_the_fold_whose_override_this_job_applied(
+        self, tmp_path: Path, monkeypatch
+    ):
+        """A first gate call writes fold 1's marker; the requeued launch then resumes it."""
+        from src.training import train_asymmetric as ta
+
+        monkeypatch.setenv("SLURM_JOB_ID", "123")
+        dirs = self._make_runs(tmp_path, (1,))
+        monkeypatch.chdir(tmp_path)
+        cfg = {"seed": 42, "wandb": {"project": "p"}}
+        # first start of the job: overrides fold 1 and writes the marker
+        assert (
+            ta._check_checkpoint_collisions([1], cfg, self.PREFIX, False, True) == set()
+        )
+        (dirs[1] / "best.pt").write_bytes(b"new attempt")
+        monkeypatch.setenv("SLURM_RESTART_COUNT", "1")  # the requeue
+        seen: dict = {}
+        self._drive(tmp_path, monkeypatch, self._record(seen))
+        assert seen == {1: True, 2: False}
+        assert (dirs[1] / "best.pt").read_bytes() == b"new attempt"
+
+    def test_other_job_still_overrides_and_does_not_resume(
+        self, tmp_path: Path, monkeypatch
+    ):
+        from src.training import override_marker as om
+
+        monkeypatch.setenv("SLURM_JOB_ID", "123")
+        dirs = self._make_runs(tmp_path, (1,))
+        om.write_override_marker(dirs[1], f"{self.PREFIX}-fold1-seed42")
+        monkeypatch.setenv("SLURM_JOB_ID", "456")
+        seen: dict = {}
+        self._drive(tmp_path, monkeypatch, self._record(seen))
+        assert seen == {1: False, 2: False}
+        assert not (dirs[1] / "best.pt").exists()
+
+    def test_without_a_job_id_it_overrides_and_does_not_resume(
+        self, tmp_path: Path, monkeypatch
+    ):
+        monkeypatch.delenv("SLURM_JOB_ID", raising=False)
+        dirs = self._make_runs(tmp_path, (1,))
+        seen: dict = {}
+        self._drive(tmp_path, monkeypatch, self._record(seen))
+        assert seen == {1: False, 2: False}
+        assert not (dirs[1] / "best.pt").exists()
+
+    def test_intra_requeue_resumes_fold_zero(self, tmp_path: Path, monkeypatch):
+        from src.training import override_marker as om
+        from src.training import train_asymmetric as ta
+
+        monkeypatch.setenv("SLURM_JOB_ID", "123")
+        dirs = self._make_runs(tmp_path, (0,))
+        om.write_override_marker(dirs[0], f"{self.PREFIX}-fold0-seed42")
+        monkeypatch.setenv("SLURM_RESTART_COUNT", "1")  # the requeue
+        monkeypatch.setattr(
+            ta,
+            "_build_intra_split",
+            lambda sessions: {"test_detector": "AGIPD", "splits": {}},
+        )
+        seen: dict = {}
+        self._drive(tmp_path, monkeypatch, self._record(seen), intra=True)
+        assert seen == {0: True}
+        assert (dirs[0] / "best.pt").exists()
