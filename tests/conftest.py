@@ -17,6 +17,9 @@ callers:
 
 from __future__ import annotations
 
+import sys
+import warnings
+
 import pytest
 
 
@@ -36,19 +39,24 @@ def wandb_disabled(monkeypatch: pytest.MonkeyPatch):
     `wandb.setup()` (reached through `wandb_enabled()`) creates a process-wide singleton
     and freezes its settings, so a test that ran before `WANDB_MODE` was set made every
     later `wandb.init` try to log in; CI has no API key and failed. Setting the mode for
-    every test, and dropping the singleton afterwards, removes the order dependence.
-    A test that needs a different mode sets or deletes `WANDB_MODE` itself.
+    every test, and dropping the singleton afterwards, removes the order dependence
+    (tests/test_wandb_isolation.py pins it). A test that needs a different mode sets or
+    deletes `WANDB_MODE` itself.
+
+    The real module is captured BEFORE the test body: a test may swap a fake into
+    `sys.modules`, and the teardown must still reach the real singleton. wandb is never
+    imported just for this, so tests that do not use it pay nothing.
     """
     monkeypatch.setenv("WANDB_MODE", "disabled")
+    real_wandb = sys.modules.get("wandb")
     yield
-    try:
-        import wandb
-
-        wandb.teardown()
-    except (
-        Exception
-    ):  # best effort: a test that never touched W&B has nothing to tear down
-        pass
+    real_wandb = real_wandb or sys.modules.get("wandb")
+    teardown = getattr(real_wandb, "teardown", None)
+    if callable(teardown):
+        try:
+            teardown()
+        except Exception as exc:  # surface it: a frozen singleton breaks later tests
+            warnings.warn(f"wandb.teardown() failed after a test: {exc!r}")
 
 
 @pytest.fixture(autouse=True)
