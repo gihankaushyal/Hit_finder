@@ -95,12 +95,6 @@ def test_finetune_scripts_read_only_the_finetune_config(script):
     assert f'CONFIG="{FINETUNE_CONFIG}"' in text
 
 
-GUARD_START = 'if [[ "${SLURM_RESTART_COUNT:-0}" -gt 0'
-JOB_SCRIPTS = [
-    "submit_asymmetric_lodo_fold.sh",
-    "submit_ssl_finetune.sh",
-    "submit_ssl_pretrain.sh",
-]
 ORCHESTRATORS = [
     "submit_asymmetric_lodo_all.sh",
     "submit_ssl_finetune_all.sh",
@@ -113,13 +107,6 @@ def _block(text: str, start: str, end: str) -> str:
     first = next(i for i, line in enumerate(lines) if line.startswith(start))
     last = next(i for i in range(first, len(lines)) if lines[i] == end)
     return "\n".join(lines[first : last + 1])
-
-
-def test_requeue_guard_is_identical_in_all_job_scripts():
-    blocks = {
-        s: _block((SCRIPTS / s).read_text(), GUARD_START, "fi") for s in JOB_SCRIPTS
-    }
-    assert len(set(blocks.values())) == 1, blocks
 
 
 def test_seed_block_is_identical_in_all_orchestrators():

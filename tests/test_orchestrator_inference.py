@@ -358,15 +358,16 @@ def _python_args(stub) -> list[str]:
 
 
 REQUEUE_CASES = [
-    ("1", "--override-training", "--resume-training"),  # requeued: never override again
-    ("0", "--override-training", "--override-training"),  # first start: honoured
+    # A requeue passes the requested flag through unchanged; the Python gate decides.
+    ("1", "--override-training", "--override-training"),
+    ("0", "--override-training", "--override-training"),
     (None, "--override-training", "--override-training"),
-    ("2", "--inference-only", "--inference-only"),  # other flags untouched
+    ("2", "--inference-only", "--inference-only"),
     ("2", "--resume-training", "--resume-training"),
 ]
 
 
-class TestRequeueGuard:
+class TestRequeueFlagPassthrough:
     @staticmethod
     def _check(proc, stub, restart, requested, expected):
         assert proc.returncode == 0, proc.stderr
@@ -374,8 +375,7 @@ class TestRequeueGuard:
         assert expected in args
         competing = {"--override-training", "--resume-training", "--inference-only"}
         assert not ((competing - {expected}) & set(args))
-        if restart not in (None, "0") and requested == "--override-training":
-            assert "Requeued job" in proc.stderr
+        assert "Requeued job" not in proc.stderr
 
     @pytest.mark.parametrize("restart, requested, expected", REQUEUE_CASES)
     def test_track1_fold_job(self, job_sandbox, restart, requested, expected):
@@ -404,3 +404,15 @@ class TestRequeueGuard:
             PRETRAIN_PREFIX,
         )
         self._check(proc, stub, restart, requested, expected)
+
+
+@pytest.mark.parametrize(
+    "script",
+    [
+        "submit_asymmetric_lodo_fold.sh",
+        "submit_ssl_finetune.sh",
+        "submit_ssl_pretrain.sh",
+    ],
+)
+def test_job_scripts_no_longer_carry_a_shell_requeue_guard(script):
+    assert "SLURM_RESTART_COUNT" not in (REPO / "scripts" / script).read_text()
