@@ -11,6 +11,16 @@
 #SBATCH --output=logs/epix-smoketest-%j.out
 #SBATCH --error=logs/epix-smoketest-%j.err
 
+# DEPRECATED (pipeline v1): this script writes the legacy run prefix
+# 'resnet18smoke-asymmetric-v1', which predates the frame cache and the run-naming standard.
+# It refuses to run so a v1 run cannot be started by accident.
+echo "DEPRECATED: $(basename "$0") is a pipeline-v1 script (run prefix 'resnet18smoke-asymmetric-v1') and no longer runs." >&2
+echo "Use instead:" >&2
+echo '  sbatch scripts/submit_epix_cache_smoketest.sh   (frame-cache smoke test, v2 prefix)' >&2
+echo "See src/training/run_naming.py for the run-name convention." >&2
+exit 1
+
+
 module load mamba/latest
 source activate sfx-hitfinder
 
