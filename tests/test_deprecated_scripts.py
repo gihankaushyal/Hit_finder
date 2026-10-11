@@ -23,8 +23,8 @@ DEPRECATED = {
     "submit_lodo_parallel.sh": "submit_asymmetric_lodo_all.sh",
     "submit_agipd_lodo.sh": "submit_asymmetric_lodo_all.sh",
     "submit_epix_smoketest.sh": "submit_epix_cache_smoketest.sh",
-    "submit_agipd_smoketest.sh": "submit_asymmetric_lodo_all.sh",
-    "submit_resonet_smoketest.sh": "submit_asymmetric_lodo_all.sh",
+    "submit_agipd_smoketest.sh": "submit_epix_cache_smoketest.sh",
+    "submit_resonet_smoketest.sh": "submit_epix_cache_smoketest.sh",
 }
 
 STUB = '#!/bin/bash\necho "$0 $*" >> "$STUB_DIR/calls.log"\n'
@@ -39,11 +39,14 @@ def test_script_refuses_to_run(script, tmp_path):
         path = bin_dir / name
         path.write_text(STUB)
         path.chmod(path.stat().st_mode | stat.S_IEXEC)
+    # The cluster exports `module` as a bash function (BASH_FUNC_*) and BASH_ENV
+    # re-defines it in every shell; both would shadow the stubs, so drop them.
     env = {
-        **os.environ,
-        "PATH": f"{bin_dir}:{os.environ['PATH']}",
-        "STUB_DIR": str(stub_dir),
+        k: v
+        for k, v in os.environ.items()
+        if not k.startswith("BASH_FUNC_") and k != "BASH_ENV"
     }
+    env.update({"PATH": f"{bin_dir}:{os.environ['PATH']}", "STUB_DIR": str(stub_dir)})
     proc = subprocess.run(
         ["bash", str(SCRIPTS / script)],
         cwd=tmp_path,
@@ -72,3 +75,31 @@ def test_no_current_script_is_deprecated():
         "submit_epix_cache_smoketest.sh",
     ):
         assert "DEPRECATED" not in (SCRIPTS / name).read_text(), name
+
+
+# The scripts sbatch'd directly are queued before the gate can run, so their
+# headers must not wait for scarce resources just to print a refusal.
+SBATCH_SCRIPTS = sorted(set(DEPRECATED) - {"submit_lodo_parallel.sh"})
+
+
+@pytest.mark.parametrize("script", SBATCH_SCRIPTS)
+def test_refusal_job_asks_for_no_gpu_or_node(script):
+    headers = [
+        line
+        for line in (SCRIPTS / script).read_text().splitlines()
+        if line.startswith("#SBATCH")
+    ]
+    text = "\n".join(headers)
+    assert "--gres" not in text and "--nodelist" not in text, text
+    assert "--time=00:01:00" in text, text
+
+
+@pytest.mark.parametrize(
+    "script", ["submit_agipd_smoketest.sh", "submit_resonet_smoketest.sh"]
+)
+def test_smoke_tests_do_not_point_at_a_production_run(script, tmp_path):
+    proc = subprocess.run(
+        ["bash", str(SCRIPTS / script)], cwd=tmp_path, capture_output=True, text=True
+    )
+    assert "--run-name-prefix" not in proc.stderr  # no production LODO command
+    assert "submit_epix_cache_smoketest.sh" in proc.stderr

@@ -16,6 +16,7 @@ from src.utils.config import load_config
 REPO = Path(__file__).resolve().parent.parent
 SCRIPTS = REPO / "scripts"
 
+TRACK1_CONFIG = "configs/supervised/resnet18_asymmetric.yaml"
 PRETRAIN_CONFIG = "configs/ssl/mae_pretrain.yaml"
 FINETUNE_CONFIG = "configs/ssl/mae_finetune.yaml"
 
@@ -71,7 +72,7 @@ def _shell_seed(config: str) -> str:
     return out.stdout.strip()
 
 
-@pytest.mark.parametrize("config", [PRETRAIN_CONFIG, FINETUNE_CONFIG])
+@pytest.mark.parametrize("config", [PRETRAIN_CONFIG, FINETUNE_CONFIG, TRACK1_CONFIG])
 def test_shell_seed_equals_load_config_seed(config):
     assert _shell_seed(config) == str(load_config(REPO / config)["seed"])
 

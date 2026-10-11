@@ -290,6 +290,7 @@ class TestTrack1TwoPass:
         )
         assert proc.returncode == 1
         assert "nothing submitted" in proc.stderr.lower()
+        assert "fold 2" in proc.stderr  # names the fold whose answer was missing
         assert _log(stub) == []  # fold 1's chain must not be queued already
 
     def test_three_folds_get_their_own_answers(self, sandbox):
