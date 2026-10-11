@@ -340,3 +340,27 @@ Behaviour worth knowing:
   `dry_run=True` (fail fast, nothing deleted or rotated) and the real gate for each fold just
   before that fold starts, so a crash on fold 1 leaves fold 2's checkpoint and id untouched.
   `_train_fold` resolves the id after that real pass; keep that order.
+
+### Override is applied once per SLURM job {#override-once}
+
+`--override-training` deletes the existing checkpoint, so re-running the same launch after
+the new attempt wrote one would destroy it. A requeued SLURM job keeps its `SLURM_JOB_ID`
+(a fresh `sbatch` gets a new one), so the gate keys on it:
+
+- After a run is overridden, `check_checkpoint_collisions` writes
+  `checkpoints/<run_name>/override_applied.json` (`job_id`, `run_name`, `applied_at`). The
+  order is rotate the W&B id, delete the checkpoint, then write the marker.
+- Under the **same** job id the gate prints `[override] already applied by job N ...`, keeps
+  the checkpoint, does not rotate the W&B id again, and returns the run in a `continued` set.
+  Every entry point turns that into a resume with `effective_resume(...)` (Track 1 per fold
+  and intra, SSL fine-tune, SSL pretrain).
+- Under a different job id the override applies again; with no `SLURM_JOB_ID` (a direct
+  `python -m ...` launch) the flag is honoured every time and no marker is written.
+- A requeue that happens before the gate ever ran finds no marker and applies the override,
+  so a requested override is no longer silently turned into a resume.
+- The job scripts no longer rewrite `RESUME_FLAG` on a requeue; they pass it through and
+  Python decides.
+
+Limit: a manual re-`sbatch` of the same command is a new job id, hence a new, deliberate
+override. Code: `src/training/override_marker.py`, `check_checkpoint_collisions` and
+`effective_resume` in `src/training/run_naming.py`.
