@@ -72,7 +72,6 @@ class TestPretrainSmoke:
     def test_two_epochs_writes_resumable_checkpoint(
         self, synthetic_cxi, tmp_path, monkeypatch
     ):
-        monkeypatch.setenv("WANDB_MODE", "disabled")
         cfg = _tiny_cfg(tmp_path / "ckpt")
         summary = run_pretrain(
             cfg,
@@ -90,7 +89,6 @@ class TestPretrainSmoke:
         assert np.isfinite(summary["final_loss"])
 
     def test_resume_continues_from_last(self, synthetic_cxi, tmp_path, monkeypatch):
-        monkeypatch.setenv("WANDB_MODE", "disabled")
         cfg = _tiny_cfg(tmp_path / "ckpt2")
         run_pretrain(cfg, {"s0": synthetic_cxi}, ["s0"], "mae-test-fold1", "cpu")
         cfg["training"]["epochs"] = 3
@@ -100,7 +98,6 @@ class TestPretrainSmoke:
         assert summary["epochs_run"] == 1  # only epoch 3 ran
 
     def test_peak_aware_smoke(self, synthetic_cxi, tmp_path, monkeypatch):
-        monkeypatch.setenv("WANDB_MODE", "disabled")
         cfg = _tiny_cfg(tmp_path / "ckpt3")
         cfg["ssl"]["masking"] = "peak_aware"
         summary = run_pretrain(
@@ -213,7 +210,6 @@ class TestPretrainRunNaming:
         """The gate and run_pretrain must agree on where last.pt lives."""
         from src.training.train_ssl_pretrain import prepare_pretrain_run
 
-        monkeypatch.setenv("WANDB_MODE", "disabled")
         cfg = _tiny_cfg(tmp_path / "ckpt")
         run_name = prepare_pretrain_run("mae-vits16-v2", 1, cfg)
         run_pretrain(cfg, {"s0": synthetic_cxi}, ["s0"], run_name, "cpu")
@@ -299,7 +295,6 @@ class TestFinetuneRunNaming:
     ):
         from src.training.train_ssl_finetune import read_pretrain_epoch
 
-        monkeypatch.setenv("WANDB_MODE", "disabled")
         cfg = _tiny_cfg(tmp_path / "ckpt")
         run_pretrain(cfg, {"s0": synthetic_cxi}, ["s0"], "mae-test-fold0", "cpu")
         ckpt = Path(cfg["checkpoint_dir"]) / "mae-test-fold0" / "last.pt"
