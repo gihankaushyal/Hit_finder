@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -17,6 +18,7 @@ from src.training.run_naming import (
     SSL_PRETRAIN_EXAMPLE,
     SSL_PRETRAIN_PREFIX_RE,
     check_checkpoint_collisions,
+    effective_resume,
     expand_finetune_prefix,
     fold_run_name,
     validate_run_name_prefix,
@@ -614,3 +616,129 @@ class TestOverrideRollback:
             checkpoint_root=tmp_path,
             on_override=lambda n, d: None,
         )
+
+
+class TestIdempotentOverride:
+    NAME = "run-v2-fold1-seed42"
+
+    def _gate(self, tmp_path, calls=None, **kw):
+        return check_checkpoint_collisions(
+            {1: self.NAME},
+            "best.pt",
+            False,
+            True,
+            extra_delete=("results.json",),
+            checkpoint_root=tmp_path,
+            on_override=(lambda n, d: calls.append(n)) if calls is not None else None,
+            **kw,
+        )
+
+    def test_first_override_writes_marker_and_reports_nothing_continued(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv("SLURM_JOB_ID", "123")
+        run_dir = _make_run_dir(tmp_path, self.NAME, ["best.pt", "results.json"])
+        assert self._gate(tmp_path) == set()
+        assert not (run_dir / "best.pt").exists()
+        marker = json.loads((run_dir / "override_applied.json").read_text())
+        assert marker["job_id"] == "123"
+
+    def test_same_job_again_keeps_the_new_checkpoint(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        monkeypatch.setenv("SLURM_JOB_ID", "123")
+        run_dir = _make_run_dir(tmp_path, self.NAME, ["best.pt"])
+        self._gate(tmp_path)  # first start: overrides
+        (run_dir / "best.pt").write_bytes(b"new")  # the new attempt's checkpoint
+        calls = []
+        assert self._gate(tmp_path, calls) == {self.NAME}  # requeue: same job id
+        assert (run_dir / "best.pt").read_bytes() == b"new"
+        assert calls == []  # no second id rotation
+        assert "already applied by job 123" in capsys.readouterr().out
+
+    def test_other_job_overrides_again_and_updates_the_marker(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv("SLURM_JOB_ID", "123")
+        run_dir = _make_run_dir(tmp_path, self.NAME, ["best.pt"])
+        self._gate(tmp_path)
+        (run_dir / "best.pt").write_bytes(b"new")
+        monkeypatch.setenv("SLURM_JOB_ID", "456")
+        assert self._gate(tmp_path) == set()
+        assert not (run_dir / "best.pt").exists()
+        marker = json.loads((run_dir / "override_applied.json").read_text())
+        assert marker["job_id"] == "456"
+
+    def test_without_a_job_id_it_always_overrides_and_writes_no_marker(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.delenv("SLURM_JOB_ID", raising=False)
+        run_dir = _make_run_dir(tmp_path, self.NAME, ["best.pt"])
+        assert self._gate(tmp_path) == set()
+        assert not (run_dir / "best.pt").exists()
+        assert not (run_dir / "override_applied.json").exists()
+
+    def test_dry_run_writes_no_marker_and_reports_nothing(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("SLURM_JOB_ID", "123")
+        run_dir = _make_run_dir(tmp_path, self.NAME, ["best.pt"])
+        assert self._gate(tmp_path, dry_run=True) == set()
+        assert (run_dir / "best.pt").exists()
+        assert not (run_dir / "override_applied.json").exists()
+
+    def test_failed_delete_writes_no_marker(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("SLURM_JOB_ID", "123")
+        run_dir = _make_run_dir(tmp_path, self.NAME, ["best.pt", "results.json"])
+        real_unlink = Path.unlink
+
+        def failing_unlink(self, *args, **kwargs):
+            if self.name == "results.json":
+                raise OSError("boom")
+            return real_unlink(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "unlink", failing_unlink)
+        with pytest.raises(OSError):
+            self._gate(tmp_path)
+        assert (run_dir / "best.pt").exists()
+        assert not (run_dir / "override_applied.json").exists()
+
+    def test_a_marker_survives_a_later_override(self, tmp_path, monkeypatch):
+        """The marker is not in extra_delete: it is overwritten, never removed first."""
+        monkeypatch.setenv("SLURM_JOB_ID", "123")
+        run_dir = _make_run_dir(tmp_path, self.NAME, ["best.pt"])
+        self._gate(tmp_path)
+        assert (run_dir / "override_applied.json").exists()
+
+    def test_no_checkpoint_after_a_crash_between_delete_and_marker_is_a_noop(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv("SLURM_JOB_ID", "123")
+        _make_run_dir(tmp_path, self.NAME, [])  # checkpoint already deleted, no marker
+        assert self._gate(tmp_path) == set()
+
+    def test_resume_and_inference_return_an_empty_set(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("SLURM_JOB_ID", "123")
+        _make_run_dir(tmp_path, self.NAME, ["best.pt"])
+        assert (
+            check_checkpoint_collisions(
+                {1: self.NAME}, "best.pt", True, False, checkpoint_root=tmp_path
+            )
+            == set()
+        )
+        assert (
+            check_checkpoint_collisions(
+                {1: self.NAME},
+                "best.pt",
+                False,
+                False,
+                checkpoint_root=tmp_path,
+                inference_only=True,
+            )
+            == set()
+        )
+
+
+def test_effective_resume():
+    assert effective_resume(True, "a", set()) is True
+    assert effective_resume(False, "a", {"a"}) is True
+    assert effective_resume(False, "a", {"b"}) is False
+    assert effective_resume(False, "a", set()) is False
