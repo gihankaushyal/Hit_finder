@@ -30,6 +30,28 @@ def _fake_assemble_only(frame, pads, detector_desc, assembler=None):
 
 
 @pytest.fixture(autouse=True)
+def wandb_disabled(monkeypatch: pytest.MonkeyPatch):
+    """Keep every test away from W&B, whatever order the tests run in.
+
+    `wandb.setup()` (reached through `wandb_enabled()`) creates a process-wide singleton
+    and freezes its settings, so a test that ran before `WANDB_MODE` was set made every
+    later `wandb.init` try to log in; CI has no API key and failed. Setting the mode for
+    every test, and dropping the singleton afterwards, removes the order dependence.
+    A test that needs a different mode sets or deletes `WANDB_MODE` itself.
+    """
+    monkeypatch.setenv("WANDB_MODE", "disabled")
+    yield
+    try:
+        import wandb
+
+        wandb.teardown()
+    except (
+        Exception
+    ):  # best effort: a test that never touched W&B has nothing to tear down
+        pass
+
+
+@pytest.fixture(autouse=True)
 def fake_jungfrau_assembly_via_dataset(monkeypatch: pytest.MonkeyPatch) -> None:
     """Patch assemble_only as bound into src.data.dataset's namespace.
 
