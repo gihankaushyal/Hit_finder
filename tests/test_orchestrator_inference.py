@@ -226,3 +226,181 @@ class TestJobScripts:
     def test_finetune_orchestrator_runs_its_preflight_after_the_prompts(self):
         text = (SCRIPTS / FINETUNE_ALL).read_text()
         assert text.index("PROBE_FLAGS[${fold}]=") < text.rindex("MISSING=0")
+
+
+def _track1_run(fold: int) -> str:
+    return f"resnet18-asymmetric-v2-fold{fold}-seed42"
+
+
+def _train_jobs(stub) -> list[str]:
+    return [line for line in _log(stub) if "submit_asymmetric_lodo_fold.sh" in line]
+
+
+class TestTrack1SeedLookup:
+    ARGS = ["--run-name-prefix", "resnet18-asymmetric-v2", "--folds", "1"]
+
+    def test_nested_seed_is_ignored(self, sandbox):
+        """An indented `seed:` must not be mistaken for the top-level seed."""
+        work, env, stub = sandbox
+        cfg = work / "configs" / "supervised" / "resnet18_asymmetric.yaml"
+        cfg.write_text("model:\n  seed: 5\n" + cfg.read_text())
+        _best_pt(work, TRACK1_RUN)  # seed 42 checkpoint exists -> the prompt must fire
+        proc = _run(work, env, TRACK1_ALL, *self.ARGS, stdin="override\n")
+        assert proc.returncode == 0, proc.stderr
+        assert "RESUME_FLAG=--override-training" in _train_jobs(stub)[0]
+
+    def test_missing_seed_is_a_clear_error_and_submits_nothing(self, sandbox):
+        work, env, stub = sandbox
+        for rel in (
+            "configs/base.yaml",
+            "configs/supervised/resnet18_asymmetric.yaml",
+        ):
+            path = work / rel
+            path.write_text(
+                "\n".join(
+                    line
+                    for line in path.read_text().splitlines()
+                    if not line.startswith("seed:")
+                )
+                + "\n"
+            )
+        proc = _run(work, env, TRACK1_ALL, *self.ARGS)
+        assert proc.returncode == 1
+        assert "top-level integer 'seed:'" in proc.stderr
+        assert "repository root" in proc.stderr
+        assert _log(stub) == []
+        assert not (work / "logs").exists()  # no stray logs/ before the check
+
+
+class TestTrack1TwoPass:
+    def test_eof_at_a_later_prompt_submits_nothing(self, sandbox):
+        work, env, stub = sandbox
+        _best_pt(work, _track1_run(2))
+        proc = _run(
+            work,
+            env,
+            TRACK1_ALL,
+            "--run-name-prefix",
+            "resnet18-asymmetric-v2",
+            "--folds",
+            "1",
+            "2",
+            "3",
+            stdin="",
+        )
+        assert proc.returncode == 1
+        assert "nothing submitted" in proc.stderr.lower()
+        assert "fold 2" in proc.stderr  # names the fold whose answer was missing
+        assert _log(stub) == []  # fold 1's chain must not be queued already
+
+    def test_three_folds_get_their_own_answers(self, sandbox):
+        work, env, stub = sandbox
+        _best_pt(work, _track1_run(2))
+        proc = _run(
+            work,
+            env,
+            TRACK1_ALL,
+            "--run-name-prefix",
+            "resnet18-asymmetric-v2",
+            "--folds",
+            "1",
+            "2",
+            "3",
+            stdin="override\n",
+        )
+        assert proc.returncode == 0, proc.stderr
+        jobs = _train_jobs(stub)
+        assert len(jobs) == 3
+        flags = [
+            "--override-training" if "--override-training" in j else "--resume-training"
+            for j in jobs
+        ]
+        assert flags == [
+            "--resume-training",
+            "--override-training",
+            "--resume-training",
+        ]
+        stages = [l for l in _log(stub) if "stage_frame_cache.sh" in l]
+        cleanups = [l for l in _log(stub) if "cleanup_ssl_stage.sh" in l]
+        assert len(stages) == 3 and len(cleanups) == 3
+        assert "afterany" in stages[1] and "afterany" in stages[2]
+
+
+@pytest.fixture
+def job_sandbox(sandbox):
+    """`sandbox` plus stubs so a *job* script runs to its python call."""
+    work, env, stub = sandbox
+    # Cluster shells export `module` as a bash function (and BASH_ENV re-defines it
+    # in every new bash), which would shadow the stub.
+    env = {
+        k: v
+        for k, v in env.items()
+        if not k.startswith("BASH_FUNC_") and k != "BASH_ENV"
+    }
+    bin_dir = Path(env["PATH"].split(":")[0])
+    for name, body in (
+        ("module", "#!/bin/bash\nexit 0\n"),
+        ("python", '#!/bin/bash\necho "$*" >> "$STUB_DIR/python.log"\n'),
+    ):
+        path = bin_dir / name
+        path.write_text(body)
+        path.chmod(path.stat().st_mode | stat.S_IEXEC)
+    (bin_dir / "activate").write_text("")  # `source activate <env>` finds it on PATH
+    (work / ".secrets").mkdir()
+    (work / ".secrets" / "wandb.env").write_text("")
+    for script in ("submit_asymmetric_lodo_fold.sh", "submit_ssl_finetune.sh"):
+        shutil.copy(SCRIPTS / script, work / "scripts" / script)
+    return work, env, stub
+
+
+def _python_args(stub) -> list[str]:
+    return (stub / "python.log").read_text().split()
+
+
+REQUEUE_CASES = [
+    ("1", "--override-training", "--resume-training"),  # requeued: never override again
+    ("0", "--override-training", "--override-training"),  # first start: honoured
+    (None, "--override-training", "--override-training"),
+    ("2", "--inference-only", "--inference-only"),  # other flags untouched
+    ("2", "--resume-training", "--resume-training"),
+]
+
+
+class TestRequeueGuard:
+    @staticmethod
+    def _check(proc, stub, restart, requested, expected):
+        assert proc.returncode == 0, proc.stderr
+        args = _python_args(stub)
+        assert expected in args
+        competing = {"--override-training", "--resume-training", "--inference-only"}
+        assert not ((competing - {expected}) & set(args))
+        if restart not in (None, "0") and requested == "--override-training":
+            assert "Requeued job" in proc.stderr
+
+    @pytest.mark.parametrize("restart, requested, expected", REQUEUE_CASES)
+    def test_track1_fold_job(self, job_sandbox, restart, requested, expected):
+        work, env, stub = job_sandbox
+        env = {**env, "RESUME_FLAG": requested}
+        if restart is not None:
+            env["SLURM_RESTART_COUNT"] = restart
+        proc = _run(
+            work, env, "submit_asymmetric_lodo_fold.sh", "1", "resnet18-asymmetric-v2"
+        )
+        self._check(proc, stub, restart, requested, expected)
+
+    @pytest.mark.parametrize("restart, requested, expected", REQUEUE_CASES)
+    def test_ssl_finetune_job(self, job_sandbox, restart, requested, expected):
+        work, env, stub = job_sandbox
+        _pretrain_ckpt(work)
+        env = {**env, "RESUME_FLAG": requested}
+        if restart is not None:
+            env["SLURM_RESTART_COUNT"] = restart
+        proc = _run(
+            work,
+            env,
+            "submit_ssl_finetune.sh",
+            "1",
+            "vits16-mae-v2",
+            PRETRAIN_PREFIX,
+        )
+        self._check(proc, stub, restart, requested, expected)

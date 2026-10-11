@@ -16,6 +16,7 @@ from src.utils.config import load_config
 REPO = Path(__file__).resolve().parent.parent
 SCRIPTS = REPO / "scripts"
 
+TRACK1_CONFIG = "configs/supervised/resnet18_asymmetric.yaml"
 PRETRAIN_CONFIG = "configs/ssl/mae_pretrain.yaml"
 FINETUNE_CONFIG = "configs/ssl/mae_finetune.yaml"
 
@@ -71,7 +72,7 @@ def _shell_seed(config: str) -> str:
     return out.stdout.strip()
 
 
-@pytest.mark.parametrize("config", [PRETRAIN_CONFIG, FINETUNE_CONFIG])
+@pytest.mark.parametrize("config", [PRETRAIN_CONFIG, FINETUNE_CONFIG, TRACK1_CONFIG])
 def test_shell_seed_equals_load_config_seed(config):
     assert _shell_seed(config) == str(load_config(REPO / config)["seed"])
 
@@ -92,3 +93,49 @@ def test_finetune_scripts_read_only_the_finetune_config(script):
     text = (SCRIPTS / script).read_text()
     assert "mae_pretrain.yaml" not in text
     assert f'CONFIG="{FINETUNE_CONFIG}"' in text
+
+
+GUARD_START = 'if [[ "${SLURM_RESTART_COUNT:-0}" -gt 0'
+JOB_SCRIPTS = [
+    "submit_asymmetric_lodo_fold.sh",
+    "submit_ssl_finetune.sh",
+    "submit_ssl_pretrain.sh",
+]
+ORCHESTRATORS = [
+    "submit_asymmetric_lodo_all.sh",
+    "submit_ssl_finetune_all.sh",
+    "submit_ssl_pretrain_all.sh",
+]
+
+
+def _block(text: str, start: str, end: str) -> str:
+    lines = text.splitlines()
+    first = next(i for i, line in enumerate(lines) if line.startswith(start))
+    last = next(i for i in range(first, len(lines)) if lines[i] == end)
+    return "\n".join(lines[first : last + 1])
+
+
+def test_requeue_guard_is_identical_in_all_job_scripts():
+    blocks = {
+        s: _block((SCRIPTS / s).read_text(), GUARD_START, "fi") for s in JOB_SCRIPTS
+    }
+    assert len(set(blocks.values())) == 1, blocks
+
+
+def test_seed_block_is_identical_in_all_orchestrators():
+    """The SEED= lookup and its validation (CONFIG's value is on its own line)."""
+    blocks = {}
+    for s in ORCHESTRATORS:
+        text = (SCRIPTS / s).read_text()
+        seed_line = next(
+            line for line in text.splitlines() if line.startswith('SEED="$(')
+        )
+        validation = _block(text, 'if [[ ! "${SEED}" =~', "fi")
+        blocks[s] = (seed_line, validation)
+    assert len(set(blocks.values())) == 1, blocks
+
+
+def test_orchestrators_create_logs_after_the_seed_check():
+    for s in ORCHESTRATORS:
+        text = (SCRIPTS / s).read_text()
+        assert text.index('SEED="$(') < text.index("mkdir -p logs"), s
