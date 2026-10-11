@@ -39,6 +39,7 @@ from src.training.run_naming import (
     SSL_PRETRAIN_EXAMPLE,
     SSL_PRETRAIN_PREFIX_RE,
     check_checkpoint_collisions,
+    effective_resume,
     fold_run_name,
     validate_run_name_prefix,
 )
@@ -58,8 +59,12 @@ def prepare_pretrain_run(
     resume_training: bool = False,
     override_training: bool = False,
     dry_run: bool = False,
+    continued: set[str] | None = None,
 ) -> str:
     """Validate the prefix, apply the checkpoint gate and return the run name.
+
+    `continued`, when given, is updated in place with the run names whose override
+    this launch already applied (resume them via `effective_resume`).
 
     With `dry_run` the gate only checks (exits on an unresolved collision) and
     deletes nothing; call again without it right before training.
@@ -71,7 +76,7 @@ def prepare_pretrain_run(
         SSL_PRETRAIN_EXAMPLE,
     )
     run_name = fold_run_name(run_name_prefix, fold_id, cfg["seed"])
-    check_checkpoint_collisions(
+    result = check_checkpoint_collisions(
         {fold_id: run_name},
         PRETRAIN_CHECKPOINT_NAME,
         resume_training,
@@ -81,6 +86,8 @@ def prepare_pretrain_run(
         dry_run=dry_run,
         on_override=override_hook_from_cfg(cfg),
     )
+    if continued is not None:
+        continued |= result
     return run_name
 
 
@@ -344,12 +351,14 @@ def main() -> None:
     print(f"Fold {args.fold}: excluding {held_out}; {len(pretrain_ids)} sessions")
     # Everything that can fail before training has succeeded: only now discard
     # the previous attempt's checkpoints.
+    continued: set[str] = set()
     prepare_pretrain_run(
         args.run_name_prefix,
         args.fold,
         cfg,
         resume_training=args.resume_training,
         override_training=args.override_training,
+        continued=continued,
     )
     summary = run_pretrain(
         cfg,
@@ -357,7 +366,7 @@ def main() -> None:
         pretrain_ids,
         run_name,
         device,
-        resume=args.resume_training,
+        resume=effective_resume(args.resume_training, run_name, continued),
         frame_cache=frame_cache,
     )
     print(summary)

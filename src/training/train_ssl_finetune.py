@@ -46,6 +46,7 @@ from src.training.run_naming import (
     SSL_FINETUNE_EXAMPLE,
     SSL_FINETUNE_PREFIX_RE,
     check_checkpoint_collisions,
+    effective_resume,
     expand_finetune_prefix,
     fold_run_name,
     validate_run_name_prefix,
@@ -85,8 +86,12 @@ def prepare_finetune_run(
     override_training: bool = False,
     inference_only: bool = False,
     dry_run: bool = False,
+    continued: set[str] | None = None,
 ) -> str:
     """Validate the prefix, apply the checkpoint gate and return the expanded prefix.
+
+    `continued`, when given, is updated in place with the run names whose override
+    this launch already applied (resume them via `effective_resume`).
 
     With `dry_run` the gate only checks (exits on an unresolved collision) and
     deletes nothing; call again without it right before training.
@@ -102,7 +107,7 @@ def prepare_finetune_run(
     )
     prefix = expand_finetune_prefix(run_name_prefix, linear_probe)
     run_suffix = cfg.get("wandb", {}).get("run_suffix", "")
-    check_checkpoint_collisions(
+    result = check_checkpoint_collisions(
         {fold_id: fold_run_name(prefix, fold_id, cfg["seed"], run_suffix)},
         "best.pt",
         resume_training,
@@ -112,6 +117,8 @@ def prepare_finetune_run(
         inference_only=inference_only,
         on_override=override_hook_from_cfg(cfg),
     )
+    if continued is not None:
+        continued |= result
     return prefix
 
 
@@ -258,6 +265,7 @@ def main() -> None:
 
     # Everything that can fail before training has succeeded: only now discard
     # the previous attempt's checkpoint.
+    continued: set[str] = set()
     prepare_finetune_run(
         args.run_name_prefix,
         args.fold,
@@ -266,6 +274,10 @@ def main() -> None:
         resume_training=args.resume_training,
         override_training=args.override_training,
         inference_only=args.inference_only,
+        continued=continued,
+    )
+    run_name = fold_run_name(
+        prefix, args.fold, cfg["seed"], cfg.get("wandb", {}).get("run_suffix", "")
     )
     result = _train_fold(
         fold,
@@ -274,7 +286,7 @@ def main() -> None:
         cfg,
         hitfinder,
         device,
-        resume_training=args.resume_training,
+        resume_training=effective_resume(args.resume_training, run_name, continued),
         model_builder=build_finetune_model_builder(
             cfg,
             None if args.inference_only else args.pretrain_checkpoint,

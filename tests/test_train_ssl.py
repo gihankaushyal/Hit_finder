@@ -544,3 +544,87 @@ class TestPretrainFreshStartWandbId:
                 resume=True,
             )
         assert exc.value.kwargs["id"] == "mae-test-fold0"
+
+
+class TestIdempotentOverrideEntryPoints:
+    FT_NAME = "vits16-mae-finetune-v2-fold1-seed42"
+    PT_NAME = "mae-vits16-v2-fold1-seed42"
+
+    @staticmethod
+    def _setup(monkeypatch):
+        monkeypatch.setenv("WANDB_MODE", "disabled")
+        monkeypatch.setattr(
+            "src.training.wandb_identity.tag_overridden",
+            lambda project, entity, run_id: True,
+        )
+
+    def _finetune(self, tmp_path, monkeypatch):
+        from src.training.train_ssl_finetune import prepare_finetune_run
+
+        monkeypatch.chdir(tmp_path)
+        self._setup(monkeypatch)
+        cfg = {"seed": 42, "wandb": {"project": "p"}}
+        run_dir = tmp_path / "checkpoints" / self.FT_NAME
+        run_dir.mkdir(parents=True)
+        (run_dir / "best.pt").write_bytes(b"old")
+        return prepare_finetune_run, cfg, run_dir / "best.pt"
+
+    def _pretrain(self, tmp_path, monkeypatch):
+        from src.training.train_ssl_pretrain import prepare_pretrain_run
+
+        self._setup(monkeypatch)
+        cfg = _tiny_cfg(tmp_path / "ckpt")
+        cfg["wandb"] = {"project": "p"}
+        run_dir = Path(cfg["checkpoint_dir"]) / self.PT_NAME
+        run_dir.mkdir(parents=True)
+        (run_dir / "last.pt").write_bytes(b"old")
+        return prepare_pretrain_run, cfg, run_dir / "last.pt"
+
+    def test_finetune_same_job_continues(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("SLURM_JOB_ID", "123")
+        prep, cfg, ckpt = self._finetune(tmp_path, monkeypatch)
+        out: set[str] = set()
+        prep("vits16-mae-v2", 1, cfg, override_training=True, continued=out)
+        assert out == set() and not ckpt.exists()
+        ckpt.write_bytes(b"new")
+        prefix = prep("vits16-mae-v2", 1, cfg, override_training=True, continued=out)
+        assert ckpt.read_bytes() == b"new"
+        assert out == {self.FT_NAME}
+        assert prefix == "vits16-mae-finetune-v2"
+
+    def test_finetune_other_job_overrides_again(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("SLURM_JOB_ID", "123")
+        prep, cfg, ckpt = self._finetune(tmp_path, monkeypatch)
+        prep("vits16-mae-v2", 1, cfg, override_training=True)
+        ckpt.write_bytes(b"new")
+        monkeypatch.setenv("SLURM_JOB_ID", "456")
+        out: set[str] = set()
+        prep("vits16-mae-v2", 1, cfg, override_training=True, continued=out)
+        assert not ckpt.exists() and out == set()
+
+    def test_pretrain_same_job_continues(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("SLURM_JOB_ID", "123")
+        prep, cfg, ckpt = self._pretrain(tmp_path, monkeypatch)
+        out: set[str] = set()
+        prep("mae-vits16-v2", 1, cfg, override_training=True, continued=out)
+        assert out == set() and not ckpt.exists()
+        ckpt.write_bytes(b"new")
+        name = prep("mae-vits16-v2", 1, cfg, override_training=True, continued=out)
+        assert ckpt.read_bytes() == b"new"
+        assert out == {self.PT_NAME} and name == self.PT_NAME
+
+    def test_pretrain_other_job_overrides_again(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("SLURM_JOB_ID", "123")
+        prep, cfg, ckpt = self._pretrain(tmp_path, monkeypatch)
+        prep("mae-vits16-v2", 1, cfg, override_training=True)
+        ckpt.write_bytes(b"new")
+        monkeypatch.setenv("SLURM_JOB_ID", "456")
+        out: set[str] = set()
+        prep("mae-vits16-v2", 1, cfg, override_training=True, continued=out)
+        assert not ckpt.exists() and out == set()
+
+    def test_default_continued_leaves_callers_unchanged(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("SLURM_JOB_ID", "123")
+        prep, cfg, ckpt = self._pretrain(tmp_path, monkeypatch)
+        assert prep("mae-vits16-v2", 1, cfg, override_training=True) == self.PT_NAME
+        assert not ckpt.exists()
