@@ -273,6 +273,7 @@ class TestTrack1PerFoldOverride:
             ta._check_checkpoint_collisions([1], cfg, self.PREFIX, False, True) == set()
         )
         (dirs[1] / "best.pt").write_bytes(b"new attempt")
+        monkeypatch.setenv("SLURM_RESTART_COUNT", "1")  # the requeue
         seen: dict = {}
         self._drive(tmp_path, monkeypatch, self._record(seen))
         assert seen == {1: True, 2: False}
@@ -309,6 +310,7 @@ class TestTrack1PerFoldOverride:
         monkeypatch.setenv("SLURM_JOB_ID", "123")
         dirs = self._make_runs(tmp_path, (0,))
         om.write_override_marker(dirs[0], f"{self.PREFIX}-fold0-seed42")
+        monkeypatch.setenv("SLURM_RESTART_COUNT", "1")  # the requeue
         monkeypatch.setattr(
             ta,
             "_build_intra_split",

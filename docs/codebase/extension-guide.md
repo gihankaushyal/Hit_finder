@@ -344,22 +344,34 @@ Behaviour worth knowing:
 ### Override is applied once per SLURM job {#override-once}
 
 `--override-training` deletes the existing checkpoint, so re-running the same launch after
-the new attempt wrote one would destroy it. A requeued SLURM job keeps its `SLURM_JOB_ID`
-(a fresh `sbatch` gets a new one), so the gate keys on it:
+the new attempt wrote one would destroy it. A requeued SLURM job keeps its `SLURM_JOB_ID` and
+gets a higher `SLURM_RESTART_COUNT` (a fresh `sbatch` gets a new job id), so the gate keys on
+both:
 
 - After a run is overridden, `check_checkpoint_collisions` writes
-  `checkpoints/<run_name>/override_applied.json` (`job_id`, `run_name`, `applied_at`). The
-  order is rotate the W&B id, delete the checkpoint, then write the marker.
-- Under the **same** job id the gate prints `[override] already applied by job N ...`, keeps
-  the checkpoint, does not rotate the W&B id again, and returns the run in a `continued` set.
-  Every entry point turns that into a resume with `effective_resume(...)` (Track 1 per fold
-  and intra, SSL fine-tune, SSL pretrain).
-- Under a different job id the override applies again; with no `SLURM_JOB_ID` (a direct
-  `python -m ...` launch) the flag is honoured every time and no marker is written.
+  `checkpoints/<run_name>/override_applied.json` (`job_id`, `restart_count`, `run_name`,
+  `applied_at`). The order is rotate the W&B id, delete the checkpoint, then write the marker.
+  If the marker write fails the gate warns on stderr and carries on (the delete already
+  happened, so failing protects nothing); a requeue of that job would then override again.
+- A **requeue** (same job id, higher restart count) prints `[override] already applied by
+  job N ...`, keeps the checkpoint, does not rotate the W&B id again, and returns the run in
+  a `continued` set. This is checked before looking for the checkpoint, so a requeue that
+  lands after the delete but before the first save is also continued. Every entry point turns
+  the set into a resume with `effective_resume(...)` (Track 1 per fold and intra, SSL
+  fine-tune, SSL pretrain), and a resume reuses the current W&B id even with no checkpoint.
+- Same job id and same restart count (two launches in one `salloc` / `srun --pty`
+  allocation) is a deliberate second override and applies again, as does a different job id.
+  With no `SLURM_JOB_ID` (a direct `python -m ...` launch) the flag is honoured every time
+  and no marker is written.
 - A requeue that happens before the gate ever ran finds no marker and applies the override,
   so a requested override is no longer silently turned into a resume.
 - The job scripts no longer rewrite `RESUME_FLAG` on a requeue; they pass it through and
   Python decides.
+
+Known limit (accepted): the marker is keyed on the launch, not on the checkpoint, and is never
+cleared. Copying a different checkpoint into the run directory and requeueing the same job
+resumes from that file, and a recycled job id (cluster counter reset) could skip a requested
+override.
 
 Limit: a manual re-`sbatch` of the same command is a new job id, hence a new, deliberate
 override. Code: `src/training/override_marker.py`, `check_checkpoint_collisions` and

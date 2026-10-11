@@ -650,6 +650,7 @@ class TestIdempotentOverride:
         run_dir = _make_run_dir(tmp_path, self.NAME, ["best.pt"])
         self._gate(tmp_path)  # first start: overrides
         (run_dir / "best.pt").write_bytes(b"new")  # the new attempt's checkpoint
+        monkeypatch.setenv("SLURM_RESTART_COUNT", "1")  # the requeue
         calls = []
         assert self._gate(tmp_path, calls) == {self.NAME}  # requeue: same job id
         assert (run_dir / "best.pt").read_bytes() == b"new"
@@ -664,6 +665,7 @@ class TestIdempotentOverride:
         self._gate(tmp_path)
         (run_dir / "best.pt").write_bytes(b"new")
         monkeypatch.setenv("SLURM_JOB_ID", "456")
+        monkeypatch.setenv("SLURM_RESTART_COUNT", "1")
         assert self._gate(tmp_path) == set()
         assert not (run_dir / "best.pt").exists()
         marker = json.loads((run_dir / "override_applied.json").read_text())
@@ -707,6 +709,57 @@ class TestIdempotentOverride:
         run_dir = _make_run_dir(tmp_path, self.NAME, ["best.pt"])
         self._gate(tmp_path)
         assert (run_dir / "override_applied.json").exists()
+
+    def test_second_launch_in_one_allocation_overrides_again(
+        self, tmp_path, monkeypatch
+    ):
+        """Same job id, no requeue (salloc / srun --pty): a deliberate relaunch."""
+        monkeypatch.setenv("SLURM_JOB_ID", "123")
+        monkeypatch.delenv("SLURM_RESTART_COUNT", raising=False)
+        run_dir = _make_run_dir(tmp_path, self.NAME, ["best.pt"])
+        self._gate(tmp_path)
+        (run_dir / "best.pt").write_bytes(b"new")
+        calls = []
+        assert self._gate(tmp_path, calls) == set()
+        assert not (run_dir / "best.pt").exists()
+        assert calls == [self.NAME]
+
+    def test_requeue_before_the_new_checkpoint_exists_is_continued(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """Preempted after the delete, before the first save: no checkpoint to find."""
+        monkeypatch.setenv("SLURM_JOB_ID", "123")
+        run_dir = _make_run_dir(tmp_path, self.NAME, ["best.pt"])
+        self._gate(tmp_path)  # deletes best.pt, writes the marker
+        assert not (run_dir / "best.pt").exists()
+        monkeypatch.setenv("SLURM_RESTART_COUNT", "1")
+        calls = []
+        assert self._gate(tmp_path, calls) == {self.NAME}
+        assert calls == []  # no second id rotation
+        assert "already applied by job 123" in capsys.readouterr().out
+
+    def test_marker_alone_does_not_make_a_dry_run_continue(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("SLURM_JOB_ID", "123")
+        _make_run_dir(tmp_path, self.NAME, ["best.pt"])
+        self._gate(tmp_path)
+        monkeypatch.setenv("SLURM_RESTART_COUNT", "1")
+        assert self._gate(tmp_path, dry_run=True) == set()
+
+    def test_marker_write_failure_warns_and_does_not_fail_the_launch(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """The delete already happened: failing now protects nothing."""
+        monkeypatch.setenv("SLURM_JOB_ID", "123")
+        run_dir = _make_run_dir(tmp_path, self.NAME, ["best.pt"])
+
+        def boom(*args, **kwargs):
+            raise OSError("disk full")
+
+        monkeypatch.setattr("src.training.run_naming.write_override_marker", boom)
+        assert self._gate(tmp_path) == set()
+        assert not (run_dir / "best.pt").exists()
+        err = capsys.readouterr().err
+        assert "could not write" in err and "disk full" in err
 
     def test_no_checkpoint_after_a_crash_between_delete_and_marker_is_a_noop(
         self, tmp_path, monkeypatch

@@ -147,7 +147,7 @@ def run_pretrain(
         run_name,
         cfg["wandb"].get("project"),
         cfg["wandb"].get("entity"),
-        resuming=resume and last_path.exists(),
+        resuming=resume,
     )
     wandb.init(
         project=cfg["wandb"]["project"],

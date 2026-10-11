@@ -545,6 +545,24 @@ class TestPretrainFreshStartWandbId:
             )
         assert exc.value.kwargs["id"] == "mae-test-fold0"
 
+    def test_resume_without_a_checkpoint_keeps_current_id(
+        self, synthetic_cxi, tmp_path, monkeypatch
+    ):
+        """A requeue before the first save (override already applied) reuses the run."""
+        cfg, _ = self._setup(
+            tmp_path, monkeypatch, {"sfx-hitfinder-test/mae-test-fold0"}
+        )
+        with pytest.raises(_InitCalled) as exc:
+            run_pretrain(
+                cfg,
+                {"s0": synthetic_cxi},
+                ["s0"],
+                "mae-test-fold0",
+                "cpu",
+                resume=True,
+            )
+        assert exc.value.kwargs["id"] == "mae-test-fold0"
+
 
 class TestIdempotentOverrideEntryPoints:
     FT_NAME = "vits16-mae-finetune-v2-fold1-seed42"
@@ -587,6 +605,7 @@ class TestIdempotentOverrideEntryPoints:
         prep("vits16-mae-v2", 1, cfg, override_training=True, continued=out)
         assert out == set() and not ckpt.exists()
         ckpt.write_bytes(b"new")
+        monkeypatch.setenv("SLURM_RESTART_COUNT", "1")  # the requeue
         prefix = prep("vits16-mae-v2", 1, cfg, override_training=True, continued=out)
         assert ckpt.read_bytes() == b"new"
         assert out == {self.FT_NAME}
@@ -598,6 +617,7 @@ class TestIdempotentOverrideEntryPoints:
         prep("vits16-mae-v2", 1, cfg, override_training=True)
         ckpt.write_bytes(b"new")
         monkeypatch.setenv("SLURM_JOB_ID", "456")
+        monkeypatch.setenv("SLURM_RESTART_COUNT", "1")
         out: set[str] = set()
         prep("vits16-mae-v2", 1, cfg, override_training=True, continued=out)
         assert not ckpt.exists() and out == set()
@@ -609,6 +629,7 @@ class TestIdempotentOverrideEntryPoints:
         prep("mae-vits16-v2", 1, cfg, override_training=True, continued=out)
         assert out == set() and not ckpt.exists()
         ckpt.write_bytes(b"new")
+        monkeypatch.setenv("SLURM_RESTART_COUNT", "1")  # the requeue
         name = prep("mae-vits16-v2", 1, cfg, override_training=True, continued=out)
         assert ckpt.read_bytes() == b"new"
         assert out == {self.PT_NAME} and name == self.PT_NAME
@@ -619,6 +640,7 @@ class TestIdempotentOverrideEntryPoints:
         prep("mae-vits16-v2", 1, cfg, override_training=True)
         ckpt.write_bytes(b"new")
         monkeypatch.setenv("SLURM_JOB_ID", "456")
+        monkeypatch.setenv("SLURM_RESTART_COUNT", "1")
         out: set[str] = set()
         prep("mae-vits16-v2", 1, cfg, override_training=True, continued=out)
         assert not ckpt.exists() and out == set()
