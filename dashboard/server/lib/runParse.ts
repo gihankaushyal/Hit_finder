@@ -28,10 +28,13 @@ const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object
 const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
 const str = (v: unknown): string | null => (typeof v === "string" ? v : null);
 
+// Keys that would change a plain object's prototype or shadow its constructor when assigned.
+const UNSAFE_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+
 function metricBlock(v: unknown): MetricBlock | null {
   if (!isObj(v)) return null;
   const out: MetricBlock = {};
-  for (const [k, val] of Object.entries(v).slice(0, MAX_METRICS)) out[k] = num(val);
+  for (const [k, val] of Object.entries(v).filter(([key]) => !UNSAFE_KEYS.has(key)).slice(0, MAX_METRICS)) out[k] = num(val);
   return out;
 }
 
@@ -54,11 +57,51 @@ function parseInference(v: unknown): RunInference | null {
   };
 }
 
+const NON_FINITE = /-?(?:NaN|Infinity)(?![A-Za-z0-9_])/y;
+
+/**
+ * Python's json module writes NaN, Infinity and -Infinity, which JSON.parse rejects. Replaces those bare
+ * tokens with null, leaving anything inside a string untouched.
+ */
+export function replaceNonFiniteTokens(text: string): string {
+  if (!/NaN|Infinity/.test(text)) return text;
+  let out = "";
+  let inString = false;
+  for (let i = 0; i < text.length; ) {
+    const c = text[i];
+    if (inString) {
+      if (c === "\\") {
+        out += text.slice(i, i + 2);
+        i += 2;
+        continue;
+      }
+      if (c === '"') inString = false;
+      out += c;
+      i++;
+      continue;
+    }
+    if (c === '"') {
+      inString = true;
+    } else if (c === "N" || c === "I" || c === "-") {
+      NON_FINITE.lastIndex = i;
+      const m = NON_FINITE.exec(text);
+      if (m && !/[A-Za-z0-9_]/.test(text[i - 1] ?? "")) {
+        out += "null";
+        i += m[0].length;
+        continue;
+      }
+    }
+    out += c;
+    i++;
+  }
+  return out;
+}
+
 /** Throws an Error whose message is a fixed string safe to show a client. */
 export function parseResult(text: string): RunResult {
   let raw: unknown;
   try {
-    raw = JSON.parse(text);
+    raw = JSON.parse(replaceNonFiniteTokens(text));
   } catch {
     throw new Error("not valid JSON");
   }
@@ -78,11 +121,11 @@ export function parseResult(text: string): RunResult {
 
 export function deriveStatus(
   kind: RunKind,
-  files: { resultsJson: boolean; anyCheckpoint: boolean },
+  files: { resultsJson: boolean; anyCheckpoint: boolean; pretrainShaped: boolean },
   result: RunResult | null,
   parseFailed: boolean,
 ): RunStatus {
-  if (kind === "ssl-pretrain") return "pretrain";
+  if (kind === "ssl-pretrain" || files.pretrainShaped) return "pretrain";
   if (!files.resultsJson) return "no-results";
   if (parseFailed || result === null) return "unknown";
   if (result.inference === null) return "complete";

@@ -30,7 +30,7 @@ describe("GET /api/runs", () => {
   });
   it("an unexpected failure is a 500 with a fixed message", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
-    const res = await appFor({ scan: () => { throw new Error("secret /home/x"); } }).request("/api/runs");
+    const res = await appFor({ scan: async () => { throw new Error("secret /home/x"); } }).request("/api/runs");
     expect(res.status).toBe(500);
     expect(await res.json()).toEqual({ error: "internal error" });
   });

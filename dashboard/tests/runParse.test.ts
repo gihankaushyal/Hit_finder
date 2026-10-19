@@ -50,6 +50,22 @@ describe("parseResult", () => {
   it("turns non-numeric metric values into null and ignores nested values", () => {
     expect(parseResult('{"cross": {"ap": "x", "f1": 0.5, "nested": {"a": 1}}}').cross).toEqual({ ap: null, f1: 0.5, nested: null });
   });
+  it("a __proto__ key in a metric block cannot change the block's prototype or become a metric", () => {
+    const r = parseResult('{"cross": {"__proto__": {"x": 1}, "constructor": 2, "ap": 0.5}}');
+    expect(Object.getPrototypeOf(r.cross)).toBe(Object.prototype);
+    expect(Object.keys(r.cross!)).toEqual(["ap"]);
+  });
+  it("reads Python's NaN and Infinity tokens as missing numbers", () => {
+    const r = parseResult('{"fold_id": 1, "cross": {"ap": NaN, "f1": 0.5, "x": -Infinity, "y": Infinity}, "in_domain": {"ap":NaN}}');
+    expect(r.cross).toEqual({ ap: null, f1: 0.5, x: null, y: null });
+    expect(r.inDomain).toEqual({ ap: null });
+  });
+  it("does not touch NaN inside strings, and still rejects other invalid JSON", () => {
+    const r = parseResult('{"inference": {"training_check": {"status": "incomplete", "warnings": ["loss was NaN, stopping: NaN", "a \\" NaN"]}}}');
+    expect(r.inference!.warnings).toEqual(["loss was NaN, stopping: NaN", 'a " NaN']);
+    expect(() => parseResult('{"a": nan}')).toThrow("not valid JSON");
+    expect(() => parseResult('{"a": NaNs}')).toThrow("not valid JSON");
+  });
   it("an inference block without a training_check has no trainingStatus", () => {
     expect(parseResult('{"inference": {"aggregation": "max"}}').inference?.trainingStatus).toBeNull();
   });
@@ -67,21 +83,24 @@ describe("deriveStatus", () => {
   const res = (status: string | null, withInference = true) =>
     parseResult(JSON.stringify(withInference ? { inference: status === null ? {} : { training_check: { status } } } : {}));
   it("pretrain directories are pretrain whatever their files", () => {
-    expect(deriveStatus("ssl-pretrain", { resultsJson: false, anyCheckpoint: true }, null, false)).toBe("pretrain");
+    expect(deriveStatus("ssl-pretrain", { resultsJson: false, anyCheckpoint: true, pretrainShaped: false }, null, false)).toBe("pretrain");
+  });
+  it("a legacy-named directory shaped like a pretrain run (no best.pt, no results) is pretrain", () => {
+    expect(deriveStatus("legacy", { resultsJson: false, anyCheckpoint: true, pretrainShaped: true }, null, false)).toBe("pretrain");
   });
   it("a checkpoint with no results.json has no results", () => {
-    expect(deriveStatus("track1", { resultsJson: false, anyCheckpoint: true }, null, false)).toBe("no-results");
+    expect(deriveStatus("track1", { resultsJson: false, anyCheckpoint: true, pretrainShaped: false }, null, false)).toBe("no-results");
   });
   it("a results.json without an inference block is complete", () => {
-    expect(deriveStatus("track1", { resultsJson: true, anyCheckpoint: true }, res(null, false), false)).toBe("complete");
+    expect(deriveStatus("track1", { resultsJson: true, anyCheckpoint: true, pretrainShaped: false }, res(null, false), false)).toBe("complete");
   });
   it.each([["complete", "complete"], ["incomplete", "provisional"], ["unknown", "unknown"]])("training_check %s gives %s", (tc, expected) => {
-    expect(deriveStatus("track1", { resultsJson: true, anyCheckpoint: true }, res(tc), false)).toBe(expected);
+    expect(deriveStatus("track1", { resultsJson: true, anyCheckpoint: true, pretrainShaped: false }, res(tc), false)).toBe(expected);
   });
   it("an inference block with no training_check is unknown", () => {
-    expect(deriveStatus("track1", { resultsJson: true, anyCheckpoint: true }, res(null), false)).toBe("unknown");
+    expect(deriveStatus("track1", { resultsJson: true, anyCheckpoint: true, pretrainShaped: false }, res(null), false)).toBe("unknown");
   });
   it("a results.json that could not be parsed is unknown", () => {
-    expect(deriveStatus("track1", { resultsJson: true, anyCheckpoint: true }, null, true)).toBe("unknown");
+    expect(deriveStatus("track1", { resultsJson: true, anyCheckpoint: true, pretrainShaped: false }, null, true)).toBe("unknown");
   });
 });

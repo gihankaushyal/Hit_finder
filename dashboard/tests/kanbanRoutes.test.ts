@@ -437,7 +437,7 @@ describe("file watcher trigger", () => {
   });
 });
 
-const NO_RUNS = { scan: () => ({ runs: [], scannedAt: "", checkpointsDirExists: false, truncated: false, error: null }) };
+const NO_RUNS = { scan: async () => ({ runs: [], scannedAt: "", checkpointsDirExists: false, truncated: false, error: null }) };
 
 describe("buildServer", () => {
   const config = { webDist: "/nonexistent", repoRoot: "/tmp" } as Config;

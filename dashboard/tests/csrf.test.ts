@@ -30,7 +30,7 @@ function server() {
     tests,
     kanban,
     runner: async () => ({ stdout: "x\n", stderr: "", code: 0 }),
-    runs: { scan: () => ({ runs: [], scannedAt: "", checkpointsDirExists: false, truncated: false, error: null }) },
+    runs: { scan: async () => ({ runs: [], scannedAt: "", checkpointsDirExists: false, truncated: false, error: null }) },
   });
   const effects = () => ({
     gh: gh.writes.length,

@@ -31,7 +31,7 @@ const metric = (b: MetricBlock | null | undefined, key: string) => fmt(b?.[key])
 
 function epochsText(r: RunRow): string {
   if (!r.epochs) return NA;
-  if (r.kind === "ssl-pretrain") return r.epochs.last === null ? NA : `epoch ${r.epochs.last}`;
+  if (r.status === "pretrain") return r.epochs.last === null ? NA : `epoch ${r.epochs.last}`;
   if (r.epochs.last !== null && r.epochs.configured !== null) return `${r.epochs.last} / ${r.epochs.configured}`;
   return r.epochs.last === null ? NA : String(r.epochs.last);
 }
