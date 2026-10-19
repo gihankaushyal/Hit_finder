@@ -4,6 +4,7 @@ import type { Config } from "./config";
 import type { EventBus } from "./events";
 import type { Gh } from "./lib/gh";
 import type { KanbanService } from "./lib/kanbanService";
+import type { RunScanner } from "./lib/runScan";
 import type { Runner } from "./runner";
 import type { TestRunner } from "./lib/testRunner";
 import { ciRoutes } from "./routes/ci";
@@ -12,6 +13,7 @@ import { issueRoutes } from "./routes/issues";
 import { kanbanRoutes } from "./routes/kanban";
 import { prRoutes } from "./routes/prs";
 import { repoRoutes } from "./routes/repo";
+import { runRoutes } from "./routes/runs";
 import { testRoutes } from "./routes/tests";
 
 export interface ServerDeps {
@@ -22,6 +24,7 @@ export interface ServerDeps {
   tests: TestRunner;
   kanban: KanbanService;
   runner: Runner;
+  runs: RunScanner;
 }
 
 /** Builds the app with every route module mounted behind token auth (no listening, no side effects). */
@@ -37,6 +40,7 @@ export function buildServer(d: ServerDeps): Hono {
       testRoutes(api, { tests: d.tests });
       eventRoutes(api, { bus: d.bus });
       kanbanRoutes(api, { service: d.kanban });
+      runRoutes(api, { scanner: d.runs });
       repoRoutes(api, { runner: d.runner, repoRoot: d.config.repoRoot });
     },
   });

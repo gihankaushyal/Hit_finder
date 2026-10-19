@@ -7,6 +7,7 @@ import { createGh } from "./lib/gh";
 import { createKanbanService } from "./lib/kanbanService";
 import { fileSyncDeps, isImportCompleted, removeStaleTempFiles } from "./lib/kanbanSync";
 import { startKanbanTriggers } from "./lib/kanbanTriggers";
+import { createRunScanner } from "./lib/runScan";
 import { createTestRunner, nodeSpawn } from "./lib/testRunner";
 import { execRunner } from "./runner";
 import { buildServer } from "./wiring";
@@ -45,7 +46,8 @@ const kanban = createKanbanService({
   bus,
   imported: () => isImportCompleted(config),
 });
-const app = buildServer({ config, token, bus, gh, tests, kanban, runner: execRunner });
+const runs = createRunScanner(config.checkpointsDir);
+const app = buildServer({ config, token, bus, gh, tests, kanban, runner: execRunner, runs });
 
 if (!isImportCompleted(config)) {
   console.log("Kanban sync is off until you run the first import: npm run kanban:sync -- --dry-run, then -- --yes");

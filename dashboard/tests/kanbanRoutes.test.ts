@@ -437,13 +437,15 @@ describe("file watcher trigger", () => {
   });
 });
 
+const NO_RUNS = { scan: () => ({ runs: [], scannedAt: "", checkpointsDirExists: false, truncated: false, error: null }) };
+
 describe("buildServer", () => {
   const config = { webDist: "/nonexistent", repoRoot: "/tmp" } as Config;
   function server() {
     const s = setup();
     const gh = s.gh;
     const tests = { state: () => ({ status: "idle" }) as never, start: () => true, stop: () => Promise.resolve() };
-    const app = buildServer({ config, token: "t".repeat(64), bus: s.bus, gh, tests, kanban: s.service, runner: async () => ({ stdout: "x\n", stderr: "", code: 0 }) });
+    const app = buildServer({ config, token: "t".repeat(64), bus: s.bus, gh, tests, kanban: s.service, runner: async () => ({ stdout: "x\n", stderr: "", code: 0 }), runs: NO_RUNS });
     return { app, gh };
   }
 
@@ -460,6 +462,7 @@ describe("buildServer", () => {
     ["PATCH", "/api/kanban/tasks/1"],
     ["POST", "/api/kanban/sync"],
     ["GET", "/api/repo"],
+    ["GET", "/api/runs"],
   ])("%s %s without a token is 401", async (method, url) => {
     const { app, gh } = server();
     const res = await app.request(url, { method });
@@ -471,7 +474,7 @@ describe("buildServer", () => {
   it("with the token, every module answers", async () => {
     const { app } = server();
     const auth = { Authorization: `Bearer ${"t".repeat(64)}` };
-    for (const url of ["/api/health", "/api/tests", "/api/kanban", "/api/ci", "/api/issues", "/api/prs", "/api/repo"]) {
+    for (const url of ["/api/health", "/api/tests", "/api/kanban", "/api/ci", "/api/issues", "/api/prs", "/api/repo", "/api/runs"]) {
       const res = await app.request(url, { headers: auth });
       expect(res.status, url).toBe(200);
     }
