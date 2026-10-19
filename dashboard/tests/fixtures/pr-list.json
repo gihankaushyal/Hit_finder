@@ -1,0 +1,74 @@
+[
+  {
+    "number": 50,
+    "title": "PR 50",
+    "state": "OPEN",
+    "mergedAt": null,
+    "headRefName": "b50",
+    "baseRefName": "main",
+    "additions": 50,
+    "deletions": 1,
+    "changedFiles": 2,
+    "url": "https://example.test/pull/50"
+  },
+  {
+    "number": 44,
+    "title": "PR 44",
+    "state": "MERGED",
+    "mergedAt": "2026-09-01T00:00:00Z",
+    "headRefName": "b44",
+    "baseRefName": "main",
+    "additions": 44,
+    "deletions": 1,
+    "changedFiles": 2,
+    "url": "https://example.test/pull/44"
+  },
+  {
+    "number": 47,
+    "title": "PR 47",
+    "state": "MERGED",
+    "mergedAt": "2026-10-01T00:00:00Z",
+    "headRefName": "b47",
+    "baseRefName": "main",
+    "additions": 47,
+    "deletions": 1,
+    "changedFiles": 2,
+    "url": "https://example.test/pull/47"
+  },
+  {
+    "number": 45,
+    "title": "PR 45",
+    "state": "MERGED",
+    "mergedAt": "2026-09-10T00:00:00Z",
+    "headRefName": "b45",
+    "baseRefName": "main",
+    "additions": 45,
+    "deletions": 1,
+    "changedFiles": 2,
+    "url": "https://example.test/pull/45"
+  },
+  {
+    "number": 46,
+    "title": "PR 46",
+    "state": "MERGED",
+    "mergedAt": "2026-09-20T00:00:00Z",
+    "headRefName": "b46",
+    "baseRefName": "main",
+    "additions": 46,
+    "deletions": 1,
+    "changedFiles": 2,
+    "url": "https://example.test/pull/46"
+  },
+  {
+    "number": 43,
+    "title": "PR 43",
+    "state": "MERGED",
+    "mergedAt": "2026-08-01T00:00:00Z",
+    "headRefName": "b43",
+    "baseRefName": "main",
+    "additions": 43,
+    "deletions": 1,
+    "changedFiles": 2,
+    "url": "https://example.test/pull/43"
+  }
+]

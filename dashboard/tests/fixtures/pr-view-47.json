@@ -1,0 +1,25 @@
+{
+  "number": 47,
+  "title": "PR 47",
+  "state": "MERGED",
+  "mergedAt": "2026-10-01T00:00:00Z",
+  "headRefName": "b47",
+  "baseRefName": "main",
+  "additions": 47,
+  "deletions": 1,
+  "changedFiles": 2,
+  "url": "https://example.test/pull/47",
+  "body": "## Summary\n- first change\n- second change\n\n## Test plan\n- [x] pytest\n- [ ] smoke\n",
+  "files": [
+    {
+      "path": "a.py",
+      "additions": 3,
+      "deletions": 1
+    },
+    {
+      "path": "b.py",
+      "additions": 0,
+      "deletions": 5
+    }
+  ]
+}

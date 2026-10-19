@@ -71,3 +71,6 @@ docs/progress_notes.md
 
 # Local kanban scratch file (synced to GitHub issues by the dashboard)
 phase-05-kanban.md
+
+# One-time backup written by the dashboard kanban sync
+*.pre-sync.bak

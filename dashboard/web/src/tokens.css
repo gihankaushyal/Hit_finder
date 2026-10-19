@@ -1,0 +1,52 @@
+/* Design tokens. Dark is the default; light swaps the same names. */
+:root {
+  color-scheme: dark;
+  --bg: #0e1113;
+  --surface: #14181b;
+  --surface-2: #1a1f23;
+  --rule: #262d33;
+  --text: #e4e7e9;
+  --text-dim: #9aa4ab;
+  --accent: #f0a020;
+  --accent-text: #14181b;
+  --fail: #e5604d;
+  --ok: #7fb88a;
+  --radius: 2px;
+  --font-sans: "IBM Plex Sans", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+  --s1: 4px;
+  --s2: 8px;
+  --s3: 12px;
+  --s4: 16px;
+  --s5: 24px;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f4f5f5;
+  --surface: #fcfcfc;
+  --surface-2: #eef0f1;
+  --rule: #d5dadd;
+  --text: #15191c;
+  --text-dim: #56616a;
+  --accent: #a65f00;
+  --accent-text: #fcfcfc;
+  --fail: #b3261e;
+  --ok: #2e6b3c;
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme]) {
+    color-scheme: light;
+    --bg: #f4f5f5;
+    --surface: #fcfcfc;
+    --surface-2: #eef0f1;
+    --rule: #d5dadd;
+    --text: #15191c;
+    --text-dim: #56616a;
+    --accent: #a65f00;
+    --accent-text: #fcfcfc;
+    --fail: #b3261e;
+    --ok: #2e6b3c;
+  }
+}
