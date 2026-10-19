@@ -237,7 +237,9 @@ button, a, select, input[type="checkbox"] { touch-action: manipulation; }
 .kb-item { content-visibility: auto; contain-intrinsic-size: auto 56px; }
 
 /* Runs */
-.runs-wrap { overflow-x: auto; }
+/* Many runs must not stretch the page: the table scrolls inside the panel with its header kept in view. */
+.runs-wrap { overflow: auto; max-height: 60vh; }
+.runs thead th { position: sticky; top: 0; background: var(--bg); z-index: 1; }
 .runs { width: 100%; border-collapse: collapse; }
 .runs th, .runs td { text-align: left; padding: var(--s2) var(--s3); border-bottom: 1px solid var(--rule); vertical-align: top; }
 .runs th { font-size: 0.85rem; font-weight: 600; color: var(--text-dim); white-space: nowrap; }

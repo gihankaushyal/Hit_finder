@@ -23,7 +23,7 @@ const provisional = run("vits16-mae-finetune-v2-fold2-seed42", {
   kind: "ssl-finetune", status: "provisional", epochs: { last: 187, configured: 200 },
   files: { ...files, resultsInferenceJson: true },
   result: result({ inference: { aggregation: "vote", checkpointEpoch: 187, evaluatedAt: "2026-10-10T16:00:00+00:00", trainingStatus: "incomplete", configuredEpochs: 200, lastLoggedEpoch: 187, wandbState: "crashed", warnings: ["training did not finish: wandb state crashed"] } }),
-  reevaluation: result({ cross: { ap: 0.5 }, inference: { aggregation: "max", checkpointEpoch: 187, evaluatedAt: null, trainingStatus: "complete", configuredEpochs: 200, lastLoggedEpoch: 187, wandbState: "finished", warnings: [] } }),
+  reevaluation: result({ cross: { ap: 0.5 }, inferenceThreshold: 0.25, inference: { aggregation: "max", checkpointEpoch: 187, evaluatedAt: null, trainingStatus: "complete", configuredEpochs: 200, lastLoggedEpoch: 187, wandbState: "finished", warnings: [] } }),
 });
 
 describe("Runs", () => {
@@ -61,6 +61,15 @@ describe("Runs", () => {
     expect(screen.getByRole("tabpanel")).toHaveTextContent("max");
     expect(within(screen.getByRole("tabpanel")).getByText("0.500")).toBeInTheDocument();
     expect(screen.queryByText("training did not finish: wandb state crashed")).toBeNull();
+  });
+
+  it("long thresholds are rounded to three decimals in the detail view", async () => {
+    mockApi({ "GET /api/runs": { body: body([run("resnet18-asymmetric-v2-fold1-seed42", { result: result({ inferenceThreshold: 0.02040816326530612 }) })]) } });
+    render(<Runs />);
+    await userEvent.click(await screen.findByRole("button", { name: /resnet18-asymmetric-v2-fold1-seed42/ }));
+    const panel = screen.getByRole("tabpanel");
+    expect(within(panel).getByText("0.020")).toBeInTheDocument();
+    expect(panel).not.toHaveTextContent("0.0204081");
   });
 
   it("a run without a re-evaluation has no second tab", async () => {

@@ -64,7 +64,7 @@ function ResultDetails({ result }: { result: RunResult | null }) {
         <dt>Held-out detector</dt>
         <dd className="mono">{result.testDetector ?? NA}</dd>
         <dt>Threshold</dt>
-        <dd className="mono">{result.inferenceThreshold ?? NA}</dd>
+        <dd className="mono">{fmt(result.inferenceThreshold)}</dd>
         {result.track !== null && (
           <>
             <dt>Track</dt>
