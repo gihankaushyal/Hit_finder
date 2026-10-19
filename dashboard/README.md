@@ -134,6 +134,10 @@ browser refreshes it every 60 s and the server caches each scan for 10 s.
 | `DASH_GH_BIN` | `gh` | GitHub CLI binary |
 | `DASH_PYTHON` | `python` | Interpreter used for the local test run |
 
+An empty or whitespace-only value counts as unset and uses the default, so `DASH_CHECKPOINTS=$D npm start`
+with `$D` unset in that shell does not fall back to the current directory. `DASH_PORT` is the exception: a
+blank port is an error. Check what a running server uses with `tr '\0' '\n' < /proc/<pid>/environ | grep ^DASH_`.
+
 ## Development
 
 ```bash

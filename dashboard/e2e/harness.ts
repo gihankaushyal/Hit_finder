@@ -45,7 +45,8 @@ export function assertSafeEnv(env: Record<string, string | undefined>, tmpRoot: 
   for (const key of TEMP_PATH_VARS) {
     const v = env[key];
     if (key === "FAKE_PYTEST_CALLS" && v === undefined) continue;
-    if (!v) throw new Error(`e2e: ${key} is not set; refusing to start`);
+    // Blank counts as unset, as it does in the server's config; never resolve it against the cwd.
+    if (!v || v.trim() === "") throw new Error(`e2e: ${key} is not set; refusing to start`);
     if (!isInside(tmpRoot, v)) throw new Error(`e2e: ${key}=${v} is not inside the temp directory ${tmpRoot}; refusing to start`);
   }
   if (path.resolve(env.DASH_KANBAN!) === realKanban || path.resolve(env.DASH_STATE_DIR!) === realState) {

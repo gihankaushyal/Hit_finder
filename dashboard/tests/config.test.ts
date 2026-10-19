@@ -41,11 +41,28 @@ describe("loadConfig", () => {
     expect(custom.checkpointsDir.endsWith("elsewhere/ck")).toBe(true);
   });
 
-  it.each(["DASH_REPO_ROOT", "DASH_STATE_DIR", "DASH_KANBAN", "DASH_CHECKPOINTS", "DASH_GH_BIN", "DASH_PYTHON", "DASH_PORT"])(
+  it.each(["DASH_REPO_ROOT", "DASH_STATE_DIR", "DASH_KANBAN", "DASH_CHECKPOINTS", "DASH_GH_BIN", "DASH_PYTHON"])(
     "an empty or blank %s means unset, not the current directory",
     (key) => {
       // `DASH_CHECKPOINTS=$D npm start` with $D unset passes an empty string; that must not resolve to the cwd.
       for (const blank of ["", "   "]) expect(loadConfig({ [key]: blank })).toEqual(loadConfig({}));
     },
   );
+
+  it("a blank DASH_PORT is still an error, because silently binding the default port could hit another instance", () => {
+    expect(() => loadConfig({ DASH_PORT: "" })).toThrow(/DASH_PORT must be a port number/);
+    expect(() => loadConfig({ DASH_PORT: "  " })).toThrow(/DASH_PORT must be a port number/);
+  });
+
+  it("a blank setting does not disturb the others that are set", () => {
+    const c = loadConfig({ DASH_REPO_ROOT: "/r", DASH_KANBAN: "", DASH_CHECKPOINTS: "/c", DASH_STATE_DIR: "  ", DASH_GH_BIN: "/bin/gh2" });
+    expect(c).toMatchObject({ repoRoot: "/r", kanbanPath: "/r/phase-05-kanban.md", checkpointsDir: "/c", ghBin: "/bin/gh2" });
+    expect(c.stateDir.endsWith("/dashboard/.state")).toBe(true);
+  });
+
+  it("surrounding whitespace around a real value is ignored", () => {
+    expect(loadConfig({ DASH_PORT: " 4400 " }).port).toBe(4400);
+    expect(loadConfig({ DASH_REPO_ROOT: "/r", DASH_KANBAN: " /x/k.md " }).kanbanPath).toBe("/x/k.md");
+    expect(loadConfig({ DASH_PYTHON: " /opt/py " }).pythonBin).toBe("/opt/py");
+  });
 });

@@ -32,6 +32,11 @@ describe("e2e harness guard", () => {
     delete env.DASH_KANBAN;
     expect(() => assertSafeEnv(env, tmp)).toThrow(/DASH_KANBAN is not set/);
   });
+  it("treats a whitespace-only path as missing, the way the server does, instead of resolving it against the cwd", () => {
+    for (const key of ["DASH_KANBAN", "DASH_STATE_DIR", "DASH_REPO_ROOT", "DASH_CHECKPOINTS"]) {
+      expect(() => assertSafeEnv({ ...good(), [key]: "   " }, tmp)).toThrow(new RegExp(`${key} is not set`));
+    }
+  });
   it("refuses the real gh or python", () => {
     expect(() => assertSafeEnv({ ...good(), DASH_GH_BIN: "gh" }, tmp)).toThrow(/DASH_GH_BIN must be/);
     expect(() => assertSafeEnv({ ...good(), DASH_GH_BIN: "/usr/bin/gh" }, tmp)).toThrow(/DASH_GH_BIN must be/);
