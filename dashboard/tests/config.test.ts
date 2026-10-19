@@ -33,4 +33,11 @@ describe("loadConfig", () => {
     expect(() => loadConfig({ DASH_PORT: "0" })).toThrow(/DASH_PORT/);
     expect(() => loadConfig({ DASH_PORT: "00" })).toThrow(/DASH_PORT/);
   });
+  it("defaults checkpointsDir to <repoRoot>/checkpoints and resolves DASH_CHECKPOINTS to an absolute path", () => {
+    const base = loadConfig({ DASH_REPO_ROOT: "/r" });
+    expect(base.checkpointsDir).toBe("/r/checkpoints");
+    const custom = loadConfig({ DASH_REPO_ROOT: "/r", DASH_CHECKPOINTS: "elsewhere/ck" });
+    expect(path.isAbsolute(custom.checkpointsDir)).toBe(true);
+    expect(custom.checkpointsDir.endsWith("elsewhere/ck")).toBe(true);
+  });
 });

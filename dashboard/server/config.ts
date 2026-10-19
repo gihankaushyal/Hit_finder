@@ -9,6 +9,7 @@ export interface Config {
   ghBin: string;      // DASH_GH_BIN, default "gh"
   pythonBin: string;  // DASH_PYTHON, default "python"
   kanbanPath: string; // DASH_KANBAN, default <repoRoot>/phase-05-kanban.md
+  checkpointsDir: string; // DASH_CHECKPOINTS, default <repoRoot>/checkpoints
   webDist: string;    // dashboard/dist
 }
 
@@ -33,6 +34,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     ghBin: env.DASH_GH_BIN ?? "gh",
     pythonBin: env.DASH_PYTHON ?? "python",
     kanbanPath: path.resolve(env.DASH_KANBAN ?? path.join(repoRoot, "phase-05-kanban.md")),
+    checkpointsDir: path.resolve(env.DASH_CHECKPOINTS ?? path.join(repoRoot, "checkpoints")),
     webDist: path.join(DASHBOARD_DIR, "dist"),
   };
 }
