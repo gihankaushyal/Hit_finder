@@ -290,3 +290,63 @@ test.describe("kanban after the import", () => {
     expect(fs.existsSync(path.join(dash.stateDir, "kanban-sync.json"))).toBe(true);
   });
 });
+
+test.describe("runs panel", () => {
+  const dashboard = withDashboard();
+  const PROVISIONAL = "vits16-mae-finetune-v2-fold2-seed42";
+  const WARNING = "training did not finish: wandb state crashed";
+
+  test("lists the fixture runs, flags the provisional one, and skips non-runs and symlinks", async ({ page }) => {
+    await open(page, dashboard());
+    const runs = panel(page, "Runs");
+    await expect(runs.getByRole("table", { name: "Training runs" })).toBeVisible();
+    await expect(runs.getByRole("row")).toHaveCount(10); // header + 9 runs
+    const provisional = runs.getByRole("row").filter({ hasText: PROVISIONAL });
+    await expect(provisional).toContainText("Provisional");
+    await expect(provisional).toContainText("Re-evaluated");
+    const complete = runs.getByRole("row").filter({ hasText: "resnet18-asymmetric-v2-fold1-seed42" });
+    await expect(complete).toContainText("Complete");
+    await expect(complete).toContainText("agipd");
+    await expect(runs.getByRole("row").filter({ hasText: "vits16-mae-finetune-fold2-seed42-v2" })).toContainText("Archived v1");
+    await expect(runs.getByRole("row").filter({ hasText: "mae-vits16-v2-fold1-seed42" })).toContainText("epoch 100");
+    for (const hidden of ["asymmetric_splits", "empty-dir", "escape-link"]) await expect(runs).not.toContainText(hidden);
+  });
+
+  test("the re-evaluation is a second tab and never replaces the fold's result", async ({ page }) => {
+    await open(page, dashboard());
+    const runs = panel(page, "Runs");
+    await runs.getByRole("button", { name: new RegExp(PROVISIONAL) }).click();
+    await expect(runs.getByText(WARNING)).toBeVisible();
+    await runs.getByRole("tab", { name: "Re-evaluation" }).click();
+    await expect(runs.getByRole("tabpanel")).toContainText("Re-evaluation, not the fold's result");
+    await expect(runs.getByText(WARNING)).toHaveCount(0);
+    await runs.getByRole("tab", { name: "Result" }).click();
+    await expect(runs.getByText(WARNING)).toBeVisible();
+  });
+
+  test("a corrupt results.json shows a fixed message on its row and nothing else breaks", async ({ page }) => {
+    await open(page, dashboard());
+    const runs = panel(page, "Runs");
+    await runs.getByRole("button", { name: /resnet50-asymmetric-v2-fold1-seed42/ }).click();
+    await expect(runs.getByRole("alert")).toHaveText("results.json: not valid JSON");
+    await expect(runs.getByRole("alert")).not.toContainText("/");
+  });
+
+  for (const [width, height] of [[1440, 900], [1024, 768]]) {
+    test(`no horizontal page scroll at ${width}x${height} with a run expanded`, async ({ page }) => {
+      await page.setViewportSize({ width, height });
+      await open(page, dashboard());
+      await panel(page, "Runs").getByRole("button", { name: new RegExp(PROVISIONAL) }).click();
+      await expect(panel(page, "Runs").getByRole("tabpanel")).toBeVisible();
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+    });
+  }
+});
+
+test.describe("runs panel without a checkpoints directory", () => {
+  const dashboard = withDashboard({ checkpoints: false });
+  test("explains that the panel needs the same filesystem", async ({ page }) => {
+    await open(page, dashboard());
+    await expect(panel(page, "Runs")).toContainText("No checkpoints directory on this machine");
+  });
+});

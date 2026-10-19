@@ -10,6 +10,7 @@ describe("e2e harness guard", () => {
     DASH_KANBAN: path.join(tmp, "repo", "phase-05-kanban.md"),
     DASH_STATE_DIR: path.join(tmp, "state"),
     DASH_REPO_ROOT: path.join(tmp, "repo"),
+    DASH_CHECKPOINTS: path.join(tmp, "repo", "checkpoints"),
     FAKE_GH_STATE: path.join(tmp, "gh.json"),
     FAKE_GH_CALLS: path.join(tmp, "calls"),
     DASH_GH_BIN: FAKE_GH,
@@ -19,7 +20,7 @@ describe("e2e harness guard", () => {
   it("accepts a configuration entirely inside the temp directory with the fakes", () => {
     expect(() => assertSafeEnv(good(), tmp)).not.toThrow();
   });
-  it.each(["DASH_KANBAN", "DASH_STATE_DIR", "DASH_REPO_ROOT", "FAKE_GH_STATE", "FAKE_GH_CALLS"])("refuses %s outside the temp directory", (key) => {
+  it.each(["DASH_KANBAN", "DASH_STATE_DIR", "DASH_REPO_ROOT", "DASH_CHECKPOINTS", "FAKE_GH_STATE", "FAKE_GH_CALLS"])("refuses %s outside the temp directory", (key) => {
     expect(() => assertSafeEnv({ ...good(), [key]: path.join(DASHBOARD_DIR, "..", "elsewhere") }, tmp)).toThrow(/not inside the temp directory/);
   });
   it("refuses the real kanban file and the real state directory", () => {

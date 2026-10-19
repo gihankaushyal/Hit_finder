@@ -4,6 +4,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { buildCheckpoints } from "../tests/helpers/runFixtures";
 
 const E2E_DIR = path.dirname(fileURLToPath(import.meta.url));
 export const DASHBOARD_DIR = path.resolve(E2E_DIR, "..");
@@ -17,7 +18,7 @@ const STOP_GRACE_MS = 5_000;
 const POLL_MS = 100;
 
 /** Env vars whose value is a path that must lie inside the run's temp directory. */
-const TEMP_PATH_VARS = ["DASH_KANBAN", "DASH_STATE_DIR", "DASH_REPO_ROOT", "FAKE_GH_STATE", "FAKE_GH_CALLS", "FAKE_PYTEST_CALLS"] as const;
+const TEMP_PATH_VARS = ["DASH_KANBAN", "DASH_STATE_DIR", "DASH_REPO_ROOT", "DASH_CHECKPOINTS", "FAKE_GH_STATE", "FAKE_GH_CALLS", "FAKE_PYTEST_CALLS"] as const;
 
 const realPath = (p: string): string => {
   try {
@@ -94,6 +95,8 @@ export interface StartOptions {
   /** Kanban markdown; defaults to the e2e fixture. */
   kanban?: string;
   pytestDelayMs?: number;
+  /** Build the fixture checkpoints/ directory (default true). False leaves it absent. */
+  checkpoints?: boolean;
 }
 
 async function freePort(): Promise<number> {
@@ -135,6 +138,7 @@ export async function startDashboard(opts: StartOptions = {}): Promise<Dashboard
   fs.mkdirSync(repoRoot, { recursive: true });
   fs.mkdirSync(path.join(dir, "home"), { recursive: true });
   fs.writeFileSync(kanbanPath, opts.kanban ?? fs.readFileSync(KANBAN_FIXTURE, "utf8"));
+  if (opts.checkpoints !== false) buildCheckpoints(repoRoot); // creates <repo>/checkpoints and <repo>/outside
   fs.writeFileSync(ghCallsFile, "");
   fs.writeFileSync(pytestCallsFile, "");
   // A throwaway git repo so the top bar has a branch and commit to show.
@@ -156,6 +160,7 @@ export async function startDashboard(opts: StartOptions = {}): Promise<Dashboard
     DASH_STATE_DIR: stateDir,
     DASH_REPO_ROOT: repoRoot,
     DASH_KANBAN: kanbanPath,
+    DASH_CHECKPOINTS: path.join(repoRoot, "checkpoints"),
     DASH_GH_BIN: FAKE_GH,
     DASH_PYTHON: FAKE_PYTEST,
     FAKE_GH_STATE: ghState,
