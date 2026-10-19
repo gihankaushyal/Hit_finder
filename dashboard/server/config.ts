@@ -17,7 +17,19 @@ const DEFAULT_PORT = 4317;
 // server/config.ts -> dashboard/ -> repo root
 const DASHBOARD_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
-export function loadConfig(env: NodeJS.ProcessEnv): Config {
+/** An empty or blank setting counts as unset: `DASH_X=$UNSET_VAR cmd` passes "", which must not become the cwd. */
+const given = (v: string | undefined): string | undefined => (v === undefined || v.trim() === "" ? undefined : v);
+
+export function loadConfig(raw: NodeJS.ProcessEnv): Config {
+  const env = {
+    DASH_PORT: given(raw.DASH_PORT),
+    DASH_REPO_ROOT: given(raw.DASH_REPO_ROOT),
+    DASH_STATE_DIR: given(raw.DASH_STATE_DIR),
+    DASH_GH_BIN: given(raw.DASH_GH_BIN),
+    DASH_PYTHON: given(raw.DASH_PYTHON),
+    DASH_KANBAN: given(raw.DASH_KANBAN),
+    DASH_CHECKPOINTS: given(raw.DASH_CHECKPOINTS),
+  };
   let port = DEFAULT_PORT;
   if (env.DASH_PORT !== undefined) {
     if (!/^\d+$/.test(env.DASH_PORT) || Number(env.DASH_PORT) < 1 || Number(env.DASH_PORT) > 65535) {

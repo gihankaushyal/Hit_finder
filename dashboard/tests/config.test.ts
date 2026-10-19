@@ -40,4 +40,12 @@ describe("loadConfig", () => {
     expect(path.isAbsolute(custom.checkpointsDir)).toBe(true);
     expect(custom.checkpointsDir.endsWith("elsewhere/ck")).toBe(true);
   });
+
+  it.each(["DASH_REPO_ROOT", "DASH_STATE_DIR", "DASH_KANBAN", "DASH_CHECKPOINTS", "DASH_GH_BIN", "DASH_PYTHON", "DASH_PORT"])(
+    "an empty or blank %s means unset, not the current directory",
+    (key) => {
+      // `DASH_CHECKPOINTS=$D npm start` with $D unset passes an empty string; that must not resolve to the cwd.
+      for (const blank of ["", "   "]) expect(loadConfig({ [key]: blank })).toEqual(loadConfig({}));
+    },
+  );
 });
