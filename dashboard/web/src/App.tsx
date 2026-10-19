@@ -2,6 +2,7 @@ import { useResource } from "./lib/useResource";
 import { Issues } from "./panels/Issues";
 import { Kanban } from "./panels/Kanban";
 import { LatestPr } from "./panels/LatestPr";
+import { Runs } from "./panels/Runs";
 import { RightRail } from "./panels/RightRail";
 import { TerminalDrawer } from "./panels/TerminalDrawer";
 import { TestStatus } from "./panels/TestStatus";
@@ -29,7 +30,10 @@ export function App() {
           <LatestPr />
           <div className="col"><TestStatus />
             <Issues /></div>
-          <Kanban />
+          <div className="status__wide">
+            <Kanban />
+            <Runs />
+          </div>
         </div>
         <RightRail />
       </main>
