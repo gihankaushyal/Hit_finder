@@ -1,4 +1,4 @@
-import type { Stats } from "node:fs";
+import type { Dirent, Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { RunFiles, RunResult, RunRow, RunsResponse } from "../../shared/types";
@@ -23,8 +23,7 @@ async function regularFile(p: string): Promise<Stats | null> {
   }
 }
 
-async function readResult(file: string, label: string): Promise<{ value: RunResult | null; error: string | null }> {
-  const st = await regularFile(file);
+async function readResult(file: string, label: string, st: Stats | null): Promise<{ value: RunResult | null; error: string | null }> {
   if (!st) return { value: null, error: null };
   if (st.size > MAX_RESULT_BYTES) return { value: null, error: `${label}: larger than the size limit` };
   let text: string;
@@ -65,39 +64,48 @@ async function buildRow(root: string, name: string): Promise<RunRow | null> {
   }
   if (path.dirname(real) !== root) return null; // a directory that resolves outside the tree
 
-  const [bestPt, lastPt, resultsJson, resultsInferenceJson, wandbIdTxt, v1Marker] = await Promise.all(
-    [F.best, F.last, F.results, F.reeval, F.wandbId, F.v1].map((f) => regularFile(path.join(dir, f))),
-  );
-  let newestEpoch: number | null = null;
-  let snapshots = 0;
+  // One readdir tells which entries are regular files (Dirent.isFile() is false for a symlink, so links are
+  // never followed). Only the few files whose size or mtime is needed are stat-ed afterwards.
+  let entries: Dirent[];
   try {
-    for (const entry of await fs.readdir(dir)) {
-      const m = EPOCH_SNAPSHOT.exec(entry);
-      if (m && (await regularFile(path.join(dir, entry)))) {
-        snapshots++;
-        newestEpoch = Math.max(newestEpoch ?? 0, Number(m[1]));
-      }
-    }
+    entries = await fs.readdir(dir, { withFileTypes: true });
   } catch {
     return null;
   }
-  const anyCheckpoint = Boolean(bestPt || lastPt || snapshots > 0);
-  if (!anyCheckpoint && !resultsJson && !resultsInferenceJson) return null; // not a run
+  const isFile = new Set(entries.filter((e) => e.isFile()).map((e) => e.name));
+  let newestEpoch: number | null = null;
+  let newestSnapshot: string | null = null;
+  let snapshots = 0;
+  for (const n of isFile) {
+    const m = EPOCH_SNAPSHOT.exec(n);
+    if (!m) continue;
+    snapshots++;
+    const epoch = Number(m[1]);
+    if (newestEpoch === null || epoch > newestEpoch) {
+      newestEpoch = epoch;
+      newestSnapshot = n;
+    }
+  }
+  const statIf = (name: string | null) => (name !== null && isFile.has(name) ? regularFile(path.join(dir, name)) : Promise.resolve(null));
+  const [bestSt, lastSt, resultsSt, reevalSt, snapshotSt] = await Promise.all([F.best, F.last, F.results, F.reeval, newestSnapshot].map(statIf));
+  const anyCheckpoint = Boolean(bestSt || lastSt || snapshots > 0);
+  if (!anyCheckpoint && !resultsSt && !reevalSt) return null; // not a run
 
-  const mtimes = [bestPt, lastPt, resultsJson, resultsInferenceJson, wandbIdTxt].filter((s): s is Stats => s !== null).map((s) => s.mtimeMs);
+  const mtimes = [bestSt, lastSt, resultsSt, reevalSt, snapshotSt].filter((x): x is Stats => x !== null).map((x) => x.mtimeMs);
   const files: RunFiles = {
-    bestPt: bestPt !== null,
-    lastPt: lastPt !== null,
-    resultsJson: resultsJson !== null,
-    resultsInferenceJson: resultsInferenceJson !== null,
-    wandbIdTxt: wandbIdTxt !== null,
+    bestPt: bestSt !== null,
+    lastPt: lastSt !== null,
+    resultsJson: resultsSt !== null,
+    resultsInferenceJson: reevalSt !== null,
+    wandbIdTxt: isFile.has(F.wandbId),
     newestMtime: mtimes.length ? new Date(Math.max(...mtimes)).toISOString() : null,
   };
 
   const { kind, generation } = classifyName(name);
-  const [main, reeval] = await Promise.all([readResult(path.join(dir, F.results), "results.json"), readResult(path.join(dir, F.reeval), "results.inference.json")]);
-  // Old-style pretrain directories have a legacy name but the same shape: snapshots, no best.pt, no results.
-  const pretrainShaped = !files.bestPt && (files.lastPt || snapshots > 0) && !files.resultsJson && !files.resultsInferenceJson;
+  const [main, reeval] = await Promise.all([readResult(path.join(dir, F.results), "results.json", resultsSt), readResult(path.join(dir, F.reeval), "results.inference.json", reevalSt)]);
+  // Old-style pretrain directories have an unrecognised (legacy) name but the same shape: snapshots, no best.pt,
+  // no results. A recognised fine-tune, probe or Track 1 name in that state is simply a run without results yet.
+  const pretrainShaped = kind === "legacy" && !files.bestPt && (files.lastPt || snapshots > 0) && !files.resultsJson && !files.resultsInferenceJson;
   const status = deriveStatus(kind, { resultsJson: files.resultsJson, anyCheckpoint, pretrainShaped }, main.value, main.error !== null);
 
   const tc = main.value?.inference;
@@ -106,7 +114,7 @@ async function buildRow(root: string, name: string): Promise<RunRow | null> {
   else if (status === "pretrain" && newestEpoch !== null) epochs = { last: newestEpoch, configured: null };
 
   return {
-    name, kind, generation, archivedV1: v1Marker !== null, status, files,
+    name, kind, generation, archivedV1: isFile.has(F.v1), status, files,
     result: main.value, reevaluation: reeval.value, epochs,
     error: [main.error, reeval.error].filter(Boolean).join("; ") || null,
   };
@@ -123,7 +131,8 @@ export async function scanRuns(checkpointsDir: string, now: Date = new Date()): 
   let names: string[];
   try {
     // Dirent.isDirectory() is false for a symlink, so linked directories are skipped here.
-    names = (await fs.readdir(root, { withFileTypes: true })).filter((e) => e.isDirectory()).map((e) => e.name).sort();
+    // Numeric collation keeps -v2 before -v10.
+    names = (await fs.readdir(root, { withFileTypes: true })).filter((e) => e.isDirectory()).map((e) => e.name).sort((a, b) => a.localeCompare(b, "en", { numeric: true }));
   } catch {
     return { runs: [], scannedAt, checkpointsDirExists: true, truncated: false, error: "the checkpoints directory could not be read" };
   }

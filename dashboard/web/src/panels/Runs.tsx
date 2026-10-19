@@ -3,6 +3,7 @@ import { CaretDown, CaretRight } from "@phosphor-icons/react";
 import { PanelFrame } from "../components/PanelFrame";
 import { StatusWord, type StatusKind } from "../components/StatusWord";
 import { StaleNotice, absoluteTime, panelState } from "../components/bits";
+import { relTime } from "../lib/time";
 import { RUNS_REFRESH_MS, useResource } from "../lib/useResource";
 import type { MetricBlock, RunKind, RunResult, RunRow, RunStatus, RunsResponse } from "../../../shared/types";
 
@@ -112,7 +113,9 @@ type Tab = "result" | "reeval";
 function Detail({ run }: { run: RunRow }) {
   const ids = useId();
   const tabs: Tab[] = run.reevaluation ? ["result", "reeval"] : ["result"];
-  const [tab, setTab] = useState<Tab>("result");
+  const [chosen, setTab] = useState<Tab>("result");
+  // A refresh can drop the re-evaluation while its tab is selected.
+  const tab: Tab = tabs.includes(chosen) ? chosen : "result";
   const onKey = (e: KeyboardEvent<HTMLButtonElement>) => {
     if (tabs.length < 2 || (e.key !== "ArrowRight" && e.key !== "ArrowLeft")) return;
     e.preventDefault();
@@ -165,10 +168,13 @@ function Row({ run, open, onToggle }: { run: RunRow; open: boolean; onToggle: ()
         <td className="mono num">{metric(run.result?.cross, "f1")}</td>
         <td className="mono num">{metric(run.result?.inDomain, "ap")}</td>
         <td className="mono num">{epochsText(run)}</td>
+        <td className="mono num">
+          {run.files.newestMtime ? <time dateTime={run.files.newestMtime} title={absoluteTime(run.files.newestMtime)}>{relTime(run.files.newestMtime)}</time> : NA}
+        </td>
       </tr>
       {open && (
         <tr>
-          <td colSpan={7} className="runs__detail"><Detail run={run} /></td>
+          <td colSpan={8} className="runs__detail"><Detail run={run} /></td>
         </tr>
       )}
     </>
@@ -204,7 +210,7 @@ export function Runs() {
   return (
     <PanelFrame title="Runs" count={data ? shown.length : undefined} actions={actions} state={panelState(res)} error={res.error ?? undefined} onRetry={res.reload}>
       <StaleNotice res={res} label="runs" />
-      {data && res.empty && (
+      {data && res.empty && !data.error && (
         <p className="dim">
           {data.checkpointsDirExists
             ? "No runs found under checkpoints/. Runs appear here once training writes best.pt, last.pt or results.json."
@@ -213,7 +219,8 @@ export function Runs() {
       )}
       {data?.error && <p role="alert" className="runs-error">{data.error}</p>}
       {data?.truncated && <p className="dim">Only the first {SCAN_LIMIT_TEXT} run directories are listed.</p>}
-      {data && !res.empty && (
+      {data && !res.empty && shown.length === 0 && <p className="dim">No runs match the current filters.</p>}
+      {data && !res.empty && shown.length > 0 && (
         <div className="runs-wrap">
           <table className="runs" aria-label="Training runs">
             <thead>
@@ -225,6 +232,7 @@ export function Runs() {
                 <th scope="col" className="num">Cross F1</th>
                 <th scope="col" className="num">In-domain AP</th>
                 <th scope="col" className="num">Epochs</th>
+                <th scope="col" className="num">Updated</th>
               </tr>
             </thead>
             <tbody>

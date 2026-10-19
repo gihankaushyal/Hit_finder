@@ -1,8 +1,8 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Runs } from "../../web/src/panels/Runs";
-import { mockApi, stubEventSource } from "./helpers";
+import { FakeEventSource, mockApi, stubEventSource } from "./helpers";
 import type { RunResult, RunRow, RunsResponse } from "../../shared/types";
 
 beforeEach(() => stubEventSource());
@@ -70,6 +70,47 @@ describe("Runs", () => {
     const panel = screen.getByRole("tabpanel");
     expect(within(panel).getByText("0.020")).toBeInTheDocument();
     expect(panel).not.toHaveTextContent("0.0204081");
+  });
+
+  it("when a refresh drops the re-evaluation, the view falls back to the Result tab", async () => {
+    let current = body([provisional]);
+    mockApi({ "GET /api/runs": () => ({ body: current }) });
+    render(<Runs />);
+    await userEvent.click(await screen.findByRole("button", { name: /vits16-mae-finetune-v2-fold2-seed42/ }));
+    await userEvent.click(screen.getByRole("tab", { name: "Re-evaluation" }));
+    current = body([{ ...provisional, reevaluation: null, files: { ...files } }]);
+    await act(async () => { FakeEventSource.emit({ type: "invalidate", resource: "runs" }); });
+    expect(await screen.findByRole("tab", { name: "Result", selected: true })).toBeInTheDocument();
+    expect(screen.getByText("training did not finish: wandb state crashed")).toBeInTheDocument();
+    expect(screen.queryByText(/No results\.json for this run yet/)).toBeNull();
+  });
+
+  it("a directory read error is shown without also saying no runs were found", async () => {
+    mockApi({ "GET /api/runs": { body: body([], { error: "the checkpoints directory could not be read" }) } });
+    render(<Runs />);
+    expect(await screen.findByRole("alert")).toHaveTextContent("the checkpoints directory could not be read");
+    expect(screen.queryByText(/No runs found under checkpoints\//)).toBeNull();
+  });
+
+  it("when the filters hide every run, it says so instead of showing an empty table", async () => {
+    mockApi({ "GET /api/runs": { body: body([run("resnet18-asymmetric-fold1-seed42", { kind: "legacy", generation: null })]) } });
+    render(<Runs />);
+    await screen.findByRole("table");
+    await userEvent.click(screen.getByRole("checkbox", { name: "Show archived and legacy runs" }));
+    expect(screen.getByText("No runs match the current filters.")).toBeInTheDocument();
+    expect(screen.queryByRole("table")).toBeNull();
+  });
+
+  it("shows when each run was last updated, as a relative time with the exact time on hover", async () => {
+    const recent = new Date(Date.now() - 3 * 3600_000).toISOString();
+    mockApi({ "GET /api/runs": { body: body([run("resnet18-asymmetric-v2-fold1-seed42", { files: { ...files, newestMtime: recent } }), run("resnet18-asymmetric-v2-fold2-seed42", { files: { ...files, newestMtime: null } })]) } });
+    render(<Runs />);
+    const table = await screen.findByRole("table");
+    expect(within(table).getByRole("columnheader", { name: "Updated" })).toBeInTheDocument();
+    const rows = within(table).getAllByRole("row");
+    expect(within(rows[1]).getByText("3 h ago")).toBeInTheDocument();
+    expect(within(rows[1]).getByText("3 h ago").closest("time")).toHaveAttribute("dateTime", recent);
+    expect(within(rows[2]).getAllByText("n/a").length).toBeGreaterThan(0);
   });
 
   it("a run without a re-evaluation has no second tab", async () => {

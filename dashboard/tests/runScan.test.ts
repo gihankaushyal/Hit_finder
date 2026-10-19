@@ -20,7 +20,7 @@ describe("scanRuns", () => {
     expect(names).not.toContain("empty-dir");
     expect(names).not.toContain("escape-link");
     expect(names).toHaveLength(9);
-    expect(names).toEqual([...names].sort());
+    expect(names).toEqual([...names].sort((a, b) => a.localeCompare(b, "en", { numeric: true })));
     expect(res.checkpointsDirExists).toBe(true);
     expect(res.truncated).toBe(false);
   });
@@ -118,6 +118,39 @@ describe("scanRuns", () => {
     expect(row(await scanRuns(root), "vits16-mae-probe-fold4-seed42").status).toBe("no-results");
   });
 
+  it("an in-flight fine-tune, probe or Track 1 run with last.pt but no best.pt is not a pretrain row", async () => {
+    const root = buildCheckpoints(tmp);
+    for (const name of ["vits16-mae-finetune-v2-fold1-seed42", "vits16-mae-probe-v2-fold1-seed42", "resnet18-asymmetric-v4-fold1-seed42"]) {
+      fs.mkdirSync(path.join(root, name));
+      fs.writeFileSync(path.join(root, name, "last.pt"), "");
+    }
+    const res = await scanRuns(root);
+    for (const name of ["vits16-mae-finetune-v2-fold1-seed42", "vits16-mae-probe-v2-fold1-seed42", "resnet18-asymmetric-v4-fold1-seed42"]) {
+      expect(row(res, name)).toMatchObject({ status: "no-results", epochs: null });
+    }
+  });
+
+  it("orders generations numerically, so v2 comes before v10", async () => {
+    const root = buildCheckpoints(tmp);
+    for (const g of [10, 2]) {
+      const dir = path.join(root, `resnet18-asymmetric-v${g}-fold7-seed42`);
+      fs.mkdirSync(dir);
+      fs.writeFileSync(path.join(dir, "best.pt"), "");
+    }
+    const names = (await scanRuns(root)).runs.map((r) => r.name);
+    expect(names.indexOf("resnet18-asymmetric-v2-fold7-seed42")).toBeLessThan(names.indexOf("resnet18-asymmetric-v10-fold7-seed42"));
+  });
+
+  it("newestMtime counts the newest epoch snapshot of a pretrain directory", async () => {
+    const root = buildCheckpoints(tmp);
+    const dir = path.join(root, "mae-vits16-v2-fold1-seed42");
+    const old = new Date("2026-01-01T00:00:00Z");
+    const recent = new Date("2026-10-01T12:00:00Z");
+    for (const f of ["last.pt", "epoch20.pt", "epoch40.pt", "epoch100.pt"]) fs.utimesSync(path.join(dir, f), old, old);
+    fs.utimesSync(path.join(dir, "epoch100.pt"), recent, recent);
+    expect((await scanRuns(root)).runs.find((r) => r.name === "mae-vits16-v2-fold1-seed42")!.files.newestMtime).toBe(recent.toISOString());
+  });
+
   it("a missing checkpoints directory is an empty result, not an error", async () => {
     expect(await scanRuns(path.join(tmp, "nope"))).toMatchObject({ runs: [], checkpointsDirExists: false, error: null });
   });
@@ -172,11 +205,15 @@ describe("createRunScanner", () => {
   });
 
   it("does not block the event loop while it scans", async () => {
+    // Asynchronous fs calls hand control back to the event loop; a synchronous scan would finish with zero turns.
     const root = buildCheckpoints(tmp);
-    let ticks = 0;
-    const timer = setInterval(() => { ticks++; }, 1);
+    let turns = 0;
+    let done = false;
+    const spin = () => { if (!done) { turns++; setImmediate(spin); } };
+    setImmediate(spin);
     await scanRuns(root);
-    clearInterval(timer);
-    expect(ticks).toBeGreaterThan(0);
+    done = true;
+    expect(turns).toBeGreaterThan(0);
   });
+
 });

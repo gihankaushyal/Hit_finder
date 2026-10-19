@@ -112,6 +112,12 @@ not follow `src/training/run_naming.py` are labelled "Legacy name", and director
 hidden with the checkbox. A corrupt or oversized JSON file gives a message on that row, not
 an error for the whole panel.
 
+The table shows when each run's files last changed (the newest of `best.pt`, `last.pt`, the
+newest epoch snapshot and the result files), runs are ordered by name with generation numbers
+sorted numerically, and the table scrolls inside its panel. The name patterns are copies of
+`src/training/run_naming.py`; `tests/runNamingDrift.test.ts` reads that file as text and fails if
+its own examples stop classifying (it is skipped on a checkout without `src/`).
+
 The panel only sees runs when the dashboard runs on the same filesystem as `checkpoints/`;
 otherwise it says so. It never writes to `checkpoints/` and does not talk to W&B. The
 browser refreshes it every 60 s and the server caches each scan for 10 s.
