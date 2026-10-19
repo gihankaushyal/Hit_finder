@@ -90,6 +90,32 @@ when `.state/kanban-sync.json` was lost (it changes no boxes and no issues).
 reads the junit report from `.state/junit.xml`. One run at a time; the run is
 stopped if the server shuts down.
 
+## Runs panel
+
+A read-only table of training runs found under `checkpoints/` (next to the repository).
+A directory counts as a run when it contains `best.pt`, `last.pt`, an `epoch<N>.pt`
+snapshot, `results.json` or `results.inference.json`. Other directories (`*_splits`,
+empty ones) and symlinks are skipped, and a run directory is never read through a symlink.
+
+| Status | Meaning |
+|---|---|
+| Complete | `results.json` exists and has no `inference` block, or its training check says complete |
+| Provisional | the training check says the run never finished; the numbers are provisional and the warnings are shown verbatim |
+| Unknown | the training check could not decide (for example W&B was off); neutral, not an error |
+| No results | a checkpoint exists but `results.json` does not (yet) |
+| Pretrain checkpoints | SSL pretraining directories never write `results.json`; the newest epoch snapshot is shown |
+
+Expanding a row shows its **Result** tab and, when `results.inference.json` exists, a
+**Re-evaluation** tab. A re-evaluation is never shown as the fold's result. Names that do
+not follow `src/training/run_naming.py` are labelled "Legacy name", and directories with a
+`PIPELINE_V1` marker are labelled "Archived v1"; both are shown by default and can be
+hidden with the checkbox. A corrupt or oversized JSON file gives a message on that row, not
+an error for the whole panel.
+
+The panel only sees runs when the dashboard runs on the same filesystem as `checkpoints/`;
+otherwise it says so. It never writes to `checkpoints/` and does not talk to W&B. The
+browser refreshes it every 60 s and the server caches each scan for 10 s.
+
 ## Configuration
 
 | Variable | Default | Meaning |
@@ -98,6 +124,7 @@ stopped if the server shuts down.
 | `DASH_REPO_ROOT` | parent of `dashboard/` | Repository the panels describe |
 | `DASH_STATE_DIR` | `dashboard/.state` | Token, junit report, sync state and lock |
 | `DASH_KANBAN` | `<repo>/phase-05-kanban.md` | Kanban markdown file |
+| `DASH_CHECKPOINTS` | `<repo>/checkpoints` | Directory scanned by the Runs panel |
 | `DASH_GH_BIN` | `gh` | GitHub CLI binary |
 | `DASH_PYTHON` | `python` | Interpreter used for the local test run |
 
@@ -117,7 +144,7 @@ real repository. If Playwright's bundled browser is missing, set
 `E2E_CHROMIUM_PATH` to a Chromium binary.
 
 Layout: `server/` (Hono API; `lib/kanbanMd.ts` is the byte-preserving markdown
-parser, `lib/kanbanSync.ts` the sync), `web/src/` (React panels, plain CSS with
+parser, `lib/kanbanSync.ts` the sync, `lib/runScan.ts` the Runs scanner), `web/src/` (React panels, plain CSS with
 tokens in `tokens.css`), `shared/types.ts` (API types), `tests/`, `e2e/`.
 All subprocesses (`gh`, `git`, `pytest`) are run with argument arrays, never
 through a shell.
