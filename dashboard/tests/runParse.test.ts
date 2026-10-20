@@ -66,6 +66,17 @@ describe("parseResult", () => {
     expect(() => parseResult('{"a": nan}')).toThrow("not valid JSON");
     expect(() => parseResult('{"a": NaNs}')).toThrow("not valid JSON");
   });
+  it("reads the training block the training code writes", () => {
+    const r = parseResult('{"training": {"configured_epochs": 200, "last_epoch": 187, "best_epoch": 150, "early_stopped": true}}');
+    expect(r.training).toEqual({ configuredEpochs: 200, lastEpoch: 187, bestEpoch: 150, earlyStopped: true });
+  });
+  it("a missing training block is null, and a malformed one yields nulls rather than an error", () => {
+    expect(parseResult("{}").training).toBeNull();
+    expect(parseResult('{"training": 5}').training).toBeNull();
+    expect(parseResult('{"training": {"last_epoch": "x", "best_epoch": null, "early_stopped": "yes"}}').training).toEqual({
+      configuredEpochs: null, lastEpoch: null, bestEpoch: null, earlyStopped: null,
+    });
+  });
   it("an inference block without a training_check has no trainingStatus", () => {
     expect(parseResult('{"inference": {"aggregation": "max"}}').inference?.trainingStatus).toBeNull();
   });

@@ -4,7 +4,7 @@ import type { RunResult, RunRow, RunStatus } from "../../shared/types";
 
 const result = (over: Partial<RunResult> = {}): RunResult => ({
   foldId: 1, testDetector: "AGIPD", inferenceThreshold: 0.5, cross: { ap: 0.5, f1: 0.5 }, inDomain: { ap: 0.5 },
-  track: null, probe: null, pretrainEpoch: null, inference: null, ...over,
+  track: null, probe: null, pretrainEpoch: null, inference: null, training: null, ...over,
 });
 const row = (name: string, over: Partial<RunRow> = {}): RunRow => ({
   name, kind: "track1", generation: 2, archivedV1: false, status: "complete",
@@ -49,9 +49,27 @@ describe("sortRuns", () => {
   });
 
   it("epochs sort by the last epoch", () => {
-    const rs = [row("x", { epochs: { last: 10, configured: 200 } }), row("y", { epochs: { last: 187, configured: 200 } }), row("z", { epochs: null })];
+    const rs = [row("x", { epochs: { last: 10, configured: 200, best: 10, source: "training" } }), row("y", { epochs: { last: 187, configured: 200, best: 187, source: "training" } }), row("z", { epochs: null })];
     expect(names(sortRuns(rs, "epochs", "desc"))).toEqual(["y", "x", "z"]);
     expect(names(sortRuns(rs, "epochs", "asc"))).toEqual(["x", "y", "z"]);
+  });
+
+  it("epochs fall back to the best epoch when the number trained is not recorded", () => {
+    const rs = [
+      row("trained", { epochs: { last: 100, configured: 200, best: 90, source: "training" } }),
+      row("old", { epochs: { last: null, configured: null, best: 150, source: "checkpoint" } }),
+      row("none", { epochs: null }),
+    ];
+    expect(names(sortRuns(rs, "epochs", "desc"))).toEqual(["old", "trained", "none"]);
+  });
+
+  it("epochs sort by the number the cell shows, so a run showing 'best 12' sits at 12", () => {
+    const rs = [
+      row("shown-as-best-12", { epochs: { last: null, configured: 200, best: 12, source: "training" } }),
+      row("trained-20", { epochs: { last: 20, configured: 200, best: 20, source: "training" } }),
+      row("nothing", { epochs: { last: null, configured: null, best: null, source: "training" } }),
+    ];
+    expect(names(sortRuns(rs, "epochs", "asc"))).toEqual(["shown-as-best-12", "trained-20", "nothing"]);
   });
 
   it("updated sorts by time, newest first when descending", () => {

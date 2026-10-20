@@ -6,7 +6,7 @@ import { StaleNotice, absoluteTime, panelState } from "../components/bits";
 import { SORT_LABEL, defaultDirection, describeSort, sortRuns, type SortDir, type SortKey } from "../lib/runSort";
 import { relTime } from "../lib/time";
 import { RUNS_REFRESH_MS, useResource } from "../lib/useResource";
-import type { MetricBlock, RunKind, RunResult, RunRow, RunStatus, RunsResponse } from "../../../shared/types";
+import type { MetricBlock, RunEpochs, RunKind, RunResult, RunRow, RunStatus, RunsResponse } from "../../../shared/types";
 
 const ICON_SIZE = 14;
 /** Mirrors MAX_RUN_DIRS in server/lib/runScan.ts; shown in the cut-off notice. */
@@ -31,11 +31,36 @@ const STATUS: Record<RunStatus, { kind: StatusKind; text: string }> = {
 const fmt = (v: number | null | undefined) => (typeof v === "number" ? v.toFixed(3) : NA);
 const metric = (b: MetricBlock | null | undefined, key: string) => fmt(b?.[key]);
 
-function epochsText(r: RunRow): string {
-  if (!r.epochs) return NA;
-  if (r.status === "pretrain") return r.epochs.last === null ? NA : `epoch ${r.epochs.last}`;
-  if (r.epochs.last !== null && r.epochs.configured !== null) return `${r.epochs.last} / ${r.epochs.configured}`;
-  return r.epochs.last === null ? NA : String(r.epochs.last);
+const CHECKPOINT_EPOCH_NOTE = "Epoch of the best validation score. The number of epochs trained was not recorded for this run.";
+
+/** Epochs trained out of those configured when recorded; otherwise what the checkpoint or snapshots show. */
+function EpochsCell({ run }: { run: RunRow }) {
+  const e = run.epochs;
+  if (!e) return <>{NA}</>;
+  if (e.source === "snapshot") return <>{e.last === null ? NA : `epoch ${e.last}`}</>;
+  // The sort uses this same number (last, else best), so the cell never reads n/a for a row that sorts by a value.
+  if (e.last === null) return e.best === null ? <>{NA}</> : <span title={CHECKPOINT_EPOCH_NOTE}>best {e.best}</span>;
+  const text = e.configured !== null ? `${e.last} / ${e.configured}` : String(e.last);
+  const note = [e.best !== null ? `best epoch ${e.best}` : null, run.result?.training?.earlyStopped ? "stopped early" : null].filter(Boolean).join(", ");
+  return <span title={note || undefined}>{text}</span>;
+}
+
+function EpochFacts({ epochs, stoppedEarly }: { epochs: RunEpochs | null; stoppedEarly: boolean }) {
+  if (!epochs) return null;
+  if (epochs.source === "snapshot") {
+    return (<><dt>Newest snapshot</dt><dd className="mono">epoch {epochs.last ?? NA}</dd></>);
+  }
+  if (epochs.source === "checkpoint") {
+    return (<><dt>Best epoch</dt><dd className="mono">{epochs.best ?? NA} (from best.pt; epochs trained were not recorded)</dd></>);
+  }
+  const trained = epochs.last === null ? NA : epochs.configured === null ? String(epochs.last) : `${epochs.last} of ${epochs.configured}`;
+  return (
+    <>
+      <dt>Epochs trained</dt>
+      <dd className="mono">{trained}{stoppedEarly ? ", stopped early" : ""}</dd>
+      {epochs.best !== null && (<><dt>Best epoch</dt><dd className="mono">{epochs.best}</dd></>)}
+    </>
+  );
 }
 
 const isEmpty = (d: RunsResponse) => d.runs.length === 0;
@@ -57,7 +82,7 @@ function MetricTable({ title, block }: { title: string; block: MetricBlock | nul
   );
 }
 
-function ResultDetails({ result }: { result: RunResult | null }) {
+function ResultDetails({ result, epochs }: { result: RunResult | null; epochs?: RunEpochs | null }) {
   if (!result) return <p className="dim">No results.json for this run yet.</p>;
   const inf = result.inference;
   return (
@@ -73,6 +98,7 @@ function ResultDetails({ result }: { result: RunResult | null }) {
             <dd className="mono">{result.track}{result.probe ? " (probe)" : ""}</dd>
           </>
         )}
+        <EpochFacts epochs={epochs ?? null} stoppedEarly={result.training?.earlyStopped === true} />
         {result.pretrainEpoch !== null && (
           <>
             <dt>Pretrain epoch</dt>
@@ -154,7 +180,7 @@ function Detail({ run }: { run: RunRow }) {
       </div>
       <div role="tabpanel" id={`${ids}-panel`} aria-labelledby={`${ids}-${tab}`}>
         {tab === "reeval" && <p className="dim">Re-evaluation, not the fold's result. It may use different aggregation settings.</p>}
-        <ResultDetails result={tab === "result" ? run.result : run.reevaluation} />
+        <ResultDetails result={tab === "result" ? run.result : run.reevaluation} epochs={tab === "result" ? run.epochs : null} />
       </div>
     </div>
   );
@@ -183,7 +209,7 @@ function Row({ run, open, onToggle }: { run: RunRow; open: boolean; onToggle: ()
         <td className="mono num">{metric(run.result?.cross, "ap")}</td>
         <td className="mono num">{metric(run.result?.cross, "f1")}</td>
         <td className="mono num">{metric(run.result?.inDomain, "ap")}</td>
-        <td className="mono num">{epochsText(run)}</td>
+        <td className="mono num"><EpochsCell run={run} /></td>
         <td className="mono num">
           {run.files.newestMtime ? <time dateTime={run.files.newestMtime} title={absoluteTime(run.files.newestMtime)}>{relTime(run.files.newestMtime)}</time> : NA}
         </td>

@@ -1,4 +1,4 @@
-import type { MetricBlock, RunInference, RunKind, RunResult, RunStatus, TrainingCheckStatus } from "../../shared/types";
+import type { MetricBlock, RunInference, RunKind, RunResult, RunStatus, RunTraining, TrainingCheckStatus } from "../../shared/types";
 
 // Copies of the patterns in src/training/run_naming.py. The dashboard never imports src/.
 const SUFFIX = "(?:-[a-z0-9-]+)?";
@@ -97,6 +97,17 @@ export function replaceNonFiniteTokens(text: string): string {
   return out;
 }
 
+/** The block the training code writes into results.json; any field may be missing. */
+function parseTraining(v: unknown): RunTraining | null {
+  if (!isObj(v)) return null;
+  return {
+    configuredEpochs: num(v.configured_epochs),
+    lastEpoch: num(v.last_epoch),
+    bestEpoch: num(v.best_epoch),
+    earlyStopped: typeof v.early_stopped === "boolean" ? v.early_stopped : null,
+  };
+}
+
 /** Throws an Error whose message is a fixed string safe to show a client. */
 export function parseResult(text: string): RunResult {
   let raw: unknown;
@@ -116,6 +127,7 @@ export function parseResult(text: string): RunResult {
     probe: typeof raw.probe === "boolean" ? raw.probe : null,
     pretrainEpoch: num(raw.pretrain_epoch),
     inference: parseInference(raw.inference),
+    training: parseTraining(raw.training),
   };
 }
 

@@ -10,7 +10,7 @@ afterEach(() => vi.unstubAllGlobals());
 
 const result = (over: Partial<RunResult> = {}): RunResult => ({
   foldId: 1, testDetector: "agipd", inferenceThreshold: 0.5, cross: { ap: 0.8123, f1: 0.7 }, inDomain: { ap: 0.95 },
-  track: null, probe: null, pretrainEpoch: null, inference: null, ...over,
+  track: null, probe: null, pretrainEpoch: null, inference: null, training: null, ...over,
 });
 const files = { bestPt: true, lastPt: false, resultsJson: true, resultsInferenceJson: false, wandbIdTxt: false, newestMtime: "2026-10-10T16:00:00.000Z" };
 const run = (name: string, over: Partial<RunRow> = {}): RunRow => ({
@@ -20,7 +20,7 @@ const body = (runs: RunRow[], over: Partial<RunsResponse> = {}): RunsResponse =>
   runs, scannedAt: "2026-10-10T16:00:00.000Z", checkpointsDirExists: true, truncated: false, error: null, ...over,
 });
 const provisional = run("vits16-mae-finetune-v2-fold2-seed42", {
-  kind: "ssl-finetune", status: "provisional", epochs: { last: 187, configured: 200 },
+  kind: "ssl-finetune", status: "provisional", epochs: { last: 187, configured: 200, best: 187, source: "training-check" },
   files: { ...files, resultsInferenceJson: true },
   result: result({ inference: { aggregation: "vote", checkpointEpoch: 187, evaluatedAt: "2026-10-10T16:00:00+00:00", trainingStatus: "incomplete", configuredEpochs: 200, lastLoggedEpoch: 187, wandbState: "crashed", warnings: ["training did not finish: wandb state crashed"] } }),
   reevaluation: result({ cross: { ap: 0.5 }, inferenceThreshold: 0.25, inference: { aggregation: "max", checkpointEpoch: 187, evaluatedAt: null, trainingStatus: "complete", configuredEpochs: 200, lastLoggedEpoch: 187, wandbState: "finished", warnings: [] } }),
@@ -113,6 +113,52 @@ describe("Runs", () => {
     expect(within(rows[2]).getAllByText("n/a").length).toBeGreaterThan(0);
   });
 
+  describe("the Epochs cell", () => {
+    const epochsRun = (epochs: RunRow["epochs"]) => run("resnet18-asymmetric-v2-fold1-seed42", { epochs });
+    const renderOne = async (r: RunRow) => {
+      mockApi({ "GET /api/runs": { body: body([r]) } });
+      render(<Runs />);
+      return within(await screen.findByRole("table"));
+    };
+
+    it("a recorded run shows last / configured, with the best epoch and an early stop on hover", async () => {
+      const table = await renderOne(epochsRun({ last: 187, configured: 200, best: 150, source: "training" }));
+      const cell = table.getByText("187 / 200");
+      expect(cell).toHaveAttribute("title", expect.stringContaining("best epoch 150"));
+    });
+
+    it("a run whose trained epochs are unknown shows its best epoch instead of n/a, whatever the source", async () => {
+      const table = await renderOne(epochsRun({ last: null, configured: 200, best: 12, source: "training" }));
+      expect(table.getByText("best 12")).toBeInTheDocument();
+    });
+
+    it("an old run shows only the best epoch stored in best.pt, labelled as such", async () => {
+      const table = await renderOne(epochsRun({ last: null, configured: null, best: 187, source: "checkpoint" }));
+      const cell = table.getByText("best 187");
+      expect(cell).toHaveAttribute("title", expect.stringContaining("not recorded"));
+      expect(table.queryByText("n/a", { selector: "td:nth-child(7) *" })).toBeNull();
+    });
+
+    it("the detail view spells out epochs trained, whether it stopped early, and the best epoch", async () => {
+      mockApi({ "GET /api/runs": { body: body([run("resnet18-asymmetric-v2-fold1-seed42", {
+        epochs: { last: 187, configured: 200, best: 150, source: "training" },
+        result: result({ training: { configuredEpochs: 200, lastEpoch: 187, bestEpoch: 150, earlyStopped: true } }),
+      })]) } });
+      render(<Runs />);
+      await userEvent.click(await screen.findByRole("button", { name: /resnet18-asymmetric-v2-fold1-seed42/ }));
+      const panel = within(screen.getByRole("tabpanel"));
+      expect(panel.getByText("187 of 200, stopped early")).toBeInTheDocument();
+      expect(panel.getByText("150")).toBeInTheDocument();
+    });
+
+    it("the detail view says a checkpoint-only epoch is the best epoch and that epochs trained were not recorded", async () => {
+      mockApi({ "GET /api/runs": { body: body([epochsRun({ last: null, configured: null, best: 187, source: "checkpoint" })]) } });
+      render(<Runs />);
+      await userEvent.click(await screen.findByRole("button", { name: /resnet18-asymmetric-v2-fold1-seed42/ }));
+      expect(within(screen.getByRole("tabpanel")).getByText(/187 \(from best\.pt; epochs trained were not recorded\)/)).toBeInTheDocument();
+    });
+  });
+
   it("a run without a re-evaluation has no second tab", async () => {
     mockApi({ "GET /api/runs": { body: body([run("resnet18-asymmetric-v2-fold1-seed42")]) } });
     render(<Runs />);
@@ -152,7 +198,7 @@ describe("Runs", () => {
   });
 
   it("pretrain rows show the newest snapshot epoch and no metrics", async () => {
-    mockApi({ "GET /api/runs": { body: body([run("mae-vits16-v2-fold1-seed42", { kind: "ssl-pretrain", status: "pretrain", result: null, epochs: { last: 400, configured: null } })]) } });
+    mockApi({ "GET /api/runs": { body: body([run("mae-vits16-v2-fold1-seed42", { kind: "ssl-pretrain", status: "pretrain", result: null, epochs: { last: 400, configured: null, best: null, source: "snapshot" } })]) } });
     render(<Runs />);
     await screen.findByRole("table");
     expect(screen.getByText("Pretrain checkpoints")).toBeInTheDocument();

@@ -307,6 +307,9 @@ test.describe("runs panel", () => {
     const complete = runs.getByRole("row").filter({ hasText: "resnet18-asymmetric-v2-fold1-seed42" });
     await expect(complete).toContainText("Complete");
     await expect(complete).toContainText("agipd");
+    // Epochs: read from the real checkpoint here, from the training check there
+    await expect(complete).toContainText("best 187");
+    await expect(provisional).toContainText("187 / 200");
     await expect(runs.getByRole("row").filter({ hasText: "vits16-mae-finetune-fold2-seed42-v2" })).toContainText("Archived v1");
     await expect(runs.getByRole("row").filter({ hasText: "mae-vits16-v2-fold1-seed42" })).toContainText("epoch 100");
     for (const hidden of ["asymmetric_splits", "empty-dir", "escape-link"]) await expect(runs).not.toContainText(hidden);
