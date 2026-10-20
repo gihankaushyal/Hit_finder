@@ -13,8 +13,8 @@ export interface FakeDriverOptions {
 /** Default behaviour: say what it is doing, push when the task mentions it, fail when it mentions failing. */
 function defaultScripts(text: string, turn: number): Step[][] {
   if (turn > 0) return [[{ say: `Received: ${text}` }]];
-  // The supervisor wraps the task in role rules ending "Task:\n<task>"; only the task steers the script.
-  const task = text.includes("\nTask:\n") ? (text.split("\nTask:\n").pop() as string) : text;
+  // Role rules come first, then "Task:\n<task>" (workers) or "The owner says:\n<text>" (chief); only the last part steers the script.
+  const task = text.split(/\n(?:Task|The owner says):\n/).pop() as string;
   const steps: Step[] = [{ say: `Working on: ${task}` }];
   if (/\bpush\b/i.test(task)) steps.push({ tool: "Bash", input: { command: "git push origin HEAD" } });
   if (/\bfail\b/i.test(task)) steps.push({ fail: "Scripted failure" });

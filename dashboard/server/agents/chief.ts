@@ -1,0 +1,238 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+import type { AgentEvent, AgentEventsResponse, AgentState, ChiefSummary } from "../../shared/types";
+import type { Config } from "../config";
+import type { EventBus } from "../events";
+import type { Approvals } from "./approvals";
+import type { AgentDriver, Session, SessionStart, ToolDef } from "./driver";
+import { openJournal, type Journal } from "./journal";
+import { chiefOptions } from "./policy";
+import { chiefPrompt } from "./rolePrompts";
+import { AgentError, MESSAGE_MAX_CHARS } from "./supervisor";
+
+export const CHIEF_ID = "chief";
+export const CHIEF_NAME = "Chief of staff";
+export const CHIEF_FAILED_MESSAGE = "The chief of staff session ended with an error.";
+const NOTIFY_MS = 150;
+const STOP_WAIT_MS = 3000;
+const INTERRUPT_WAIT_MS = 2000;
+const ACTIVE: AgentState[] = ["running", "waiting-approval", "idle"];
+
+interface Meta {
+  state: AgentState;
+  turns: number;
+  costUsd: number | null;
+  sessionId: string | null;
+  error: string | null;
+}
+
+export interface Chief {
+  init(): Promise<void>;
+  summary(): ChiefSummary;
+  send(text: string): Promise<void>;
+  stop(): Promise<void>;
+  /** Forget the conversation; the next message starts a new one. The log is kept. */
+  reset(): Promise<void>;
+  events(after: number, limit: number): Promise<AgentEventsResponse>;
+}
+
+export interface ChiefDeps {
+  cfg: Config;
+  bus: EventBus;
+  driver: AgentDriver;
+  approvals: Approvals;
+  tools: ToolDef[];
+  env: Record<string, string | undefined>;
+  notifyMs?: number;
+  interruptWaitMs?: number;
+}
+
+/**
+ * One persistent conversation with the chief of staff. The session starts with the first message and
+ * is resumed from its saved id after a stop, a crash or a restart. It reads the repository and calls
+ * the dashboard tools; every tool that changes anything waits on an approval card.
+ */
+export function createChief(deps: ChiefDeps): Chief {
+  const { cfg, bus, driver, approvals } = deps;
+  const dir = path.join(cfg.stateDir, "chief");
+  const sandboxDir = path.join(cfg.agentsDir, ".chief");
+  const notifyMs = deps.notifyMs ?? NOTIFY_MS;
+  const interruptWaitMs = deps.interruptWaitMs ?? INTERRUPT_WAIT_MS;
+  const meta: Meta = { state: "idle", turns: 0, costUsd: null, sessionId: null, error: null };
+  let journal: Journal;
+  let session: Session | null = null;
+  let loop: Promise<void> | null = null;
+  let stopping = false;
+  let gen = 0;
+  let timer: NodeJS.Timeout | null = null;
+  let writes: Promise<void> = Promise.resolve();
+  let lock: Promise<unknown> = Promise.resolve();
+
+  const notify = () => {
+    if (timer) return;
+    timer = setTimeout(() => {
+      timer = null;
+      bus.emit({ type: "invalidate", resource: "chat" });
+    }, notifyMs);
+  };
+  const persist = (): Promise<void> => {
+    writes = writes.then(async () => {
+      try {
+        const tmp = path.join(dir, `meta.json.${process.pid}.tmp`);
+        await fs.writeFile(tmp, JSON.stringify(meta, null, 2));
+        await fs.rename(tmp, path.join(dir, "meta.json"));
+      } catch (err) {
+        console.error("chief meta write failed", (err as NodeJS.ErrnoException).code ?? "error");
+      }
+    });
+    return writes;
+  };
+  const touch = (patch: Partial<Meta> = {}) => {
+    Object.assign(meta, patch);
+    void persist();
+    notify();
+  };
+  const setState = async (state: AgentState, error: string | null = null, detail?: string) => {
+    if (meta.state === state && meta.error === error && !detail) return;
+    touch({ state, error });
+    await journal.append({ kind: "state", state, ...(detail ? { detail } : {}) });
+  };
+  const serial = <T>(f: () => Promise<T>): Promise<T> => {
+    const p = lock.then(f, f);
+    lock = p.catch(() => undefined);
+    return p;
+  };
+
+  async function startSession(prompt: string): Promise<void> {
+    const resume = meta.sessionId ?? undefined;
+    const start: SessionStart = {
+      prompt: resume ? prompt : `${chiefPrompt()}\n\nThe owner says:\n${prompt}`,
+      resume,
+      claudeBin: cfg.claudeBin,
+      options: chiefOptions(cfg, { cwd: cfg.repoRoot, env: deps.env }),
+      tools: deps.tools,
+      // Read-only everywhere; the only writable directory is an empty one of its own. The state directory (access token) is hidden.
+      confinement: { worktree: sandboxDir, home: process.env.HOME ?? "", guarded: [], maskDirs: [path.join(cfg.repoRoot, ".secrets"), cfg.stateDir] },
+      canUseTool: async (tool, input, ctx) => {
+        let approvalId = "";
+        const outcome = await approvals.request({ id: CHIEF_ID, name: CHIEF_NAME }, tool, input, {
+          reason: ctx.reason,
+          signal: ctx.signal,
+          onCreated: (a) => {
+            approvalId = a.id;
+            void setState("waiting-approval").then(() => journal.append({ kind: "approval", approvalId, tool, outcome: "requested" }));
+          },
+        });
+        await journal.append({ kind: "approval", approvalId, tool, outcome: outcome.cancelled ? "cancelled" : outcome.decision });
+        if (!stopping && meta.state === "waiting-approval" && approvals.countFor(CHIEF_ID) === 0) await setState("running");
+        return outcome;
+      },
+    };
+    await fs.mkdir(sandboxDir, { recursive: true });
+    stopping = false;
+    const s = driver.start(start);
+    const myGen = ++gen;
+    const current = () => gen === myGen;
+    session = s;
+    await setState("running");
+    loop = (async () => {
+      try {
+        for await (const item of s.events) {
+          if (!current()) continue;
+          if ("sessionId" in item) {
+            touch({ sessionId: item.sessionId });
+            continue;
+          }
+          await journal.append(item.body);
+          if (item.body.kind === "result") {
+            touch({ turns: meta.turns + 1, costUsd: item.body.costUsd === null ? meta.costUsd : Math.max(meta.costUsd ?? 0, item.body.costUsd) });
+            if (!stopping) await setState("idle");
+          } else touch();
+        }
+        if (!stopping && current()) {
+          session = null;
+          await setState("stopped");
+        }
+      } catch (err) {
+        if (stopping || !current()) return;
+        console.error("chief session failed:", err instanceof Error ? err.message : err);
+        approvals.cancelAgent(CHIEF_ID);
+        await journal.append({ kind: "error", message: CHIEF_FAILED_MESSAGE });
+        await setState("failed", CHIEF_FAILED_MESSAGE);
+        try {
+          s.close();
+        } catch {
+          /* already closed */
+        }
+        if (session === s) session = null;
+      }
+    })();
+  }
+
+  async function stopNow(): Promise<void> {
+    const s = session;
+    if (!s) return;
+    stopping = true;
+    approvals.cancelAgent(CHIEF_ID);
+    await setState("stopped");
+    try {
+      await Promise.race([s.interrupt(), new Promise((res) => setTimeout(res, interruptWaitMs))]);
+    } catch {
+      /* the session may already be gone */
+    }
+    s.close();
+    if (loop) await Promise.race([loop, new Promise((res) => setTimeout(res, STOP_WAIT_MS))]);
+    if (session === s) session = null;
+    await writes;
+  }
+
+  return {
+    async init() {
+      await fs.mkdir(dir, { recursive: true });
+      journal = await openJournal(path.join(dir, "journal.jsonl"));
+      try {
+        const saved = JSON.parse(await fs.readFile(path.join(dir, "meta.json"), "utf8")) as Partial<Meta>;
+        meta.turns = typeof saved.turns === "number" ? saved.turns : 0;
+        meta.costUsd = typeof saved.costUsd === "number" ? saved.costUsd : null;
+        meta.sessionId = typeof saved.sessionId === "string" ? saved.sessionId : null;
+      } catch {
+        /* first start */
+      }
+      // No session survives a restart; the conversation is resumed from its id on the next message.
+      meta.state = "idle";
+      meta.error = null;
+    },
+
+    summary: () => ({ state: meta.state, model: cfg.chiefModel, turns: meta.turns, costUsd: meta.costUsd, sessionId: meta.sessionId, error: meta.error, pendingApprovals: approvals.countFor(CHIEF_ID), lastSeq: journal.lastSeq() }),
+
+    send(text) {
+      if (!text.trim()) return Promise.reject(new AgentError("invalid", "The message cannot be empty."));
+      if (text.length > MESSAGE_MAX_CHARS) return Promise.reject(new AgentError("invalid", `Messages are limited to ${MESSAGE_MAX_CHARS} characters.`));
+      return serial(async () => {
+        await journal.append({ kind: "user", text });
+        const live = session;
+        if (live && ACTIVE.includes(meta.state)) {
+          if (meta.state === "idle") await setState("running");
+          live.send(text);
+          return;
+        }
+        await startSession(text);
+      });
+    },
+
+    stop: () => serial(stopNow),
+
+    reset: () =>
+      serial(async () => {
+        await stopNow();
+        touch({ sessionId: null, turns: 0, costUsd: null, error: null, state: "idle" });
+        await journal.append({ kind: "state", state: "idle", detail: "New conversation" });
+        await writes;
+      }),
+
+    async events(after, limit) {
+      const events: AgentEvent[] = await journal.read(after, limit);
+      return { events, lastSeq: journal.lastSeq() };
+    },
+  };
+}
