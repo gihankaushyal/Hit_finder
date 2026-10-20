@@ -261,3 +261,7 @@ button, a, select, input[type="checkbox"] { touch-action: manipulation; }
 .runs-error { border-left: 2px solid var(--fail); padding-left: var(--s3); }
 .tabs { display: flex; gap: var(--s2); margin-bottom: var(--s3); }
 .tabs__tab[aria-selected="true"] { border-bottom: 2px solid var(--text); font-weight: 600; }
+.runs-sort { font: inherit; font-weight: 600; color: inherit; white-space: nowrap; }
+.runs-sort:hover { text-decoration: none; color: var(--text); }
+.runs-sort svg { color: var(--text-dim); flex: none; }
+.runs th[aria-sort="ascending"] .runs-sort svg, .runs th[aria-sort="descending"] .runs-sort svg { color: var(--text); }

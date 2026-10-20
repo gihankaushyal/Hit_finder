@@ -1,8 +1,9 @@
 import { useId, useState, type KeyboardEvent } from "react";
-import { CaretDown, CaretRight } from "@phosphor-icons/react";
+import { CaretDown, CaretRight, CaretUp, CaretUpDown } from "@phosphor-icons/react";
 import { PanelFrame } from "../components/PanelFrame";
 import { StatusWord, type StatusKind } from "../components/StatusWord";
 import { StaleNotice, absoluteTime, panelState } from "../components/bits";
+import { SORT_LABEL, defaultDirection, describeSort, sortRuns, type SortDir, type SortKey } from "../lib/runSort";
 import { relTime } from "../lib/time";
 import { RUNS_REFRESH_MS, useResource } from "../lib/useResource";
 import type { MetricBlock, RunKind, RunResult, RunRow, RunStatus, RunsResponse } from "../../../shared/types";
@@ -108,6 +109,21 @@ function ResultDetails({ result }: { result: RunResult | null }) {
   );
 }
 
+interface SortState { key: SortKey; dir: SortDir }
+
+function SortHeader({ k, sort, onSort, numeric }: { k: SortKey; sort: SortState; onSort: (k: SortKey) => void; numeric?: boolean }) {
+  const active = sort.key === k;
+  const Icon = !active ? CaretUpDown : sort.dir === "asc" ? CaretUp : CaretDown;
+  return (
+    <th scope="col" className={numeric ? "num" : undefined} aria-sort={!active ? "none" : sort.dir === "asc" ? "ascending" : "descending"}>
+      <button type="button" className="btn btn--bare runs-sort" onClick={() => onSort(k)}>
+        <span>{SORT_LABEL[k]}</span>
+        <Icon size={12} weight={active ? "bold" : "regular"} aria-hidden="true" />
+      </button>
+    </th>
+  );
+}
+
 type Tab = "result" | "reeval";
 
 function Detail({ run }: { run: RunRow }) {
@@ -186,11 +202,20 @@ export function Runs() {
   const [kind, setKind] = useState<RunKind | "all">("all");
   const [showOld, setShowOld] = useState(true);
   const [openName, setOpenName] = useState<string | null>(null);
+  const [sort, setSort] = useState<SortState>({ key: "name", dir: "asc" });
+  const [announcement, setAnnouncement] = useState("");
   const kindId = useId();
   const data = res.data;
-  const shown = (data?.runs ?? []).filter(
-    (r) => (kind === "all" || r.kind === kind) && (showOld || (r.kind !== "legacy" && !r.archivedV1)),
+  const shown = sortRuns(
+    (data?.runs ?? []).filter((r) => (kind === "all" || r.kind === kind) && (showOld || (r.kind !== "legacy" && !r.archivedV1))),
+    sort.key,
+    sort.dir,
   );
+  const onSort = (k: SortKey) => {
+    const next: SortState = sort.key === k ? { key: k, dir: sort.dir === "asc" ? "desc" : "asc" } : { key: k, dir: defaultDirection(k) };
+    setSort(next);
+    setAnnouncement(describeSort(next.key, next.dir));
+  };
   const actions =
     data && data.runs.length > 0 ? (
       <>
@@ -210,6 +235,7 @@ export function Runs() {
   return (
     <PanelFrame title="Runs" count={data ? shown.length : undefined} actions={actions} state={panelState(res)} error={res.error ?? undefined} onRetry={res.reload}>
       <StaleNotice res={res} label="runs" />
+      <div role="status" className="sr-only">{announcement}</div>
       {data && res.empty && !data.error && (
         <p className="dim">
           {data.checkpointsDirExists
@@ -225,14 +251,14 @@ export function Runs() {
           <table className="runs" aria-label="Training runs">
             <thead>
               <tr>
-                <th scope="col">Run</th>
-                <th scope="col">Status</th>
-                <th scope="col">Held-out detector</th>
-                <th scope="col" className="num">Cross AP</th>
-                <th scope="col" className="num">Cross F1</th>
-                <th scope="col" className="num">In-domain AP</th>
-                <th scope="col" className="num">Epochs</th>
-                <th scope="col" className="num">Updated</th>
+                <SortHeader k="name" sort={sort} onSort={onSort} />
+                <SortHeader k="status" sort={sort} onSort={onSort} />
+                <SortHeader k="detector" sort={sort} onSort={onSort} />
+                <SortHeader k="crossAp" sort={sort} onSort={onSort} numeric />
+                <SortHeader k="crossF1" sort={sort} onSort={onSort} numeric />
+                <SortHeader k="inDomainAp" sort={sort} onSort={onSort} numeric />
+                <SortHeader k="epochs" sort={sort} onSort={onSort} numeric />
+                <SortHeader k="updated" sort={sort} onSort={onSort} numeric />
               </tr>
             </thead>
             <tbody>

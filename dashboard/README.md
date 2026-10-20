@@ -112,6 +112,11 @@ not follow `src/training/run_naming.py` are labelled "Legacy name", and director
 hidden with the checkbox. A corrupt or oversized JSON file gives a message on that row, not
 an error for the whole panel.
 
+Every column header is a sort button (click again to reverse). Text columns start A to Z; metrics, epochs
+and Updated start with the highest or newest. Status sorts the runs that need a human first (Provisional,
+Unknown, No results, Pretrain checkpoints, Complete). Missing values always sort last, and ties fall back to the
+run name. The chosen order survives the 60 s refresh and is announced to screen readers.
+
 The table shows when each run's files last changed (the newest of `best.pt`, `last.pt`, the
 newest epoch snapshot and the result files), runs are ordered by name with generation numbers
 sorted numerically, and the table scrolls inside its panel. The name patterns are copies of
