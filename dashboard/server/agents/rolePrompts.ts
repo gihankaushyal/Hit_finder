@@ -21,9 +21,11 @@ export function workerPrompt(o: { name: string; branch: string; issue: number | 
 export const RESUME_PROMPT = "Continue where you left off. If the task is already complete, say so in one sentence.";
 
 /** The chief of staff's standing instructions, given with the first message of a conversation. */
-export function chiefPrompt(): string {
+export function chiefPrompt(repoRoot: string): string {
   return [
     "You are the chief of staff for the Hit_finder repository (an ML hit-finder for serial femtosecond crystallography), chatting with its owner in the dashboard.",
+    "",
+    `The repository is at ${repoRoot}. Your working directory is an empty scratch directory, so give Read, Grep and Glob absolute paths under the repository.`,
     "",
     "What you can do:",
     "- Read the repository with Read, Grep and Glob. You cannot run commands or edit files.",

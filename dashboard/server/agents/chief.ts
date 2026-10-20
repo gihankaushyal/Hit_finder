@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import type { AgentEvent, AgentEventsResponse, AgentState, ChiefSummary } from "../../shared/types";
 import type { Config } from "../config";
@@ -59,7 +60,7 @@ export function createChief(deps: ChiefDeps): Chief {
   const notifyMs = deps.notifyMs ?? NOTIFY_MS;
   const interruptWaitMs = deps.interruptWaitMs ?? INTERRUPT_WAIT_MS;
   const meta: Meta = { state: "idle", turns: 0, costUsd: null, sessionId: null, error: null };
-  let journal: Journal;
+  let journal: Journal | null = null;
   let session: Session | null = null;
   let loop: Promise<void> | null = null;
   let stopping = false;
@@ -92,10 +93,14 @@ export function createChief(deps: ChiefDeps): Chief {
     void persist();
     notify();
   };
+  const j = (): Journal => {
+    if (!journal) throw new AgentError("state", "The chief of staff is still starting. Try again in a moment.");
+    return journal;
+  };
   const setState = async (state: AgentState, error: string | null = null, detail?: string) => {
     if (meta.state === state && meta.error === error && !detail) return;
     touch({ state, error });
-    await journal.append({ kind: "state", state, ...(detail ? { detail } : {}) });
+    await j().append({ kind: "state", state, ...(detail ? { detail } : {}) });
   };
   const serial = <T>(f: () => Promise<T>): Promise<T> => {
     const p = lock.then(f, f);
@@ -105,14 +110,21 @@ export function createChief(deps: ChiefDeps): Chief {
 
   async function startSession(prompt: string): Promise<void> {
     const resume = meta.sessionId ?? undefined;
+    const myGen = ++gen;
+    const current = () => gen === myGen;
+    // A tool call approved a moment before a stop or reset must not still act.
+    const guard = (t: ToolDef): ToolDef => ({
+      ...t,
+      handler: async (a) => (stopping || !current() ? { text: "Cancelled: the chief of staff was stopped.", isError: true } : t.handler(a)),
+    });
     const start: SessionStart = {
-      prompt: resume ? prompt : `${chiefPrompt()}\n\nThe owner says:\n${prompt}`,
+      prompt: resume ? prompt : `${chiefPrompt(cfg.repoRoot)}\n\nThe owner says:\n${prompt}`,
       resume,
       claudeBin: cfg.claudeBin,
-      options: chiefOptions(cfg, { cwd: cfg.repoRoot, env: deps.env }),
-      tools: deps.tools,
+      options: chiefOptions(cfg, { cwd: sandboxDir, env: deps.env }),
+      tools: deps.tools.map(guard),
       // Read-only everywhere; the only writable directory is an empty one of its own. The state directory (access token) is hidden.
-      confinement: { worktree: sandboxDir, home: process.env.HOME ?? "", guarded: [], maskDirs: [path.join(cfg.repoRoot, ".secrets"), cfg.stateDir] },
+      confinement: { worktree: sandboxDir, home: os.homedir(), guarded: [], maskDirs: [path.join(cfg.repoRoot, ".secrets"), cfg.stateDir] },
       canUseTool: async (tool, input, ctx) => {
         let approvalId = "";
         const outcome = await approvals.request({ id: CHIEF_ID, name: CHIEF_NAME }, tool, input, {
@@ -120,10 +132,10 @@ export function createChief(deps: ChiefDeps): Chief {
           signal: ctx.signal,
           onCreated: (a) => {
             approvalId = a.id;
-            void setState("waiting-approval").then(() => journal.append({ kind: "approval", approvalId, tool, outcome: "requested" }));
+            void setState("waiting-approval").then(() => j().append({ kind: "approval", approvalId, tool, outcome: "requested" }));
           },
         });
-        await journal.append({ kind: "approval", approvalId, tool, outcome: outcome.cancelled ? "cancelled" : outcome.decision });
+        await j().append({ kind: "approval", approvalId, tool, outcome: outcome.cancelled ? "cancelled" : outcome.decision });
         if (!stopping && meta.state === "waiting-approval" && approvals.countFor(CHIEF_ID) === 0) await setState("running");
         return outcome;
       },
@@ -131,8 +143,6 @@ export function createChief(deps: ChiefDeps): Chief {
     await fs.mkdir(sandboxDir, { recursive: true });
     stopping = false;
     const s = driver.start(start);
-    const myGen = ++gen;
-    const current = () => gen === myGen;
     session = s;
     await setState("running");
     loop = (async () => {
@@ -143,7 +153,7 @@ export function createChief(deps: ChiefDeps): Chief {
             touch({ sessionId: item.sessionId });
             continue;
           }
-          await journal.append(item.body);
+          await j().append(item.body);
           if (item.body.kind === "result") {
             touch({ turns: meta.turns + 1, costUsd: item.body.costUsd === null ? meta.costUsd : Math.max(meta.costUsd ?? 0, item.body.costUsd) });
             if (!stopping) await setState("idle");
@@ -157,7 +167,7 @@ export function createChief(deps: ChiefDeps): Chief {
         if (stopping || !current()) return;
         console.error("chief session failed:", err instanceof Error ? err.message : err);
         approvals.cancelAgent(CHIEF_ID);
-        await journal.append({ kind: "error", message: CHIEF_FAILED_MESSAGE });
+        await j().append({ kind: "error", message: CHIEF_FAILED_MESSAGE });
         await setState("failed", CHIEF_FAILED_MESSAGE);
         try {
           s.close();
@@ -173,6 +183,7 @@ export function createChief(deps: ChiefDeps): Chief {
     const s = session;
     if (!s) return;
     stopping = true;
+    gen++; // whatever this session still yields after this point belongs to no one
     approvals.cancelAgent(CHIEF_ID);
     await setState("stopped");
     try {
@@ -203,18 +214,22 @@ export function createChief(deps: ChiefDeps): Chief {
       meta.error = null;
     },
 
-    summary: () => ({ state: meta.state, model: cfg.chiefModel, turns: meta.turns, costUsd: meta.costUsd, sessionId: meta.sessionId, error: meta.error, pendingApprovals: approvals.countFor(CHIEF_ID), lastSeq: journal.lastSeq() }),
+    summary: () => ({ state: meta.state, model: cfg.chiefModel, turns: meta.turns, costUsd: meta.costUsd, sessionId: meta.sessionId, error: meta.error, pendingApprovals: approvals.countFor(CHIEF_ID), lastSeq: journal?.lastSeq() ?? 0 }),
 
     send(text) {
       if (!text.trim()) return Promise.reject(new AgentError("invalid", "The message cannot be empty."));
       if (text.length > MESSAGE_MAX_CHARS) return Promise.reject(new AgentError("invalid", `Messages are limited to ${MESSAGE_MAX_CHARS} characters.`));
       return serial(async () => {
-        await journal.append({ kind: "user", text });
+        const jr = j();
+        await jr.append({ kind: "user", text });
         const live = session;
         if (live && ACTIVE.includes(meta.state)) {
           if (meta.state === "idle") await setState("running");
-          live.send(text);
-          return;
+          // The session may have died while the log was written; if so, fall through and start a new one.
+          if (session === live && ACTIVE.includes(meta.state)) {
+            live.send(text);
+            return;
+          }
         }
         await startSession(text);
       });
@@ -226,11 +241,17 @@ export function createChief(deps: ChiefDeps): Chief {
       serial(async () => {
         await stopNow();
         touch({ sessionId: null, turns: 0, costUsd: null, error: null, state: "idle" });
+        // Keep the old log on disk, but start a fresh one so the panel shows only the new conversation.
+        const file = path.join(dir, "journal.jsonl");
+        const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+        await fs.rename(file, path.join(dir, `journal-${stamp}.jsonl`)).catch(() => undefined);
+        journal = await openJournal(file);
         await journal.append({ kind: "state", state: "idle", detail: "New conversation" });
         await writes;
       }),
 
     async events(after, limit) {
+      if (!journal) return { events: [], lastSeq: 0 };
       const events: AgentEvent[] = await journal.read(after, limit);
       return { events, lastSeq: journal.lastSeq() };
     },

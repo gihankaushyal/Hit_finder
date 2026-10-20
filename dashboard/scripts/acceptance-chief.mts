@@ -97,7 +97,13 @@ try {
   check("list_workers raised no card", (await cards()).length === 0 && !before.slice(-12).some((e) => e.kind === "approval" && e.tool === "mcp__dashboard__list_workers"));
   check("chief called list_workers", before.some((e) => e.kind === "tool-use" && e.tool === "mcp__dashboard__list_workers"));
 
-  const t = JSON.stringify(before);
+  await api("POST", "/api/chief/message", { text: "Read README.md in the repository and quote its first line exactly." });
+  await waitFor("read reply", async () => (await chiefState()) === "idle" && (await transcript()).filter((e) => e.kind === "user").length === 4);
+  const afterRead = await transcript();
+  check("chief read a repository file from its scratch directory", afterRead.some((e) => e.kind === "tool-use" && e.tool === "Read") && afterRead.slice(-8).some((e) => e.kind === "text" && /acceptance/i.test(e.text)), afterRead.filter((e) => e.kind === "text").pop()?.text.slice(0, 60));
+  check("reading raised no card", (await cards()).length === 0);
+
+  const t = JSON.stringify(afterRead);
   check("no home path or token in the chat log", !t.includes(os.homedir() + "/.ssh") && !t.includes(token));
   check("main repo untouched", mainState() === mainBefore);
   await api("POST", "/api/agents/chat-docs/stop");

@@ -94,12 +94,37 @@ describe("ChiefChat", () => {
     await waitFor(() => expect(api.count("POST", "/api/chief/reset")).toBe(1));
   });
 
+  it("lets you start over when a saved session exists even if no turn finished, or after a failure", async () => {
+    mockApi({ "GET /api/chief": chief({ turns: 0, sessionId: "s-1" }), [EVENTS]: log([]) });
+    const { unmount } = render(<ChiefChat />);
+    expect(await screen.findByRole("button", { name: "New conversation" })).toBeEnabled();
+    unmount();
+    mockApi({ "GET /api/chief": chief({ turns: 0, state: "failed", error: "x" }), [EVENTS]: log([]) });
+    render(<ChiefChat />);
+    expect(await screen.findByRole("button", { name: "New conversation" })).toBeEnabled();
+  });
+
+  it("starts reading again from the top when the server's log was replaced by a new conversation", async () => {
+    let events = [ev(1, { kind: "user", text: "old" }), ev(2, { kind: "text", text: "old reply" }), ev(3, { kind: "text", text: "older still" })];
+    mockApi({
+      "GET /api/chief": () => chief({ lastSeq: events.length }),
+      [EVENTS]: () => log(events),
+      "GET /api/chief/events?after=3&limit=200": () => ({ body: { events: [], lastSeq: events.length } }),
+    });
+    render(<ChiefChat />);
+    await screen.findByText("older still");
+    events = [ev(1, { kind: "state", state: "idle", detail: "New conversation" }), ev(2, { kind: "user", text: "fresh" })];
+    act(() => FakeEventSource.emit({ type: "invalidate", resource: "chat" }));
+    expect(await screen.findByText("fresh")).toBeInTheDocument();
+    expect(screen.queryByText("old reply")).toBeNull();
+  });
+
   it("fetches only new entries, after the cursor, when chat changes", async () => {
     let events = [ev(1, { kind: "user", text: "hi" }), ev(2, { kind: "text", text: "hello" })];
     const api = mockApi({
       "GET /api/chief": () => chief({ lastSeq: events.length }),
       [EVENTS]: () => log(events.slice(0, 2)),
-      "GET /api/chief/events?after=2&limit=200": () => log(events.slice(2)),
+      "GET /api/chief/events?after=2&limit=200": () => ({ body: { events: events.slice(2), lastSeq: events.length } }),
     });
     render(<ChiefChat />);
     await screen.findByText("hello");

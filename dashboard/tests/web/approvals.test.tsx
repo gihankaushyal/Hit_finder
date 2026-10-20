@@ -47,6 +47,16 @@ describe("Approvals", () => {
     expect(await screen.findByText("This command has 30 lines; scroll the box to read all of it.")).toBeInTheDocument();
   });
 
+  it("shows a long multi-line argument as real lines with a length notice, and warns what a spawned worker can do", async () => {
+    const task = Array.from({ length: 12 }, (_, i) => `step ${i}`).join("\n") + "\n" + "y".repeat(400);
+    mockApi({ "GET /api/approvals": { body: { approvals: [card("s1", { tool: "mcp__dashboard__spawn_worker", input: { name: "w-one", task } })] } } });
+    render(<Approvals />);
+    const article = await screen.findByRole("article");
+    expect(Array.from(article.querySelectorAll("pre")).some((pre) => pre.textContent?.includes("step 0\nstep 1"))).toBe(true);
+    expect(within(article).getByText(/task: \d+ characters/)).toBeInTheDocument();
+    expect(within(article).getByText(/runs repository code with network access/i)).toBeInTheDocument();
+  });
+
   it("renders model-supplied text as text, never as HTML", async () => {
     const hostile = '<img src=x onerror="alert(1)"><script>alert(2)</script>';
     mockApi({ "GET /api/approvals": { body: { approvals: [card("a1", { input: { command: hostile }, agentName: "<b>x</b>" })] } } });

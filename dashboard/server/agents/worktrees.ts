@@ -5,6 +5,8 @@ import { promisify } from "node:util";
 
 const run = promisify(execFile);
 const GIT_TIMEOUT_MS = 30_000;
+/** Ids used by other things in the dashboard (the chief of staff's approvals and log). */
+const RESERVED_NAMES = new Set(["chief"]);
 const NAME_RE = /^[a-z0-9][a-z0-9-]{1,30}$/;
 export const BRANCH_PREFIX = "phase-05-agent-";
 
@@ -30,7 +32,7 @@ export class WorktreeError extends Error {
 }
 
 export function validAgentName(name: string): boolean {
-  return NAME_RE.test(name);
+  return NAME_RE.test(name) && !RESERVED_NAMES.has(name);
 }
 
 function need(name: string): void {

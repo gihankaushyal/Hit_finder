@@ -111,7 +111,7 @@ export function ChiefChat() {
           <span className="dim mono">{s.model}</span>
           {working && <button type="button" className="btn" disabled={busy} onClick={() => void post("/api/chief/stop")}>Stop</button>}
           {!confirmReset ? (
-            <button type="button" className="btn btn--quiet" disabled={busy || s.turns === 0} onClick={() => setConfirmReset(true)}>New conversation</button>
+            <button type="button" className="btn btn--quiet" disabled={busy || (s.turns === 0 && !s.sessionId && s.state !== "failed")} onClick={() => setConfirmReset(true)}>New conversation</button>
           ) : (
             <>
               <button type="button" className="btn" disabled={busy} onClick={() => void post("/api/chief/reset").then(() => setConfirmReset(false))}>Yes, start over</button>

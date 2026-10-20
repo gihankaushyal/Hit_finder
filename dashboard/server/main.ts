@@ -82,7 +82,8 @@ if (!isImportCompleted(config)) {
   console.log("Kanban sync is off until you run the first import: npm run kanban:sync -- --dry-run, then -- --yes");
 }
 const triggers = startKanbanTriggers(kanban, config.kanbanPath);
-const agentsReady = Promise.all([agents.init(), chief.init()]).catch((err) => console.error("agent supervisor failed to start:", err instanceof Error ? err.message : err));
+const startFailed = (what: string) => (err: unknown) => console.error(`${what} failed to start:`, err instanceof Error ? err.message : err);
+const agentsReady = Promise.all([agents.init().catch(startFailed("agent supervisor")), chief.init().catch(startFailed("chief of staff"))]);
 
 const server = serve({ fetch: app.fetch, hostname: config.host, port: config.port }, () => {
   console.log(`http://${config.host}:${config.port}/?token=${token}`);

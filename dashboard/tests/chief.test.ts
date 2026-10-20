@@ -92,7 +92,8 @@ describe("conversation", () => {
     await chief.send("hi");
     const s = starts[0];
     expect(s.options.model).toBe("opus");
-    expect(s.options.cwd).toBe(cfg.repoRoot);
+    expect(s.options.cwd).toBe(path.join(cfg.agentsDir, ".chief"));
+    expect(s.prompt).toContain(cfg.repoRoot);
     expect(s.tools?.map((t) => t.name)).toEqual(["spawn_worker", "list_workers"]);
     expect(s.options.settings.permissions.deny).toEqual(expect.arrayContaining(["Bash", "Edit", "Write"]));
     expect(s.confinement?.worktree).toBe(path.join(cfg.agentsDir, ".chief"));
@@ -201,6 +202,55 @@ describe("stop, reset, restart and failure", () => {
   it("stop is safe when nothing has started", async () => {
     await expect(chief.stop()).resolves.toBeUndefined();
     expect(chief.summary().state).toBe("idle");
+  });
+});
+
+describe("robustness", () => {
+  it("answers safely before init has finished", async () => {
+    const early = build();
+    expect(early.summary()).toMatchObject({ state: "idle", lastSeq: 0 });
+    expect(await early.events(0, 10)).toEqual({ events: [], lastSeq: 0 });
+    await expect(early.send("hi")).rejects.toMatchObject({ code: "state" });
+  });
+
+  it("new conversation archives the log and starts a fresh one", async () => {
+    await chief.send("old topic");
+    await waitState("idle");
+    await chief.reset();
+    const fresh = (await chief.events(0, 100)).events;
+    expect(fresh.some((e) => e.kind === "user")).toBe(false);
+    expect(fresh[0]).toMatchObject({ kind: "state", detail: "New conversation" });
+    const archived = fs.readdirSync(path.join(cfg.stateDir, "chief")).filter((n) => /^journal-.*\.jsonl$/.test(n));
+    expect(archived).toHaveLength(1);
+    expect(fs.readFileSync(path.join(cfg.stateDir, "chief", archived[0]), "utf8")).toContain("old topic");
+  });
+
+  it("a session that finishes after a reset cannot bring the old conversation back", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const late: AgentDriver = {
+      start: () => ({
+        events: (async function* () { await gate; yield { sessionId: "old-session" }; yield { body: { kind: "result" as const, ok: true, text: "", turns: 1, costUsd: 0.5 } }; })(),
+        send() {}, interrupt: async () => {}, close() {},
+      }),
+    };
+    chief = build({}, late);
+    await chief.init();
+    await chief.send("hi");
+    await chief.reset();
+    release();
+    await new Promise((r) => setTimeout(r, 50));
+    expect(chief.summary()).toMatchObject({ sessionId: null, turns: 0 });
+  });
+
+  it("tools given to the session refuse to run once the chief is stopped", async () => {
+    await chief.send("hi");
+    await waitState("idle");
+    await chief.stop();
+    const tool = starts[0].tools?.find((t) => t.name === "spawn_worker") as ToolDef;
+    const out = await tool.handler({ name: "late-one", task: "t" });
+    expect(out).toMatchObject({ isError: true, text: expect.stringContaining("stopped") });
+    expect(ran).toEqual([]);
   });
 });
 

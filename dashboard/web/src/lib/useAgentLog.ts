@@ -41,6 +41,12 @@ export function useJournal(basePath: string, resource: string, enabled: boolean)
         again.current = false;
         const res = await apiGet<AgentEventsResponse>(`${basePath}?after=${cursor.current}&limit=${PAGE}`);
         if (!live.current) return;
+        if (res.lastSeq < cursor.current) {
+          // The server's log was replaced (a new conversation): forget ours and read the new one from the top.
+          cursor.current = 0;
+          setState({ events: [], error: null, loaded: false });
+          continue;
+        }
         if (res.events.length > 0) {
           cursor.current = res.events[res.events.length - 1].seq;
           setState((s) => ({ events: [...s.events, ...res.events].slice(-MAX_KEPT), error: null, loaded: true }));
