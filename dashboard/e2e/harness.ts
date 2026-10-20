@@ -18,7 +18,7 @@ const STOP_GRACE_MS = 5_000;
 const POLL_MS = 100;
 
 /** Env vars whose value is a path that must lie inside the run's temp directory. */
-const TEMP_PATH_VARS = ["DASH_KANBAN", "DASH_STATE_DIR", "DASH_REPO_ROOT", "DASH_CHECKPOINTS", "FAKE_GH_STATE", "FAKE_GH_CALLS", "FAKE_PYTEST_CALLS"] as const;
+const TEMP_PATH_VARS = ["DASH_KANBAN", "DASH_STATE_DIR", "DASH_REPO_ROOT", "DASH_CHECKPOINTS", "DASH_AGENTS_DIR", "FAKE_GH_STATE", "FAKE_GH_CALLS", "FAKE_PYTEST_CALLS"] as const;
 
 const realPath = (p: string): string => {
   try {
@@ -55,6 +55,10 @@ export function assertSafeEnv(env: Record<string, string | undefined>, tmpRoot: 
   if (!env.DASH_GH_BIN || realPath(env.DASH_GH_BIN) !== realPath(FAKE_GH)) {
     throw new Error(`e2e: DASH_GH_BIN must be ${FAKE_GH}, got ${env.DASH_GH_BIN ?? "(unset)"}; refusing to start`);
   }
+  if (env.DASH_AGENT_DRIVER !== "fake") {
+    throw new Error(`e2e: DASH_AGENT_DRIVER must be "fake", got ${env.DASH_AGENT_DRIVER ?? "(unset)"}; refusing to start (a real Claude session must never run here)`);
+  }
+  if (env.DASH_CLAUDE_BIN) throw new Error("e2e: DASH_CLAUDE_BIN must not be set; refusing to start");
   if (!env.DASH_PYTHON || realPath(env.DASH_PYTHON) !== realPath(FAKE_PYTEST)) {
     throw new Error(`e2e: DASH_PYTHON must be ${FAKE_PYTEST}, got ${env.DASH_PYTHON ?? "(unset)"}; refusing to start`);
   }
@@ -164,6 +168,9 @@ export async function startDashboard(opts: StartOptions = {}): Promise<Dashboard
     DASH_CHECKPOINTS: path.join(repoRoot, "checkpoints"),
     DASH_GH_BIN: FAKE_GH,
     DASH_PYTHON: FAKE_PYTEST,
+    DASH_AGENTS_DIR: path.join(dir, "agents"),
+    DASH_AGENT_DRIVER: "fake",
+    DASH_AGENT_BASE: "e2e-branch",
     FAKE_GH_STATE: ghState,
     FAKE_GH_CALLS: ghCallsFile,
     FAKE_GH_SEED: opts.seed ?? "default",

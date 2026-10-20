@@ -15,6 +15,9 @@ describe("e2e harness guard", () => {
     FAKE_GH_CALLS: path.join(tmp, "calls"),
     DASH_GH_BIN: FAKE_GH,
     DASH_PYTHON: FAKE_PYTEST,
+    DASH_AGENTS_DIR: path.join(tmp, "agents"),
+    DASH_AGENT_DRIVER: "fake",
+    DASH_AGENT_BASE: "e2e-branch",
   });
 
   it("accepts a configuration entirely inside the temp directory with the fakes", () => {
@@ -41,6 +44,17 @@ describe("e2e harness guard", () => {
     expect(() => assertSafeEnv({ ...good(), DASH_GH_BIN: "gh" }, tmp)).toThrow(/DASH_GH_BIN must be/);
     expect(() => assertSafeEnv({ ...good(), DASH_GH_BIN: "/usr/bin/gh" }, tmp)).toThrow(/DASH_GH_BIN must be/);
     expect(() => assertSafeEnv({ ...good(), DASH_PYTHON: "python" }, tmp)).toThrow(/DASH_PYTHON must be/);
+  });
+  it("refuses an agents directory outside the temp directory", () => {
+    expect(() => assertSafeEnv({ ...good(), DASH_AGENTS_DIR: path.join(DASHBOARD_DIR, "..", "..", "Hit_finder-agents") }, tmp)).toThrow(/DASH_AGENTS_DIR=.*not inside the temp directory/);
+  });
+  it("refuses anything but the fake agent driver, so no real Claude session can start", () => {
+    for (const driver of ["sdk", "", undefined]) {
+      expect(() => assertSafeEnv({ ...good(), DASH_AGENT_DRIVER: driver as string }, tmp)).toThrow(/DASH_AGENT_DRIVER must be "fake"/);
+    }
+  });
+  it("refuses a claude binary override", () => {
+    expect(() => assertSafeEnv({ ...good(), DASH_CLAUDE_BIN: "/usr/local/bin/claude" }, tmp)).toThrow(/DASH_CLAUDE_BIN must not be set/);
   });
   it("refuses a temp directory inside the dashboard directory", () => {
     expect(() => assertSafeEnv(good(), path.join(DASHBOARD_DIR, "tmp-run"))).toThrow(/must not be inside the dashboard/);
