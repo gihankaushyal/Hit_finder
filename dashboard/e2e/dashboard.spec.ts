@@ -324,6 +324,20 @@ test.describe("runs panel", () => {
     await expect(runs.getByText(WARNING)).toBeVisible();
   });
 
+  test("sorting by Status puts the provisional fold first and marks the column; Updated sorts newest first", async ({ page }) => {
+    await open(page, dashboard());
+    const runs = panel(page, "Runs");
+    const status = runs.getByRole("columnheader", { name: /^Status/ });
+    await status.getByRole("button").click();
+    await expect(status).toHaveAttribute("aria-sort", "ascending");
+    await expect(runs.getByRole("row").nth(1)).toContainText("Provisional");
+    const updated = runs.getByRole("columnheader", { name: /^Updated/ });
+    await updated.getByRole("button").click();
+    await expect(updated).toHaveAttribute("aria-sort", "descending");
+    await expect(status).toHaveAttribute("aria-sort", "none");
+    await expect(runs.getByRole("status")).toContainText("Sorted by Updated, newest first");
+  });
+
   test("a corrupt results.json shows a fixed message on its row and nothing else breaks", async ({ page }) => {
     await open(page, dashboard());
     const runs = panel(page, "Runs");

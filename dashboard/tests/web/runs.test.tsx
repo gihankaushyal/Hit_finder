@@ -199,4 +199,93 @@ describe("Runs", () => {
     render(<Runs />);
     expect(await screen.findByText(/Only the first 500 run directories are listed/)).toBeInTheDocument();
   });
+
+  describe("sorting", () => {
+    const mk = (name: string, ap: number | null, over: Partial<RunRow> = {}) =>
+      run(name, { result: result({ cross: ap === null ? null : { ap, f1: 1 - ap }, testDetector: name.toUpperCase() }), ...over });
+    const runs3 = () => body([mk("b-run", 0.5), mk("a-run", 0.9), mk("c-run", null)]);
+    const rowNames = () => screen.getAllByRole("row").slice(1).map((r) => within(r).getByRole("button", { name: /-run/ }).textContent);
+    const header = (name: string) => screen.getByRole("columnheader", { name: new RegExp(`^${name}`) });
+
+    it("opens ordered by name, with the Run column marked ascending", async () => {
+      mockApi({ "GET /api/runs": { body: runs3() } });
+      render(<Runs />);
+      await screen.findByRole("table");
+      expect(rowNames()).toEqual(["a-run", "b-run", "c-run"]);
+      expect(header("Run")).toHaveAttribute("aria-sort", "ascending");
+      expect(header("Cross AP")).toHaveAttribute("aria-sort", "none");
+    });
+
+    it("every requested column has a sort button", async () => {
+      mockApi({ "GET /api/runs": { body: runs3() } });
+      render(<Runs />);
+      await screen.findByRole("table");
+      for (const label of ["Run", "Status", "Held-out detector", "Cross AP", "Cross F1", "In-domain AP", "Epochs", "Updated"]) {
+        expect(within(header(label)).getByRole("button", { name: new RegExp(`^${label}`) })).toBeInTheDocument();
+      }
+    });
+
+    it("the first click on a metric sorts best first, the second reverses, and missing values stay last", async () => {
+      mockApi({ "GET /api/runs": { body: runs3() } });
+      render(<Runs />);
+      await screen.findByRole("table");
+      await userEvent.click(within(header("Cross AP")).getByRole("button"));
+      expect(rowNames()).toEqual(["a-run", "b-run", "c-run"]);
+      expect(header("Cross AP")).toHaveAttribute("aria-sort", "descending");
+      expect(header("Run")).toHaveAttribute("aria-sort", "none");
+      await userEvent.click(within(header("Cross AP")).getByRole("button"));
+      expect(rowNames()).toEqual(["b-run", "a-run", "c-run"]);
+      expect(header("Cross AP")).toHaveAttribute("aria-sort", "ascending");
+    });
+
+    it("sorting by status puts a provisional fold first", async () => {
+      mockApi({ "GET /api/runs": { body: body([run("x-run"), provisional, run("y-run", { status: "no-results", result: null })]) } });
+      render(<Runs />);
+      await screen.findByRole("table");
+      await userEvent.click(within(header("Status")).getByRole("button"));
+      const first = screen.getAllByRole("row")[1];
+      expect(within(first).getByText("Provisional")).toBeInTheDocument();
+    });
+
+    it("sorting works from the keyboard", async () => {
+      mockApi({ "GET /api/runs": { body: runs3() } });
+      render(<Runs />);
+      await screen.findByRole("table");
+      within(header("Cross F1")).getByRole("button").focus();
+      await userEvent.keyboard("{Enter}");
+      expect(header("Cross F1")).toHaveAttribute("aria-sort", "descending");
+      await userEvent.keyboard(" ");
+      expect(header("Cross F1")).toHaveAttribute("aria-sort", "ascending");
+    });
+
+    it("announces the new order to screen readers", async () => {
+      mockApi({ "GET /api/runs": { body: runs3() } });
+      render(<Runs />);
+      await screen.findByRole("table");
+      await userEvent.click(within(header("Cross AP")).getByRole("button"));
+      expect(screen.getByRole("status")).toHaveTextContent("Sorted by Cross AP, highest first");
+    });
+
+    it("an expanded run stays open and attached to its row after the order changes", async () => {
+      mockApi({ "GET /api/runs": { body: body([mk("b-run", 0.5, {}), mk("a-run", 0.9, {})]) } });
+      render(<Runs />);
+      await userEvent.click(await screen.findByRole("button", { name: "b-run" }));
+      expect(screen.getByRole("tabpanel")).toBeInTheDocument();
+      await userEvent.click(within(header("Cross AP")).getByRole("button"));
+      const rows = screen.getAllByRole("row");
+      expect(within(rows[1]).getByRole("button", { name: "a-run" })).toBeInTheDocument();
+      expect(within(rows[2]).getByRole("button", { name: "b-run" })).toHaveAttribute("aria-expanded", "true");
+      expect(rows[3]).toContainElement(screen.getByRole("tabpanel"));
+    });
+
+    it("keeps the chosen order when the list refreshes", async () => {
+      mockApi({ "GET /api/runs": { body: runs3() } });
+      render(<Runs />);
+      await screen.findByRole("table");
+      await userEvent.click(within(header("Cross AP")).getByRole("button"));
+      await act(async () => { FakeEventSource.emit({ type: "invalidate", resource: "runs" }); });
+      expect(header("Cross AP")).toHaveAttribute("aria-sort", "descending");
+      expect(rowNames()).toEqual(["a-run", "b-run", "c-run"]);
+    });
+  });
 });
