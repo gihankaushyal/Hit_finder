@@ -112,6 +112,20 @@ not follow `src/training/run_naming.py` are labelled "Legacy name", and director
 hidden with the checkbox. A corrupt or oversized JSON file gives a message on that row, not
 an error for the whole panel.
 
+**Epochs** comes from the best source available for each run:
+
+| Shown as | Source | Means |
+|---|---|---|
+| `187 / 200` | the `training` block that training writes into `results.json` | epochs trained out of those configured; hover shows the best epoch and whether it stopped early |
+| `187 / 200` | an inference pass's training check against W&B | the same, for runs re-evaluated with `--inference-only` |
+| `best 187` | the `epoch` stored inside `best.pt` | the epoch of the best validation score, **not** the epochs trained; older runs never recorded that |
+| `epoch 400` | the newest `epoch<N>.pt` of a pretraining run | how far pretraining got |
+
+The checkpoint epoch is read without loading the model: `best.pt` is an uncompressed zip, so only its
+small `data.pkl` entry is read, and a restricted reader (`server/lib/pickleScan.ts`) parses the top level
+of that pickle. It never imports or runs anything from the file, gives up on anything unexpected, and
+results are cached until the file changes.
+
 Every column header is a sort button (click again to reverse). Text columns start A to Z; metrics, epochs
 and Updated start with the highest or newest. Status sorts the runs that need a human first (Provisional,
 Unknown, No results, Pretrain checkpoints, Complete). Missing values always sort last, and ties fall back to the

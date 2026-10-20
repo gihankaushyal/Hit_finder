@@ -1,14 +1,15 @@
 import fs from "node:fs";
+import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRunScanner, MAX_RUN_DIRS, scanRuns } from "../server/lib/runScan";
 import type { RunsResponse } from "../shared/types";
 import { buildCheckpoints } from "./helpers/runFixtures";
 
 let tmp: string;
 beforeEach(() => { tmp = fs.mkdtempSync(path.join(os.tmpdir(), "runscan-")); });
-afterEach(() => fs.rmSync(tmp, { recursive: true, force: true }));
+afterEach(() => { vi.restoreAllMocks(); fs.rmSync(tmp, { recursive: true, force: true }); });
 
 const row = (res: RunsResponse, name: string) => res.runs.find((r) => r.name === name)!;
 
@@ -31,6 +32,7 @@ describe("scanRuns", () => {
     expect(r.result).toMatchObject({ foldId: 1, testDetector: "agipd" });
     expect(r.result!.cross).toMatchObject({ ap: 0.81 });
     expect(r.files).toMatchObject({ bestPt: true, resultsJson: true, resultsInferenceJson: false });
+    expect(r.epochs).toEqual({ last: null, configured: null, best: 187, source: "checkpoint" });
     expect(r.files.newestMtime).toMatch(/^\d{4}-\d\d-\d\dT/);
   });
 
@@ -39,7 +41,7 @@ describe("scanRuns", () => {
     expect(r.kind).toBe("ssl-finetune");
     expect(r.status).toBe("provisional");
     expect(r.result!.inference!.warnings).toEqual(["training did not finish: wandb state crashed"]);
-    expect(r.epochs).toEqual({ last: 187, configured: 200 });
+    expect(r.epochs).toEqual({ last: 187, configured: 200, best: 187, source: "training-check" });
     expect(r.reevaluation!.inference!.aggregation).toBe("max");
     expect(r.result!.inference!.aggregation).toBe("vote");
   });
@@ -56,7 +58,7 @@ describe("scanRuns", () => {
   it("pretrain rows report the newest epoch snapshot, numerically", async () => {
     const r = row(await scanRuns(buildCheckpoints(tmp)), "mae-vits16-v2-fold1-seed42");
     expect(r).toMatchObject({ kind: "ssl-pretrain", status: "pretrain" });
-    expect(r.epochs).toEqual({ last: 100, configured: null });
+    expect(r.epochs).toEqual({ last: 100, configured: null, best: null, source: "snapshot" });
   });
 
   it("the PIPELINE_V1 marker wins over a -v2 name; the legacy name is kept", async () => {
@@ -107,7 +109,7 @@ describe("scanRuns", () => {
     fs.mkdirSync(dir);
     for (const f of ["last.pt", "epoch20.pt", "epoch400.pt", "PIPELINE_V1"]) fs.writeFileSync(path.join(dir, f), "");
     const r = row(await scanRuns(root), "mae-vits16-fold1-seed42");
-    expect(r).toMatchObject({ kind: "legacy", archivedV1: true, status: "pretrain", epochs: { last: 400, configured: null } });
+    expect(r).toMatchObject({ kind: "legacy", archivedV1: true, status: "pretrain", epochs: { last: 400, configured: null, best: null, source: "snapshot" } });
   });
 
   it("a legacy directory with only best.pt still has no results", async () => {
@@ -149,6 +151,61 @@ describe("scanRuns", () => {
     for (const f of ["last.pt", "epoch20.pt", "epoch40.pt", "epoch100.pt"]) fs.utimesSync(path.join(dir, f), old, old);
     fs.utimesSync(path.join(dir, "epoch100.pt"), recent, recent);
     expect((await scanRuns(root)).runs.find((r) => r.name === "mae-vits16-v2-fold1-seed42")!.files.newestMtime).toBe(recent.toISOString());
+  });
+
+  describe("the Epochs value comes from the best available source", () => {
+    const FIXTURES = path.join(__dirname, "fixtures", "ckpt");
+    const makeRun = (root: string, name: string, files: Record<string, string | Buffer>) => {
+      const dir = path.join(root, name);
+      fs.mkdirSync(dir, { recursive: true });
+      for (const [f, content] of Object.entries(files)) fs.writeFileSync(path.join(dir, f), content);
+      return dir;
+    };
+    const bestFixture = (n: number) => fs.readFileSync(path.join(FIXTURES, `best-${n}.pt`));
+    const training = { configured_epochs: 200, last_epoch: 187, best_epoch: 150, early_stopped: true };
+
+    it("the training block in results.json wins, and best.pt is not even opened", async () => {
+      const root = path.join(tmp, "checkpoints");
+      makeRun(root, "resnet18-asymmetric-v2-fold1-seed42", { "best.pt": bestFixture(5), "results.json": JSON.stringify({ fold_id: 1, training }) });
+      const open = vi.spyOn(fsp, "open");
+      const r = row(await scanRuns(root), "resnet18-asymmetric-v2-fold1-seed42");
+      expect(r.epochs).toEqual({ last: 187, configured: 200, best: 150, source: "training" });
+      expect(r.result!.training).toMatchObject({ earlyStopped: true });
+      expect(open.mock.calls.filter((c) => String(c[0]).endsWith("best.pt"))).toHaveLength(0);
+    });
+
+    it("without it, a run that has only best.pt shows the epoch stored in the checkpoint", async () => {
+      const root = path.join(tmp, "checkpoints");
+      makeRun(root, "resnet18-asymmetric-v2-fold2-seed42", { "best.pt": bestFixture(187), "results.json": JSON.stringify({ fold_id: 2 }) });
+      const r = row(await scanRuns(root), "resnet18-asymmetric-v2-fold2-seed42");
+      expect(r.status).toBe("complete");
+      expect(r.epochs).toEqual({ last: null, configured: null, best: 187, source: "checkpoint" });
+    });
+
+    it("a run with a checkpoint but no results yet still shows its best epoch", async () => {
+      const root = path.join(tmp, "checkpoints");
+      makeRun(root, "resnet18-asymmetric-v2-fold3-seed42", { "best.pt": bestFixture(5) });
+      const r = row(await scanRuns(root), "resnet18-asymmetric-v2-fold3-seed42");
+      expect(r).toMatchObject({ status: "no-results", epochs: { last: null, configured: null, best: 5, source: "checkpoint" } });
+    });
+
+    it("an unreadable best.pt means no epochs and no error on the row", async () => {
+      const root = path.join(tmp, "checkpoints");
+      makeRun(root, "resnet18-asymmetric-v2-fold4-seed42", { "best.pt": Buffer.alloc(3000, 9), "results.json": JSON.stringify({ fold_id: 4 }) });
+      const r = row(await scanRuns(root), "resnet18-asymmetric-v2-fold4-seed42");
+      expect(r.epochs).toBeNull();
+      expect(r.error).toBeNull();
+    });
+
+    it("a rescan does not read an unchanged best.pt again", async () => {
+      const root = path.join(tmp, "checkpoints");
+      makeRun(root, "resnet18-asymmetric-v2-fold5-seed42", { "best.pt": bestFixture(187) });
+      await scanRuns(root);
+      const open = vi.spyOn(fsp, "open");
+      const r = row(await scanRuns(root), "resnet18-asymmetric-v2-fold5-seed42");
+      expect(r.epochs?.best).toBe(187);
+      expect(open.mock.calls.filter((c) => String(c[0]).endsWith("best.pt"))).toHaveLength(0);
+    });
   });
 
   it("a missing checkpoints directory is an empty result, not an error", async () => {

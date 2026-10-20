@@ -2,6 +2,7 @@ import type { Dirent, Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { RunFiles, RunResult, RunRow, RunsResponse } from "../../shared/types";
+import { createCheckpointMetaReader, type CheckpointMetaReader } from "./checkpointMeta";
 import { classifyName, deriveStatus, parseResult } from "./runParse";
 
 export const MAX_RUN_DIRS = 500;
@@ -12,6 +13,9 @@ export const SCAN_CONCURRENCY = 8;
 
 const F = { best: "best.pt", last: "last.pt", results: "results.json", reeval: "results.inference.json", wandbId: "wandb_id.txt", v1: "PIPELINE_V1" } as const;
 const EPOCH_SNAPSHOT = /^epoch(\d+)\.pt$/;
+
+/** Shared by every scan, so an unchanged best.pt is read once, not on each rescan. */
+const sharedMeta = createCheckpointMetaReader();
 
 /** lstat, so a symlink is never a regular file here and is never followed. */
 async function regularFile(p: string): Promise<Stats | null> {
@@ -54,7 +58,7 @@ async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promis
   return out;
 }
 
-async function buildRow(root: string, name: string): Promise<RunRow | null> {
+async function buildRow(root: string, name: string, meta: CheckpointMetaReader): Promise<RunRow | null> {
   const dir = path.join(root, name);
   let real: string;
   try {
@@ -108,10 +112,21 @@ async function buildRow(root: string, name: string): Promise<RunRow | null> {
   const pretrainShaped = kind === "legacy" && !files.bestPt && (files.lastPt || snapshots > 0) && !files.resultsJson && !files.resultsInferenceJson;
   const status = deriveStatus(kind, { resultsJson: files.resultsJson, anyCheckpoint, pretrainShaped }, main.value, main.error !== null);
 
+  // Best source first: what the training code recorded, then an inference pass's check against W&B, then a
+  // pretrain snapshot, and only last the epoch stored inside best.pt (the best epoch, not the epochs trained).
+  const t = main.value?.training;
   const tc = main.value?.inference;
   let epochs: RunRow["epochs"] = null;
-  if (tc && (tc.lastLoggedEpoch !== null || tc.configuredEpochs !== null)) epochs = { last: tc.lastLoggedEpoch, configured: tc.configuredEpochs };
-  else if (status === "pretrain" && newestEpoch !== null) epochs = { last: newestEpoch, configured: null };
+  if (t && (t.lastEpoch !== null || t.configuredEpochs !== null || t.bestEpoch !== null)) {
+    epochs = { last: t.lastEpoch, configured: t.configuredEpochs, best: t.bestEpoch, source: "training" };
+  } else if (tc && (tc.lastLoggedEpoch !== null || tc.configuredEpochs !== null)) {
+    epochs = { last: tc.lastLoggedEpoch, configured: tc.configuredEpochs, best: tc.checkpointEpoch, source: "training-check" };
+  } else if (status === "pretrain" && newestEpoch !== null) {
+    epochs = { last: newestEpoch, configured: null, best: null, source: "snapshot" };
+  } else if (files.bestPt) {
+    const m = await meta.read(path.join(dir, F.best));
+    if (m?.epoch != null) epochs = { last: null, configured: null, best: m.epoch, source: "checkpoint" };
+  }
 
   return {
     name, kind, generation, archivedV1: isFile.has(F.v1), status, files,
@@ -120,7 +135,12 @@ async function buildRow(root: string, name: string): Promise<RunRow | null> {
   };
 }
 
-export async function scanRuns(checkpointsDir: string, now: Date = new Date()): Promise<RunsResponse> {
+export async function scanRuns(
+  checkpointsDir: string,
+  now: Date = new Date(),
+  deps: { meta?: CheckpointMetaReader } = {},
+): Promise<RunsResponse> {
+  const meta = deps.meta ?? sharedMeta;
   const scannedAt = now.toISOString();
   let root: string;
   try {
@@ -137,7 +157,7 @@ export async function scanRuns(checkpointsDir: string, now: Date = new Date()): 
     return { runs: [], scannedAt, checkpointsDirExists: true, truncated: false, error: "the checkpoints directory could not be read" };
   }
   const truncated = names.length > MAX_RUN_DIRS;
-  const rows = await mapLimit(names.slice(0, MAX_RUN_DIRS), SCAN_CONCURRENCY, (n) => buildRow(root, n));
+  const rows = await mapLimit(names.slice(0, MAX_RUN_DIRS), SCAN_CONCURRENCY, (n) => buildRow(root, n, meta));
   return { runs: rows.filter((r): r is RunRow => r !== null), scannedAt, checkpointsDirExists: true, truncated, error: null };
 }
 

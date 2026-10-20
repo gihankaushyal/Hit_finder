@@ -46,7 +46,8 @@ function valueOf(r: RunRow, key: SortKey): Value {
     case "crossAp": return metricOf(r.result?.cross, "ap");
     case "crossF1": return metricOf(r.result?.cross, "f1");
     case "inDomainAp": return metricOf(r.result?.inDomain, "ap");
-    case "epochs": return r.epochs?.last ?? null;
+    // The number trained when it is recorded, else the best epoch stored in best.pt.
+    case "epochs": return r.epochs?.last ?? r.epochs?.best ?? null;
     case "updated": {
       const t = r.files.newestMtime ? Date.parse(r.files.newestMtime) : NaN;
       return Number.isNaN(t) ? null : t;

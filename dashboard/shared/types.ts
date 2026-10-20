@@ -74,6 +74,16 @@ export interface RunInference {
   warnings: string[];
 }
 
+/** The block the training code writes into results.json: how far the run got. */
+export interface RunTraining {
+  configuredEpochs: number | null;
+  /** Last epoch completed, as the loop counts (1-based). */
+  lastEpoch: number | null;
+  /** Epoch saved in best.pt; null when no epoch ever improved validation F1. */
+  bestEpoch: number | null;
+  earlyStopped: boolean | null;
+}
+
 export interface RunResult {
   foldId: number | null;
   testDetector: string | null;
@@ -84,6 +94,7 @@ export interface RunResult {
   probe: boolean | null;
   pretrainEpoch: number | null;
   inference: RunInference | null;
+  training: RunTraining | null;
 }
 
 export interface RunFiles {
@@ -94,6 +105,21 @@ export interface RunFiles {
   wandbIdTxt: boolean;
   /** ISO time of the newest of the files above, or null when none exist. */
   newestMtime: string | null;
+}
+
+/**
+ * Where an epoch count came from, best first: `training` is the block the training code writes into
+ * results.json (true epochs trained), `training-check` comes from an inference pass that asked W&B,
+ * `checkpoint` is only the best epoch stored inside best.pt (epochs trained were never recorded),
+ * and `snapshot` is the newest epoch<N>.pt of a pretraining run.
+ */
+export type EpochSource = "training" | "training-check" | "checkpoint" | "snapshot";
+
+export interface RunEpochs {
+  last: number | null;
+  configured: number | null;
+  best: number | null;
+  source: EpochSource;
 }
 
 export interface RunRow {
@@ -108,7 +134,7 @@ export interface RunRow {
   result: RunResult | null;
   /** The parsed results.inference.json, a re-evaluation, never the fold's headline result. */
   reevaluation: RunResult | null;
-  epochs: { last: number | null; configured: number | null } | null;
+  epochs: RunEpochs | null;
   /** A fixed message when a JSON file was unreadable or corrupt; the row is still returned. */
   error: string | null;
 }

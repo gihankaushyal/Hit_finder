@@ -1,5 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+/** A small checkpoint written by torch.save, with epoch 187 and val_f1 0.93. */
+const REAL_CHECKPOINT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "fixtures", "ckpt", "best-187.pt");
 
 const metrics = (ap: number) => ({ ap, auc_roc: 0.9, f1: 0.7, threshold: 0.4 });
 const base = (fold: number, detector: string, extra: object = {}) => ({
@@ -26,6 +30,8 @@ export function buildCheckpoints(tmpRoot: string): string {
   const root = path.join(tmpRoot, "checkpoints");
   fs.mkdirSync(root, { recursive: true });
   put(root, "resnet18-asymmetric-v2-fold1-seed42", { "best.pt": "", "results.json": base(1, "agipd") });
+  // This run keeps a real checkpoint, so its Epochs come from best.pt (the others have empty placeholders).
+  fs.copyFileSync(REAL_CHECKPOINT, path.join(root, "resnet18-asymmetric-v2-fold1-seed42", "best.pt"));
   put(root, "resnet18-asymmetric-v2-fold2-seed42", { "best.pt": "" }); // no results yet
   put(root, "vits16-mae-finetune-v2-fold2-seed42", {
     "best.pt": "", "results.json": base(2, "epix10k", { track: "ssl", probe: false, pretrain_epoch: 400, inference: inference("incomplete") }),
