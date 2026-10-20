@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import { spawn } from "node:child_process";
-import { query, type CanUseTool, type Options, type SpawnOptions } from "@anthropic-ai/claude-agent-sdk";
+import { createSdkMcpServer, query, tool, type CanUseTool, type Options, type SpawnOptions } from "@anthropic-ai/claude-agent-sdk";
 import { bwrapArgs, claudeDirGuards, guardedGitPaths } from "./bwrap";
-import type { AgentDriver, DriverItem, Session, SessionStart } from "./driver";
+import { DASHBOARD_SERVER, type AgentDriver, type DriverItem, type Session, type SessionStart } from "./driver";
 import { normalise } from "./normalise";
 
 /**
@@ -72,6 +72,23 @@ export function createSdkDriver(): AgentDriver {
       };
 
       const o = s.options;
+      const dashboard = s.tools?.length
+        ? createSdkMcpServer({
+            name: DASHBOARD_SERVER,
+            version: "1.0.0",
+            tools: s.tools.map((t) =>
+              tool(t.name, t.description, t.schema, async (args) => {
+                try {
+                  const res = await t.handler(args as Record<string, unknown>);
+                  return { content: [{ type: "text" as const, text: res.text }], isError: res.isError === true };
+                } catch (err) {
+                  console.error(`dashboard tool ${t.name} failed:`, err instanceof Error ? err.message : err);
+                  return { content: [{ type: "text" as const, text: "The tool failed." }], isError: true };
+                }
+              }),
+            ),
+          })
+        : undefined;
       const q = query({
         prompt: input(),
         options: {
@@ -89,6 +106,7 @@ export function createSdkDriver(): AgentDriver {
           resume: s.resume,
           abortController: ac,
           canUseTool,
+          ...(dashboard ? { mcpServers: { [DASHBOARD_SERVER]: dashboard } } : {}),
           spawnClaudeCodeProcess: spawner(s, onStderr),
         },
       });

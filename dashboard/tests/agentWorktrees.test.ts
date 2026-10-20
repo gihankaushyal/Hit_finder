@@ -30,7 +30,7 @@ afterEach(() => fs.rmSync(root, { recursive: true, force: true }));
 
 describe("validAgentName", () => {
   it.each(["ab", "fix-lcn", "a1", "x".repeat(31)])("accepts %s", (n) => expect(validAgentName(n)).toBe(true));
-  it.each(["", "a", "-ab", "Ab", "a_b", "a/b", "..", "a b", "x".repeat(32), "ab\n"])("rejects %j", (n) => expect(validAgentName(n)).toBe(false));
+  it.each(["chief", "", "a", "-ab", "Ab", "a_b", "a/b", "..", "a b", "x".repeat(32), "ab\n"])("rejects %j", (n) => expect(validAgentName(n)).toBe(false));
 });
 
 describe("create", () => {

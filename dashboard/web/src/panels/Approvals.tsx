@@ -8,6 +8,8 @@ import type { Approval, ApprovalDecision, ApprovalsResponse } from "../../../sha
 
 /** More lines than this get a notice, because the box scrolls and the rest would be easy to miss. */
 const LONG_COMMAND_LINES = 8;
+/** A text argument longer than this (or with line breaks) is shown as real lines instead of one escaped JSON string. */
+const LONG_ARGUMENT_CHARS = 200;
 const FILE_TOOLS = new Set(["Edit", "Write", "NotebookEdit", "MultiEdit"]);
 
 /** What the agent actually asked for, as text. Never HTML: the content is model-supplied. */
@@ -31,7 +33,27 @@ function Request({ a }: { a: Approval }) {
       </>
     );
   }
-  return <pre className="mono approval__code">{JSON.stringify(input, null, 2)}</pre>;
+  const worker = a.tool.endsWith("spawn_worker") || a.tool.endsWith("message_worker");
+  const longText = Object.values(input).some((v) => typeof v === "string" && (v.includes("\n") || v.length > LONG_ARGUMENT_CHARS));
+  return (
+    <>
+      {worker && <p className="approval__meta">A worker runs repository code with network access and readable credentials. Read the whole task before approving.</p>}
+      {longText ? (
+        Object.entries(input).map(([k, v]) =>
+          typeof v === "string" ? (
+            <div key={k}>
+              <p className="approval__meta">{k}: {v.length} characters</p>
+              <pre className="mono approval__code">{v}</pre>
+            </div>
+          ) : (
+            <pre key={k} className="mono approval__code">{`${k}: ${JSON.stringify(v)}`}</pre>
+          ),
+        )
+      ) : (
+        <pre className="mono approval__code">{JSON.stringify(input, null, 2)}</pre>
+      )}
+    </>
+  );
 }
 
 function Card({ a, busy, error, onDecide }: { a: Approval; busy: boolean; error: string | null; onDecide: (d: ApprovalDecision) => void }) {

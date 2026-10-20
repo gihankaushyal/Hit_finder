@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { createFakeDriver, type Step } from "../server/agents/fakeDriver";
+import { createFakeDriver, chiefScripts, type Step } from "../server/agents/fakeDriver";
 import type { DriverItem, SessionStart } from "../server/agents/driver";
 import { loadConfig } from "../server/config";
 import { workerOptions } from "../server/agents/policy";
@@ -103,6 +103,32 @@ describe("fake driver", () => {
     await p;
   });
 
+  it("calls a dashboard tool by name after asking, passing the handler's answer back", async () => {
+    const seen: string[] = [];
+    const tools = [{ name: "spawn_worker", description: "d", schema: {}, handler: async (a: Record<string, unknown>) => (seen.push(String(a.name)), { text: `started ${a.name}` }) }];
+    const asked: string[] = [];
+    const driver = createFakeDriver({ stepMs: 0, scripts: () => [[{ mcp: "spawn_worker", input: { name: "w-one" } }]] });
+    const s = driver.start(start({ tools, canUseTool: async (t) => (asked.push(t), { decision: "allow" }) }));
+    const items = bodies(await take(s.events[Symbol.asyncIterator](), isResult));
+    expect(asked).toEqual(["mcp__dashboard__spawn_worker"]);
+    expect(seen).toEqual(["w-one"]);
+    expect(items.map((b) => b.kind)).toEqual(["tool-use", "tool-result", "result"]);
+    expect(items[0]).toMatchObject({ tool: "mcp__dashboard__spawn_worker" });
+    expect(items[1]).toMatchObject({ output: "started w-one", isError: false });
+    s.close();
+  });
+
+  it("does not run the handler when the tool call is denied", async () => {
+    let ran = false;
+    const tools = [{ name: "stop_worker", description: "d", schema: {}, handler: async () => ((ran = true), { text: "x" }) }];
+    const driver = createFakeDriver({ stepMs: 0, scripts: () => [[{ mcp: "stop_worker", input: {} }]] });
+    const s = driver.start(start({ tools, canUseTool: async () => ({ decision: "deny", message: "No" }) }));
+    const items = bodies(await take(s.events[Symbol.asyncIterator](), isResult));
+    expect(ran).toBe(false);
+    expect(items[1]).toMatchObject({ isError: true, output: expect.stringContaining("No") });
+    s.close();
+  });
+
   it("throws from the event stream when the script fails", async () => {
     const s = createFakeDriver({ stepMs: 0, scripts: () => [[{ fail: "boom" }]] }).start(start());
     await expect(take(s.events[Symbol.asyncIterator](), () => false)).rejects.toThrow("boom");
@@ -120,5 +146,20 @@ describe("fake driver", () => {
     const kinds = bodies(await take(s.events[Symbol.asyncIterator](), isResult)).map((b) => b.kind);
     expect(kinds).toContain("tool-use");
     s.close();
+  });
+});
+
+describe("chiefScripts", () => {
+  it("turns 'spawn <name>' into a say step and a spawn_worker tool call", () => {
+    const [steps] = chiefScripts("The owner says:\nplease spawn docs-one now", 0);
+    expect(steps).toEqual([{ say: "Starting docs-one." }, { mcp: "spawn_worker", input: { name: "docs-one", task: "Scripted task from the chief of staff." } }]);
+  });
+  it("lists workers on request and otherwise just answers", () => {
+    expect(chiefScripts("what workers are running? list", 0)[0]).toEqual([{ mcp: "list_workers", input: {} }]);
+    expect(chiefScripts("hello", 0)[0]).toEqual([{ say: "Received: hello" }]);
+  });
+  it("ignores role text before the owner's message", () => {
+    const text = "You are the chief ... spawn_worker ... spawn x\n\nThe owner says:\nhello";
+    expect(chiefScripts(text, 0)[0]).toEqual([{ say: "Received: hello" }]);
   });
 });

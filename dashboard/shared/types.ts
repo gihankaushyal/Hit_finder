@@ -227,3 +227,17 @@ export type ApprovalDecision = "allow" | "deny";
 export interface ApprovalsResponse {
   approvals: Approval[];
 }
+
+// ---- Chief of staff (milestone 2b) ----
+
+export interface ChiefSummary {
+  /** `idle` also covers "no session yet": the session starts with the first message. */
+  state: AgentState;
+  model: string;
+  turns: number;
+  costUsd: number | null;
+  sessionId: string | null;
+  error: string | null;
+  pendingApprovals: number;
+  lastSeq: number;
+}

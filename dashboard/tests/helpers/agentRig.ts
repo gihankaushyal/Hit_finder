@@ -7,6 +7,8 @@ import { buildServer } from "../../server/wiring";
 import { createSupervisor, type Supervisor } from "../../server/agents/supervisor";
 import { createFakeDriver, type FakeDriverOptions } from "../../server/agents/fakeDriver";
 import { createApprovals, type Approvals } from "../../server/agents/approvals";
+import { createChief, type Chief } from "../../server/agents/chief";
+import { createChiefTools } from "../../server/agents/chiefTools";
 import { createWorktrees } from "../../server/agents/worktrees";
 import { EventBus } from "../../server/events";
 import { loadConfig, type Config } from "../../server/config";
@@ -18,6 +20,7 @@ export const AUTH = { Authorization: `Bearer ${AGENT_TOKEN}`, "Content-Type": "a
 export interface AgentRig {
   app: ReturnType<typeof buildServer>;
   sup: Supervisor;
+  chief: Chief;
   approvals: Approvals;
   bus: EventBus;
   cfg: Config;
@@ -51,6 +54,17 @@ export async function makeAgentRig(env: Record<string, string> = {}, driver: Fak
     notifyMs: 5,
   });
   await sup.init();
+  const kanbanStub = { board: vi.fn(), sync: vi.fn(), addTask: vi.fn(async () => {}), setStatus: vi.fn(async () => {}), fileChanged: vi.fn(), poll: vi.fn(), dispose: vi.fn() };
+  const chief = createChief({
+    cfg,
+    bus,
+    driver: createFakeDriver(driver),
+    approvals,
+    tools: createChiefTools({ supervisor: sup, kanban: kanbanStub as never }),
+    env: { PATH: process.env.PATH },
+    notifyMs: 5,
+  });
+  await chief.init();
   const gh = { json: vi.fn(), text: vi.fn() } as unknown as Gh;
   const app = buildServer({
     config: { ...cfg, webDist: "/nonexistent" },
@@ -58,15 +72,17 @@ export async function makeAgentRig(env: Record<string, string> = {}, driver: Fak
     bus,
     gh,
     tests: { state: () => ({ status: "idle" }) as never, start: () => true, stop: () => Promise.resolve() },
-    kanban: { board: vi.fn(), sync: vi.fn(), addTask: vi.fn(), setStatus: vi.fn(), fileChanged: vi.fn(), poll: vi.fn(), dispose: vi.fn() } as never,
+    kanban: kanbanStub as never,
     runner: async () => ({ stdout: "x\n", stderr: "", code: 0 }),
     runs: { scan: async () => ({ runs: [], scannedAt: "", checkpointsDirExists: false, truncated: false, error: null }) },
     agents: sup,
     approvals,
+    chief,
   });
   return {
-    app, sup, approvals, bus, cfg, root, repo,
+    app, sup, chief, approvals, bus, cfg, root, repo,
     async cleanup() {
+      await chief.stop();
       await sup.stopAll(1000);
       fs.rmSync(root, { recursive: true, force: true });
     },

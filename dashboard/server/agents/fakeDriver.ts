@@ -1,7 +1,7 @@
-import type { AgentDriver, DriverItem, Session, SessionStart } from "./driver";
+import { mcpToolName, type AgentDriver, type DriverItem, type Session, type SessionStart } from "./driver";
 
 /** One scripted action. A turn is a list of steps; the turn ends with a `result` event. */
-export type Step = { say: string } | { tool: string; input: Record<string, unknown> } | { wait: number } | { fail: string };
+export type Step = { say: string } | { tool: string; input: Record<string, unknown> } | { mcp: string; input: Record<string, unknown> } | { wait: number } | { fail: string };
 
 export interface FakeDriverOptions {
   /** Pause before each step, in milliseconds. Tests use 0; the browser tests use a small value. */
@@ -13,12 +13,23 @@ export interface FakeDriverOptions {
 /** Default behaviour: say what it is doing, push when the task mentions it, fail when it mentions failing. */
 function defaultScripts(text: string, turn: number): Step[][] {
   if (turn > 0) return [[{ say: `Received: ${text}` }]];
-  // The supervisor wraps the task in role rules ending "Task:\n<task>"; only the task steers the script.
-  const task = text.includes("\nTask:\n") ? (text.split("\nTask:\n").pop() as string) : text;
+  // Role rules come first, then "Task:\n<task>" (workers) or "The owner says:\n<text>" (chief); only the last part steers the script.
+  const task = text.split(/\n(?:Task|The owner says):\n/).pop() as string;
   const steps: Step[] = [{ say: `Working on: ${task}` }];
   if (/\bpush\b/i.test(task)) steps.push({ tool: "Bash", input: { command: "git push origin HEAD" } });
   if (/\bfail\b/i.test(task)) steps.push({ fail: "Scripted failure" });
   return [steps];
+}
+
+/** Scripts for a fake chief of staff (used by the browser tests): "spawn <name>" calls spawn_worker, "list" calls list_workers. */
+export function chiefScripts(text: string): Step[][];
+export function chiefScripts(text: string, turn: number): Step[][];
+export function chiefScripts(text: string): Step[][] {
+  const said = text.split(/\n(?:Task|The owner says):\n/).pop() as string;
+  const spawn = /\bspawn ([a-z0-9][a-z0-9-]{1,30})\b/.exec(said);
+  if (spawn) return [[{ say: `Starting ${spawn[1]}.` }, { mcp: "spawn_worker", input: { name: spawn[1], task: "Scripted task from the chief of staff." } }]];
+  if (/\blist\b/i.test(said)) return [[{ mcp: "list_workers", input: {} }]];
+  return [[{ say: `Received: ${said}` }]];
 }
 
 type Queued = { item: DriverItem } | { error: Error } | { end: true };
@@ -81,6 +92,21 @@ export function createFakeDriver(opts: FakeDriverOptions = {}): AgentDriver {
             if ("say" in step) emit({ kind: "text", text: step.say });
             else if ("wait" in step) await sleep(step.wait, signal);
             else if ("fail" in step) throw new Error(step.fail);
+            else if ("mcp" in step) {
+              const name = mcpToolName(step.mcp);
+              const id = `toolu_fake${++toolSeq}`;
+              emit({ kind: "tool-use", tool: name, toolUseId: id, input: step.input });
+              const aborted = new Promise<"aborted">((r) => signal.addEventListener("abort", () => r("aborted"), { once: true }));
+              const out = await Promise.race([s.canUseTool(name, step.input, { signal }), aborted]);
+              if (out === "aborted") break;
+              const def = s.tools?.find((t) => t.name === step.mcp);
+              if (out.decision !== "allow") emit({ kind: "tool-result", toolUseId: id, output: out.message ?? "Denied", isError: true });
+              else if (!def) emit({ kind: "tool-result", toolUseId: id, output: `Unknown tool ${step.mcp}`, isError: true });
+              else {
+                const res = await def.handler(step.input);
+                emit({ kind: "tool-result", toolUseId: id, output: res.text, isError: res.isError === true });
+              }
+            }
             else {
               const id = `toolu_fake${++toolSeq}`;
               emit({ kind: "tool-use", tool: step.tool, toolUseId: id, input: step.input });

@@ -1,0 +1,163 @@
+import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { ChiefChat } from "../../web/src/panels/ChiefChat";
+import { FakeEventSource, mockApi, stubEventSource } from "./helpers";
+import type { AgentEvent, AgentEventBody, AgentEventsResponse, ChiefSummary } from "../../shared/types";
+
+beforeEach(() => stubEventSource());
+afterEach(() => vi.unstubAllGlobals());
+
+const chief = (over: Partial<ChiefSummary> = {}): { body: ChiefSummary } => ({
+  body: { state: "idle", model: "opus", turns: 0, costUsd: null, sessionId: null, error: null, pendingApprovals: 0, lastSeq: 0, ...over },
+});
+const ev = (seq: number, e: AgentEventBody): AgentEvent => ({ ...e, seq, at: "2026-10-20T08:01:00.000Z" });
+const log = (events: AgentEvent[]): { body: AgentEventsResponse } => ({ body: { events, lastSeq: events.length } });
+const EVENTS = "GET /api/chief/events?after=0&limit=200";
+
+describe("ChiefChat", () => {
+  it("shows a hint and a composer when the conversation is empty", async () => {
+    mockApi({ "GET /api/chief": chief(), [EVENTS]: log([]) });
+    render(<ChiefChat />);
+    expect(await screen.findByText(/Ask the chief of staff/)).toBeInTheDocument();
+    expect(screen.getByLabelText("Message to the chief of staff")).toBeInTheDocument();
+    expect(screen.getByText("Idle")).toBeInTheDocument();
+  });
+
+  it("sends a message, clears the box, and Ctrl+Enter sends too", async () => {
+    const api = mockApi({ "GET /api/chief": chief(), [EVENTS]: log([]), "POST /api/chief/message": { body: { ok: true } } });
+    render(<ChiefChat />);
+    const box = await screen.findByLabelText("Message to the chief of staff");
+    await userEvent.type(box, "start a worker for the docs");
+    await userEvent.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(api.calls.find((c) => c.method === "POST")?.body).toEqual({ text: "start a worker for the docs" }));
+    await waitFor(() => expect(box).toHaveValue(""));
+    await userEvent.type(box, "second{Control>}{Enter}{/Control}");
+    await waitFor(() => expect(api.calls.filter((c) => c.method === "POST")).toHaveLength(2));
+  });
+
+  it("will not send an empty message", async () => {
+    const api = mockApi({ "GET /api/chief": chief(), [EVENTS]: log([]) });
+    render(<ChiefChat />);
+    expect(await screen.findByRole("button", { name: "Send" })).toBeDisabled();
+    expect(api.count("POST", "/api/chief/message")).toBe(0);
+  });
+
+  it("shows the conversation: you, the chief, and each tool call with its arguments", async () => {
+    mockApi({
+      "GET /api/chief": chief({ turns: 1, lastSeq: 5 }),
+      [EVENTS]: log([
+        ev(1, { kind: "user", text: "spawn a docs worker" }),
+        ev(2, { kind: "text", text: "Starting one." }),
+        ev(3, { kind: "tool-use", tool: "mcp__dashboard__spawn_worker", toolUseId: "t1", input: { name: "docs-one", task: "write docs" } }),
+        ev(4, { kind: "tool-result", toolUseId: "t1", output: "Started worker docs-one on branch phase-05-agent-docs-one.", isError: false }),
+        ev(5, { kind: "result", ok: true, text: "", turns: 1, costUsd: 0.1 }),
+      ]),
+    });
+    render(<ChiefChat />);
+    const region = await screen.findByRole("log", { name: "Conversation with the chief of staff" });
+    expect(within(region).getByText("spawn a docs worker")).toBeInTheDocument();
+    expect(within(region).getByText("Starting one.")).toBeInTheDocument();
+    expect(within(region).getByText("spawn_worker")).toBeInTheDocument();
+    expect(within(region).getByText(/"name": "docs-one"/)).toBeInTheDocument();
+    expect(within(region).getByText(/Started worker docs-one/)).toBeInTheDocument();
+  });
+
+  it("renders everything as text, never HTML", async () => {
+    const hostile = '<img src=x onerror="alert(1)">';
+    mockApi({ "GET /api/chief": chief({ lastSeq: 1 }), [EVENTS]: log([ev(1, { kind: "text", text: hostile })]) });
+    const { container } = render(<ChiefChat />);
+    expect(await screen.findByText(hostile)).toBeInTheDocument();
+    expect(container.querySelector("img")).toBeNull();
+  });
+
+  it("links to the approval cards while a tool call is waiting", async () => {
+    mockApi({ "GET /api/chief": chief({ state: "waiting-approval", pendingApprovals: 1 }), [EVENTS]: log([]) });
+    render(<ChiefChat />);
+    expect(await screen.findByText("Waiting for approval")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /1 pending/ })).toHaveAttribute("href", "#approvals");
+  });
+
+  it("Stop appears while it is working and posts to stop", async () => {
+    const api = mockApi({ "GET /api/chief": chief({ state: "running" }), [EVENTS]: log([]), "POST /api/chief/stop": { body: { ok: true } } });
+    render(<ChiefChat />);
+    await userEvent.click(await screen.findByRole("button", { name: "Stop" }));
+    await waitFor(() => expect(api.count("POST", "/api/chief/stop")).toBe(1));
+  });
+
+  it("starting a new conversation asks first, then posts reset", async () => {
+    const api = mockApi({ "GET /api/chief": chief({ turns: 2 }), [EVENTS]: log([]), "POST /api/chief/reset": { body: { ok: true } } });
+    render(<ChiefChat />);
+    await userEvent.click(await screen.findByRole("button", { name: "New conversation" }));
+    expect(api.count("POST", "/api/chief/reset")).toBe(0);
+    await userEvent.click(screen.getByRole("button", { name: "Yes, start over" }));
+    await waitFor(() => expect(api.count("POST", "/api/chief/reset")).toBe(1));
+  });
+
+  it("lets you start over when a saved session exists even if no turn finished, or after a failure", async () => {
+    mockApi({ "GET /api/chief": chief({ turns: 0, sessionId: "s-1" }), [EVENTS]: log([]) });
+    const { unmount } = render(<ChiefChat />);
+    expect(await screen.findByRole("button", { name: "New conversation" })).toBeEnabled();
+    unmount();
+    mockApi({ "GET /api/chief": chief({ turns: 0, state: "failed", error: "x" }), [EVENTS]: log([]) });
+    render(<ChiefChat />);
+    expect(await screen.findByRole("button", { name: "New conversation" })).toBeEnabled();
+  });
+
+  it("starts reading again from the top when the server's log was replaced by a new conversation", async () => {
+    let events = [ev(1, { kind: "user", text: "old" }), ev(2, { kind: "text", text: "old reply" }), ev(3, { kind: "text", text: "older still" })];
+    mockApi({
+      "GET /api/chief": () => chief({ lastSeq: events.length }),
+      [EVENTS]: () => log(events),
+      "GET /api/chief/events?after=3&limit=200": () => ({ body: { events: [], lastSeq: events.length } }),
+    });
+    render(<ChiefChat />);
+    await screen.findByText("older still");
+    events = [ev(1, { kind: "state", state: "idle", detail: "New conversation" }), ev(2, { kind: "user", text: "fresh" })];
+    act(() => FakeEventSource.emit({ type: "invalidate", resource: "chat" }));
+    expect(await screen.findByText("fresh")).toBeInTheDocument();
+    expect(screen.queryByText("old reply")).toBeNull();
+  });
+
+  it("fetches only new entries, after the cursor, when chat changes", async () => {
+    let events = [ev(1, { kind: "user", text: "hi" }), ev(2, { kind: "text", text: "hello" })];
+    const api = mockApi({
+      "GET /api/chief": () => chief({ lastSeq: events.length }),
+      [EVENTS]: () => log(events.slice(0, 2)),
+      "GET /api/chief/events?after=2&limit=200": () => ({ body: { events: events.slice(2), lastSeq: events.length } }),
+    });
+    render(<ChiefChat />);
+    await screen.findByText("hello");
+    events = [...events, ev(3, { kind: "text", text: "one more thing" })];
+    act(() => FakeEventSource.emit({ type: "invalidate", resource: "chat" }));
+    expect(await screen.findByText("one more thing")).toBeInTheDocument();
+    expect(screen.getAllByText("hello")).toHaveLength(1);
+    expect(api.count("GET", "/api/chief/events?after=2&limit=200")).toBeGreaterThan(0);
+  });
+
+  it("announces the finished reply, not partial text, through a polite live region", async () => {
+    mockApi({ "GET /api/chief": chief({ turns: 1, lastSeq: 2 }), [EVENTS]: log([ev(1, { kind: "user", text: "hi" }), ev(2, { kind: "text", text: "All done." })]) });
+    render(<ChiefChat />);
+    await screen.findByText("All done.");
+    const live = screen.getByRole("status");
+    expect(live).toHaveAttribute("aria-live", "polite");
+    await waitFor(() => expect(live).toHaveTextContent("Chief of staff: All done."));
+  });
+
+  it("shows a failed send and keeps the text", async () => {
+    mockApi({ "GET /api/chief": chief(), [EVENTS]: log([]), "POST /api/chief/message": { status: 400, body: { error: "The message cannot be empty." } } });
+    render(<ChiefChat />);
+    const box = await screen.findByLabelText("Message to the chief of staff");
+    await userEvent.type(box, "x");
+    await userEvent.click(screen.getByRole("button", { name: "Send" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("The message cannot be empty.");
+    expect(box).toHaveValue("x");
+  });
+
+  it("shows the session error but still lets you write", async () => {
+    mockApi({ "GET /api/chief": chief({ state: "failed", error: "The chief of staff session ended with an error." }), [EVENTS]: log([]) });
+    render(<ChiefChat />);
+    expect(await screen.findByText("The chief of staff session ended with an error.")).toBeInTheDocument();
+    expect(screen.getByLabelText("Message to the chief of staff")).toBeEnabled();
+  });
+});

@@ -4,9 +4,9 @@ A local web dashboard for this repository: the latest pull request, open issues,
 the kanban board, and CI and local test status. It runs on Sol, binds to
 `127.0.0.1` only, and is opened from a laptop through an SSH tunnel.
 
-This package covers the status panels, the kanban, the training-runs table and
-worker agents with approval cards. The chief-of-staff chat and the terminal arrive
-in later milestones; their regions in the UI are labelled placeholders.
+This package covers the status panels, the kanban, the training-runs table,
+worker agents with approval cards and the chief-of-staff chat. The terminal arrives
+in a later milestone.
 
 Nothing here is imported by `src/`, and the Python test suite does not depend on it.
 
@@ -161,6 +161,17 @@ network tools, `rm`, and git commands that move refs or change configuration. No
 The amber counter in the top bar links to the cards. Reloading the page keeps them; restarting the dashboard
 stops every agent (it can be resumed).
 
+### Chief of staff
+
+The chat panel talks to one persistent Claude session (`DASH_CHIEF_MODEL`, Opus by default). It can read the
+repository (Read, Grep, Glob) but cannot run commands or edit files. It acts only through six dashboard tools:
+`list_workers` runs freely; `spawn_worker`, `message_worker`, `stop_worker`, `create_task` and `update_task` each
+wait on an approval card that shows the exact arguments, so a spawned worker or a new kanban item exists only
+after you approve it. Kanban changes before the first import report the usual "not imported" message. The
+conversation is kept on disk (`dashboard/.state/chief/`) and resumed after a stop, a crash or a restart;
+**New conversation** forgets it. The tool server runs inside the dashboard process (no extra port) and works under
+the same safe mode and sandbox as the workers; the sandbox hides `dashboard/.state`.
+
 Limits and caveats:
 
 - An agent can read `~/.ssh`, `~/.config/gh` and `~/.claude` credentials inside the sandbox (an approved push needs them), so the policy
@@ -193,7 +204,7 @@ Limits and caveats:
 | `DASH_AGENT_MAX` | `3` | Agents allowed at once, 1 to 8 |
 | `DASH_AGENT_MAX_TURNS` | `60` | Turn limit per agent session, 1 to 500 |
 | `DASH_WORKER_MODEL` | `sonnet` | Model for worker agents |
-| `DASH_CHIEF_MODEL` | `opus` | Model for the chief of staff (next milestone) |
+| `DASH_CHIEF_MODEL` | `opus` | Model for the chief of staff |
 | `DASH_CLAUDE_BIN` | `claude` | Claude Code binary the agents drive |
 | `DASH_AGENT_DRIVER` | `sdk` | `sdk` (real) or `fake` (scripted, for tests) |
 
