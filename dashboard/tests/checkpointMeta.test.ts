@@ -12,13 +12,13 @@ afterEach(() => { vi.restoreAllMocks(); fs.rmSync(tmp, { recursive: true, force:
 const copy = (name: string, as = name) => { const p = path.join(tmp, as); fs.copyFileSync(path.join(FIX, name), p); return p; };
 
 describe("readCheckpointMeta", () => {
-  it("reads the epoch and validation F1 from a real torch checkpoint without loading the model", async () => {
-    expect(await readCheckpointMeta(path.join(FIX, "best-187.pt"))).toEqual({ epoch: 187, valF1: 0.93 });
-    expect(await readCheckpointMeta(path.join(FIX, "best-5.pt"))).toEqual({ epoch: 5, valF1: 0.5 });
+  it("reads the epoch from a real torch checkpoint without loading the model", async () => {
+    expect(await readCheckpointMeta(path.join(FIX, "best-187.pt"))).toEqual({ epoch: 187 });
+    expect(await readCheckpointMeta(path.join(FIX, "best-5.pt"))).toEqual({ epoch: 5 });
   });
 
-  it("a checkpoint with no val_f1 (a pretrain snapshot) has valF1 null", async () => {
-    expect(await readCheckpointMeta(path.join(FIX, "last-400.pt"))).toEqual({ epoch: 400, valF1: null });
+  it("reads the epoch of a pretrain snapshot, which has no val_f1", async () => {
+    expect(await readCheckpointMeta(path.join(FIX, "last-400.pt"))).toEqual({ epoch: 400 });
   });
 
   it("returns null for a missing file, a directory, an empty file and random bytes", async () => {
@@ -86,14 +86,52 @@ describe("createCheckpointMetaReader", () => {
     const open = vi.spyOn(fsp, "open");
     const reader = createCheckpointMetaReader();
     const p = copy("best-187.pt", "best.pt");
-    expect(await reader.read(p)).toEqual({ epoch: 187, valF1: 0.93 });
+    expect(await reader.read(p)).toEqual({ epoch: 187 });
     const afterFirst = open.mock.calls.length;
     expect(afterFirst).toBeGreaterThan(0);
-    expect(await reader.read(p)).toEqual({ epoch: 187, valF1: 0.93 });
+    expect(await reader.read(p)).toEqual({ epoch: 187 });
     expect(open.mock.calls.length).toBe(afterFirst); // served from the cache
     fs.copyFileSync(path.join(FIX, "best-5.pt"), p); // different bytes and mtime
-    expect(await reader.read(p)).toEqual({ epoch: 5, valF1: 0.5 });
+    expect(await reader.read(p)).toEqual({ epoch: 5 });
     expect(open.mock.calls.length).toBeGreaterThan(afterFirst);
+  });
+
+  it("uses the stats the caller already has instead of asking the filesystem again", async () => {
+    const lstat = vi.spyOn(fsp, "lstat");
+    const reader = createCheckpointMetaReader();
+    const p = copy("best-187.pt", "best.pt");
+    const st = fs.lstatSync(p);
+    lstat.mockClear();
+    expect(await reader.read(p, st)).toEqual({ epoch: 187 });
+    expect(lstat).not.toHaveBeenCalled();
+  });
+
+  it("files the result under the stats of the file it actually read, never under stale ones", async () => {
+    const open = vi.spyOn(fsp, "open");
+    const reader = createCheckpointMetaReader();
+    const p = copy("best-187.pt", "best.pt");
+    const stale = fs.lstatSync(p);
+    fs.copyFileSync(path.join(FIX, "best-5.pt"), p); // rewritten after the caller looked
+    fs.utimesSync(p, new Date(Date.now() + 5000), new Date(Date.now() + 5000));
+    expect(await reader.read(p, stale)).toEqual({ epoch: 5 }); // the bytes now on disk, not the old file
+    const opens = open.mock.calls.length;
+    expect(await reader.read(p)).toEqual({ epoch: 5 }); // a fresh lstat finds the same key: a hit
+    expect(open.mock.calls.length).toBe(opens);
+  });
+
+  it("evicts the least recently used entry, not the oldest one", async () => {
+    const open = vi.spyOn(fsp, "open");
+    const reader = createCheckpointMetaReader({ maxEntries: 2 });
+    const [a, b, c] = ["a", "b", "c"].map((n) => copy("best-5.pt", `${n}.pt`));
+    await reader.read(a);
+    await reader.read(b);
+    await reader.read(a); // a is now the most recently used
+    await reader.read(c); // evicts b
+    const before = open.mock.calls.length;
+    await reader.read(a);
+    expect(open.mock.calls.length).toBe(before); // still cached
+    await reader.read(b);
+    expect(open.mock.calls.length).toBe(before + 1); // had to be read again
   });
 
   it("caches an unreadable result too, so a bad file is not retried every scan", async () => {

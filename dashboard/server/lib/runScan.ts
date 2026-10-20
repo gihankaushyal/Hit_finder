@@ -124,8 +124,8 @@ async function buildRow(root: string, name: string, meta: CheckpointMetaReader):
   } else if (status === "pretrain" && newestEpoch !== null) {
     epochs = { last: newestEpoch, configured: null, best: null, source: "snapshot" };
   } else if (files.bestPt) {
-    const m = await meta.read(path.join(dir, F.best));
-    if (m?.epoch != null) epochs = { last: null, configured: null, best: m.epoch, source: "checkpoint" };
+    const m = await meta.read(path.join(dir, F.best), bestSt);
+    if (m) epochs = { last: null, configured: null, best: m.epoch, source: "checkpoint" };
   }
 
   return {

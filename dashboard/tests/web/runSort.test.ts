@@ -63,6 +63,15 @@ describe("sortRuns", () => {
     expect(names(sortRuns(rs, "epochs", "desc"))).toEqual(["old", "trained", "none"]);
   });
 
+  it("epochs sort by the number the cell shows, so a run showing 'best 12' sits at 12", () => {
+    const rs = [
+      row("shown-as-best-12", { epochs: { last: null, configured: 200, best: 12, source: "training" } }),
+      row("trained-20", { epochs: { last: 20, configured: 200, best: 20, source: "training" } }),
+      row("nothing", { epochs: { last: null, configured: null, best: null, source: "training" } }),
+    ];
+    expect(names(sortRuns(rs, "epochs", "asc"))).toEqual(["shown-as-best-12", "trained-20", "nothing"]);
+  });
+
   it("updated sorts by time, newest first when descending", () => {
     const at = (iso: string | null) => ({ bestPt: true, lastPt: false, resultsJson: true, resultsInferenceJson: false, wandbIdTxt: false, newestMtime: iso });
     const rs = [row("old", { files: at("2026-01-01T00:00:00.000Z") }), row("new", { files: at("2026-10-01T00:00:00.000Z") }), row("never", { files: at(null) })];

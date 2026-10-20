@@ -127,6 +127,11 @@ describe("Runs", () => {
       expect(cell).toHaveAttribute("title", expect.stringContaining("best epoch 150"));
     });
 
+    it("a run whose trained epochs are unknown shows its best epoch instead of n/a, whatever the source", async () => {
+      const table = await renderOne(epochsRun({ last: null, configured: 200, best: 12, source: "training" }));
+      expect(table.getByText("best 12")).toBeInTheDocument();
+    });
+
     it("an old run shows only the best epoch stored in best.pt, labelled as such", async () => {
       const table = await renderOne(epochsRun({ last: null, configured: null, best: 187, source: "checkpoint" }));
       const cell = table.getByText("best 187");

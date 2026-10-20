@@ -31,15 +31,16 @@ const STATUS: Record<RunStatus, { kind: StatusKind; text: string }> = {
 const fmt = (v: number | null | undefined) => (typeof v === "number" ? v.toFixed(3) : NA);
 const metric = (b: MetricBlock | null | undefined, key: string) => fmt(b?.[key]);
 
-const CHECKPOINT_EPOCH_NOTE = "Epoch of the best validation score saved in best.pt. The number of epochs trained was not recorded for this run.";
+const CHECKPOINT_EPOCH_NOTE = "Epoch of the best validation score. The number of epochs trained was not recorded for this run.";
 
 /** Epochs trained out of those configured when recorded; otherwise what the checkpoint or snapshots show. */
 function EpochsCell({ run }: { run: RunRow }) {
   const e = run.epochs;
   if (!e) return <>{NA}</>;
   if (e.source === "snapshot") return <>{e.last === null ? NA : `epoch ${e.last}`}</>;
-  if (e.source === "checkpoint") return e.best === null ? <>{NA}</> : <span title={CHECKPOINT_EPOCH_NOTE}>best {e.best}</span>;
-  const text = e.last !== null && e.configured !== null ? `${e.last} / ${e.configured}` : e.last !== null ? String(e.last) : NA;
+  // The sort uses this same number (last, else best), so the cell never reads n/a for a row that sorts by a value.
+  if (e.last === null) return e.best === null ? <>{NA}</> : <span title={CHECKPOINT_EPOCH_NOTE}>best {e.best}</span>;
+  const text = e.configured !== null ? `${e.last} / ${e.configured}` : String(e.last);
   const note = [e.best !== null ? `best epoch ${e.best}` : null, run.result?.training?.earlyStopped ? "stopped early" : null].filter(Boolean).join(", ");
   return <span title={note || undefined}>{text}</span>;
 }
