@@ -22,6 +22,18 @@ function server() {
     poll: vi.fn(),
     dispose: vi.fn(),
   };
+  const agents = {
+    list: vi.fn(() => []),
+    get: vi.fn(() => ({}) as never),
+    spawn: vi.fn(async () => ({}) as never),
+    message: vi.fn(async () => {}),
+    stop: vi.fn(async () => {}),
+    resume: vi.fn(async () => {}),
+    events: vi.fn(async () => ({ events: [], lastSeq: 0 })),
+    init: vi.fn(async () => {}),
+    stopAll: vi.fn(async () => {}),
+  };
+  const approvals = { pending: vi.fn(() => []), decide: vi.fn(), request: vi.fn(), cancelAgent: vi.fn(), count: vi.fn(() => 0), countFor: vi.fn(() => 0) };
   const app = buildServer({
     config: { webDist: "/nonexistent", repoRoot: "/tmp" } as Config,
     token: TOKEN,
@@ -31,11 +43,15 @@ function server() {
     kanban,
     runner: async () => ({ stdout: "x\n", stderr: "", code: 0 }),
     runs: { scan: async () => ({ runs: [], scannedAt: "", checkpointsDirExists: false, truncated: false, error: null }) },
+    agents,
+    approvals,
   });
   const effects = () => ({
     gh: gh.writes.length,
     start: start.mock.calls.length,
     kanban: kanban.addTask.mock.calls.length + kanban.setStatus.mock.calls.length + kanban.sync.mock.calls.length,
+    agents: agents.spawn.mock.calls.length + agents.message.mock.calls.length + agents.stop.mock.calls.length + agents.resume.mock.calls.length,
+    approvals: approvals.decide.mock.calls.length,
   });
   return { app, effects };
 }
@@ -46,6 +62,11 @@ const MUTATING: [string, string, unknown][] = [
   ["POST", "/api/kanban/tasks", { title: "x" }],
   ["PATCH", "/api/kanban/tasks/1", { status: "done" }],
   ["POST", "/api/kanban/sync", undefined],
+  ["POST", "/api/agents", { name: "abc-def", task: "t" }],
+  ["POST", "/api/agents/abc-def/message", { text: "hi" }],
+  ["POST", "/api/agents/abc-def/stop", undefined],
+  ["POST", "/api/agents/abc-def/resume", undefined],
+  ["POST", "/api/approvals/abc/decision", { decision: "allow" }],
 ];
 
 const send = (app: ReturnType<typeof server>["app"], method: string, url: string, body: unknown, headers: Record<string, string>) =>
@@ -65,7 +86,7 @@ describe.each(MUTATING)("%s %s CSRF protection", (method, url, body) => {
       const res = await send(app, method, url, body, headers);
       expect(res.status, JSON.stringify(headers)).toBe(403);
     }
-    expect(effects()).toEqual({ gh: 0, start: 0, kanban: 0 });
+    expect(effects()).toEqual({ gh: 0, start: 0, kanban: 0, agents: 0, approvals: 0 });
   });
 
   it("requires Content-Type: application/json (415), even for body-less routes", async () => {
@@ -76,7 +97,7 @@ describe.each(MUTATING)("%s %s CSRF protection", (method, url, body) => {
       const res = await send(app, method, url, body, headers);
       expect(res.status, String(ct)).toBe(415);
     }
-    expect(effects()).toEqual({ gh: 0, start: 0, kanban: 0 });
+    expect(effects()).toEqual({ gh: 0, start: 0, kanban: 0, agents: 0, approvals: 0 });
   });
 
   it("accepts same-origin JSON with the cookie, with or without Origin/Sec-Fetch-Site", async () => {

@@ -9,7 +9,7 @@ import type { AgentDriver, Session, SessionStart } from "./driver";
 import { openJournal, type Journal } from "./journal";
 import { workerOptions } from "./policy";
 import { RESUME_PROMPT, workerPrompt } from "./rolePrompts";
-import { localRemotePath, validAgentName, type Worktrees } from "./worktrees";
+import { localRemotePath, validAgentName, WorktreeError, type Worktrees } from "./worktrees";
 
 export type AgentErrorCode = "invalid" | "cap" | "exists" | "not-found" | "state";
 
@@ -240,7 +240,11 @@ export function createSupervisor(deps: SupervisorDeps): Supervisor {
       try {
         wt = await worktrees.create(name);
       } catch (err) {
-        throw new AgentError("exists", err instanceof Error ? err.message : "Could not create the worktree.");
+        if (!(err instanceof WorktreeError)) {
+          console.error("worktree creation failed:", err);
+          throw new AgentError("invalid", "Could not create the worktree.");
+        }
+        throw new AgentError(/already exists/.test(err.message) ? "exists" : "invalid", err.message);
       }
       const dir = path.join(root, name);
       const journal = await openJournal(path.join(dir, "journal.jsonl"));

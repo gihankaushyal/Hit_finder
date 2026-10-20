@@ -21,12 +21,20 @@ export interface Worktrees {
   remove(name: string, opts?: { force?: boolean }): Promise<void>;
 }
 
+/** A refusal with a message that is safe to show: it names no paths and carries no git output. */
+export class WorktreeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "WorktreeError";
+  }
+}
+
 export function validAgentName(name: string): boolean {
   return NAME_RE.test(name);
 }
 
 function need(name: string): void {
-  if (!validAgentName(name)) throw new Error("Agent name must be 2 to 31 characters: lowercase letters, digits and hyphens, starting with a letter or digit.");
+  if (!validAgentName(name)) throw new WorktreeError("Agent name must be 2 to 31 characters: lowercase letters, digits and hyphens, starting with a letter or digit.");
 }
 
 async function git(cwd: string, args: string[]): Promise<string> {
@@ -82,22 +90,22 @@ export function createWorktrees(cfg: { repoRoot: string; agentsDir: string; base
       need(name);
       const target = pathFor(name);
       const branch = branchFor(name);
-      if (await exists(target)) throw new Error(`A worktree or file already exists for "${name}".`);
-      if (await gitOk(repoRoot, ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`])) throw new Error(`Branch ${branch} already exists.`);
-      if (!(await gitOk(repoRoot, ["rev-parse", "--verify", "--quiet", `${base}^{commit}`]))) throw new Error(`Base ref ${base} was not found.`);
+      if (await exists(target)) throw new WorktreeError(`A worktree or file already exists for "${name}".`);
+      if (await gitOk(repoRoot, ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`])) throw new WorktreeError(`Branch ${branch} already exists.`);
+      if (!(await gitOk(repoRoot, ["rev-parse", "--verify", "--quiet", `${base}^{commit}`]))) throw new WorktreeError(`Base ref ${base} was not found.`);
       await fs.mkdir(agentsDir, { recursive: true });
       const realAgents = await fs.realpath(agentsDir);
-      if (path.dirname(path.join(realAgents, name)) !== realAgents) throw new Error("Worktree path escapes the agents directory.");
+      if (path.dirname(path.join(realAgents, name)) !== realAgents) throw new WorktreeError("Worktree path escapes the agents directory.");
       await git(repoRoot, ["worktree", "add", "--no-track", "-b", branch, path.join(realAgents, name), base]);
       return { name, path: target, branch };
     },
     async remove(name, opts = {}) {
       need(name);
       const entry = (await list()).find((w) => w.name === name);
-      if (!entry) throw new Error(`Worktree "${name}" was not found.`);
+      if (!entry) throw new WorktreeError(`Worktree "${name}" was not found.`);
       if (!opts.force) {
-        if ((await git(entry.path, ["status", "--porcelain"])) !== "") throw new Error(`Worktree "${name}" has uncommitted changes.`);
-        if (Number(await git(repoRoot, ["rev-list", "--count", `${base}..${entry.branch}`])) > 0) throw new Error(`Branch ${entry.branch} has unmerged commits.`);
+        if ((await git(entry.path, ["status", "--porcelain"])) !== "") throw new WorktreeError(`Worktree "${name}" has uncommitted changes.`);
+        if (Number(await git(repoRoot, ["rev-list", "--count", `${base}..${entry.branch}`])) > 0) throw new WorktreeError(`Branch ${entry.branch} has unmerged commits.`);
       }
       await git(repoRoot, ["worktree", "remove", ...(opts.force ? ["--force"] : []), entry.path]);
       await git(repoRoot, ["branch", "-D", entry.branch]);

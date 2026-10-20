@@ -119,6 +119,18 @@ describe("spawn", () => {
     await expect(sup.spawn({ name: "second-one", task: "t" })).resolves.toMatchObject({ name: "second-one" });
   });
 
+  it("reports a missing base branch without leaking paths or git output", async () => {
+    await sup.stopAll(500);
+    sup = build({ DASH_AGENT_BASE: "origin/nope" });
+    await sup.init();
+    const err = await sup.spawn({ name: "no-base", task: "t" }).catch((e) => e);
+    expect(err).toBeInstanceOf(AgentError);
+    expect(err.code).toBe("invalid");
+    expect(err.message).toContain("origin/nope");
+    expect(err.message).not.toContain(root);
+    expect(sup.list()).toEqual([]);
+  });
+
   it("does not touch the main checkout", async () => {
     const before = [git(repo, "rev-parse", "HEAD"), git(repo, "branch", "--show-current"), git(repo, "status", "--porcelain")];
     const a = await sup.spawn({ name: "quiet-one", task: "t" });

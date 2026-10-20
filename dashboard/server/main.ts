@@ -1,5 +1,12 @@
 import type { Server } from "node:http";
 import { serve } from "@hono/node-server";
+import path from "node:path";
+import { createApprovals } from "./agents/approvals";
+import { createFakeDriver } from "./agents/fakeDriver";
+import { sweepOrphans } from "./agents/orphans";
+import { createSdkDriver } from "./agents/sdkDriver";
+import { createSupervisor } from "./agents/supervisor";
+import { createWorktrees } from "./agents/worktrees";
 import { loadOrCreateToken } from "./auth";
 import { loadConfig, type Config } from "./config";
 import { EventBus } from "./events";
@@ -17,6 +24,8 @@ const EXIT_FAILURE = 1;
 const SHUTDOWN_GRACE_MS = 3000;
 /** Upper bound on waiting for pytest's process group to die (SIGTERM, then SIGKILL after 2 s) before exiting. */
 const STOP_TESTS_TIMEOUT_MS = 6000;
+/** Upper bound on stopping every agent session (interrupt, close, process-group kill) at shutdown. */
+const STOP_AGENTS_TIMEOUT_MS = 5000;
 
 function stopTests(): Promise<void> {
   const bound = new Promise<void>((resolve) => setTimeout(resolve, STOP_TESTS_TIMEOUT_MS).unref());
@@ -47,12 +56,23 @@ const kanban = createKanbanService({
   imported: () => isImportCompleted(config),
 });
 const runs = createRunScanner(config.checkpointsDir);
-const app = buildServer({ config, token, bus, gh, tests, kanban, runner: execRunner, runs });
+const approvals = createApprovals({ bus, auditPath: path.join(config.stateDir, "approvals-audit.jsonl") });
+const agents = createSupervisor({
+  cfg: config,
+  bus,
+  driver: config.agentDriver === "fake" ? createFakeDriver({ stepMs: 150 }) : createSdkDriver(),
+  approvals,
+  worktrees: createWorktrees({ repoRoot: config.repoRoot, agentsDir: config.agentsDir, base: config.agentBase }),
+  env: process.env,
+  sweep: async () => void (await sweepOrphans(config.agentsDir)),
+});
+const app = buildServer({ config, token, bus, gh, tests, kanban, runner: execRunner, runs, agents, approvals });
 
 if (!isImportCompleted(config)) {
   console.log("Kanban sync is off until you run the first import: npm run kanban:sync -- --dry-run, then -- --yes");
 }
 const triggers = startKanbanTriggers(kanban, config.kanbanPath);
+const agentsReady = agents.init().catch((err) => console.error("agent supervisor failed to start:", err instanceof Error ? err.message : err));
 
 const server = serve({ fetch: app.fetch, hostname: config.host, port: config.port }, () => {
   console.log(`http://${config.host}:${config.port}/?token=${token}`);
@@ -61,17 +81,17 @@ const server = serve({ fetch: app.fetch, hostname: config.host, port: config.por
 server.on("error", (err: NodeJS.ErrnoException) => {
   void triggers.close();
   const message = err.code === "EADDRINUSE" ? `dashboard: port ${config.port} is already in use` : `dashboard: could not start the server (${err.code ?? "error"})`;
-  void stopTests().finally(() => fail(message));
+  void Promise.all([stopTests(), agentsReady.then(() => agents.stopAll(STOP_AGENTS_TIMEOUT_MS))]).finally(() => fail(message));
 });
 
 let shuttingDown = false;
 function shutdown(): void {
   if (shuttingDown) return;
   shuttingDown = true;
-  const force = setTimeout(() => process.exit(0), STOP_TESTS_TIMEOUT_MS + SHUTDOWN_GRACE_MS);
+  const force = setTimeout(() => process.exit(0), STOP_TESTS_TIMEOUT_MS + STOP_AGENTS_TIMEOUT_MS + SHUTDOWN_GRACE_MS);
   force.unref();
   // Exit only after pytest's process group is gone, or the bound above elapses.
-  const testsStopped = stopTests();
+  const testsStopped = Promise.all([stopTests(), agentsReady.then(() => agents.stopAll(STOP_AGENTS_TIMEOUT_MS))]);
   void triggers.close().finally(() => {
     server.close(() => void testsStopped.finally(() => process.exit(0)));
     server.closeAllConnections?.();
