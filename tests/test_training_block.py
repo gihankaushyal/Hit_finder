@@ -56,12 +56,21 @@ class TestTrainingBlock:
         assert block["best_epoch"] == 7 and type(block["best_epoch"]) is int
         assert block["configured_epochs"] == 10
 
-    @pytest.mark.parametrize("bad", [None, float("nan"), "x"])
+    @pytest.mark.parametrize(
+        "bad", [None, float("nan"), float("inf"), "x", True, False, 7.9]
+    )
     def test_an_unknown_epoch_is_null_not_an_error(self, bad):
         block = training_block(
             configured_epochs=10, last_epoch=bad, best_epoch=bad, early_stopped=False
         )
         assert block["last_epoch"] is None and block["best_epoch"] is None
+
+    def test_a_best_epoch_after_the_last_epoch_is_unknown(self):
+        # the fallback checkpoint (no val-F1 improvement) is stamped with the configured epochs
+        block = training_block(
+            configured_epochs=200, last_epoch=12, best_epoch=200, early_stopped=True
+        )
+        assert block["last_epoch"] == 12 and block["best_epoch"] is None
 
 
 class _FakeRun:
@@ -225,6 +234,55 @@ class TestTrainFoldWritesTheTrainingBlock:
             "best_epoch": 5,
             "early_stopped": False,
         }
+
+    def test_no_validation_improvement_leaves_the_best_epoch_unknown(self, run_fold):
+        # every val F1 is NaN: best.pt is the fallback checkpoint stamped with epoch 10
+        nan = float("nan")
+        data, n = run_fold(_cfg(epochs=10, patience=3), [nan] * 4)
+        assert n == 3
+        assert data["training"] == {
+            "configured_epochs": 10,
+            "last_epoch": 3,
+            "best_epoch": None,
+            "early_stopped": True,
+        }
+
+    def test_resuming_with_epochs_left_describes_the_session_that_finished(
+        self, run_fold, tmp_path
+    ):
+        ckpt_dir = tmp_path / "checkpoints" / RUN_NAME
+        ckpt_dir.mkdir(parents=True)
+        torch.save(
+            {
+                "epoch": 2,
+                "model_state_dict": nn.Linear(4, 2).state_dict(),
+                "optimizer_state_dict": torch.optim.AdamW(
+                    nn.Linear(4, 2).parameters()
+                ).state_dict(),
+                "val_f1": 0.7,
+                "epochs_no_improve": 0,
+                "inference_threshold": 0.5,
+                "backbone": "resnet18",
+                "num_classes": 2,
+            },
+            ckpt_dir / "best.pt",
+        )
+        data, n = run_fold(_cfg(epochs=4), [0.9, 0.95], resume_training=True)
+        assert n == 2  # epochs 3 and 4
+        assert data["training"] == {
+            "configured_epochs": 4,
+            "last_epoch": 4,
+            "best_epoch": 4,
+            "early_stopped": False,
+        }
+
+    def test_extra_results_may_not_set_the_reserved_training_key(self, run_fold):
+        with pytest.raises(ValueError, match="training"):
+            run_fold(
+                _cfg(epochs=2),
+                [0.5, 0.6],
+                extra_results={"training": {"anything": 1}},
+            )
 
     def test_an_inference_only_pass_does_not_claim_to_have_trained(
         self, tmp_path, monkeypatch

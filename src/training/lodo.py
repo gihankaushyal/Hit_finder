@@ -152,7 +152,8 @@ def _train_fold(
       Backbone/num_classes checkpoint validation is skipped for custom builders.
     `run_name_prefix`: overrides the default `{backbone}-asymmetric` prefix in
       the wandb run name and checkpoint directory.
-    `extra_results`: extra keys merged into the per-fold results.json.
+    `extra_results`: extra keys merged into the per-fold results.json. The key
+      `training` is reserved for the training loop (see `training_block`).
     `frame_cache`: optional two-tier FrameCache. When supplied, its manifest is
       verified against `cfg` before any training starts, and it is forwarded to
       the training loader and to every run_patch_agg call.
@@ -162,6 +163,11 @@ def _train_fold(
       entries under `inference/`; the result goes to results.json if the run
       has none, else to results.inference.json (see inference_results.py).
     """
+    if extra_results and "training" in extra_results:
+        raise ValueError(
+            "extra_results may not set 'training': that key is written by the training loop"
+        )
+
     import wandb
 
     verify_cache_or_raise(frame_cache, cfg)
