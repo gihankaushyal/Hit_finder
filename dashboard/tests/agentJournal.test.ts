@@ -95,6 +95,13 @@ describe("journal", () => {
     expect(e.kind === "text" && e.text).toBe("line1\nline2\r\nline3");
   });
 
+  it("serves reads from memory instead of re-parsing the file", async () => {
+    const j = await openJournal(file);
+    for (let i = 0; i < 20; i++) await j.append({ kind: "text", text: String(i) });
+    fs.writeFileSync(file, "");
+    expect((await j.read(15, 100)).map((e) => e.seq)).toEqual([16, 17, 18, 19, 20]);
+  });
+
   it("is empty before the first append", async () => {
     const j = await openJournal(file);
     expect(j.lastSeq()).toBe(0);

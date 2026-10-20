@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
-import { bwrapArgs, guardedGitPaths, bwrapAvailable } from "../server/agents/bwrap";
+import { bwrapArgs, guardedGitPaths, bwrapAvailable, claudeDirGuards } from "../server/agents/bwrap";
 
 const profile = {
   worktree: "/r/agents/a",
@@ -88,6 +88,14 @@ describe("guardedGitPaths", () => {
     expect(guarded).not.toContain(path.join(gd, "refs/heads/phase-05-agent-a"));
   });
 
+  it("also guards the main index and remote-tracking refs", () => {
+    const gd = path.join(repo, ".git");
+    fs.mkdirSync(path.join(gd, "refs/remotes/origin"), { recursive: true });
+    fs.writeFileSync(path.join(gd, "refs/remotes/origin/main"), "x");
+    const guarded = guardedGitPaths(gd, "phase-05-agent-a");
+    expect(guarded).toEqual(expect.arrayContaining([path.join(gd, "index"), path.join(gd, "refs/remotes")]));
+  });
+
   it("only lists paths that exist", () => {
     for (const p of guardedGitPaths(path.join(repo, ".git"), "phase-05-agent-a")) expect(fs.existsSync(p)).toBe(true);
   });
@@ -110,6 +118,26 @@ describe.skipIf(!haveBwrap)("real bwrap", () => {
       expect(r.status).toBe(0);
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("claudeDirGuards", () => {
+  it("makes settings, hooks, skills, plugins and instructions read-only, only where they exist", () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "dash-home-"));
+    try {
+      const c = path.join(home, ".claude");
+      fs.mkdirSync(path.join(c, "skills"), { recursive: true });
+      fs.mkdirSync(path.join(c, "plugins"));
+      fs.mkdirSync(path.join(c, "projects"));
+      fs.writeFileSync(path.join(c, "settings.json"), "{}");
+      fs.writeFileSync(path.join(c, "CLAUDE.md"), "x");
+      const g = claudeDirGuards(home);
+      expect(g).toEqual(expect.arrayContaining([path.join(c, "settings.json"), path.join(c, "CLAUDE.md"), path.join(c, "skills"), path.join(c, "plugins")]));
+      expect(g).not.toContain(path.join(c, "projects"));
+      expect(g).not.toContain(path.join(c, "commands"));
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
     }
   });
 });

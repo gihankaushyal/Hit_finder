@@ -27,6 +27,8 @@ export const TASK_MAX_CHARS = 8000;
 export const MESSAGE_MAX_CHARS = 8000;
 const NOTIFY_MS = 150;
 const STOP_WAIT_MS = 3000;
+/** How long stop waits for a polite interrupt before closing the session regardless. */
+const INTERRUPT_WAIT_MS = 2000;
 export const FAILED_MESSAGE = "The agent session ended with an error.";
 
 const ACTIVE: AgentState[] = ["starting", "running", "waiting-approval", "idle"];
@@ -39,6 +41,9 @@ interface Rec {
   session: Session | null;
   loop: Promise<void> | null;
   stopping: boolean;
+  /** Bumped for every session started; a finished session may only touch the record while it is still current. */
+  gen: number;
+  stopP: Promise<void> | null;
 }
 
 export interface Supervisor {
@@ -64,6 +69,7 @@ export interface SupervisorDeps {
   notifyMs?: number;
   /** Runs once at init; the real server uses it to kill leftover claude processes. */
   sweep?: () => Promise<void>;
+  interruptWaitMs?: number;
 }
 
 async function writeMeta(dir: string, meta: Meta): Promise<void> {
@@ -78,6 +84,9 @@ export function createSupervisor(deps: SupervisorDeps): Supervisor {
   const recs = new Map<string, Rec>();
   const notifyMs = deps.notifyMs ?? NOTIFY_MS;
   let timer: NodeJS.Timeout | null = null;
+  const interruptWaitMs = deps.interruptWaitMs ?? INTERRUPT_WAIT_MS;
+  /** Names being created: counted against the cap before their records exist. */
+  const reserved = new Set<string>();
 
   const notify = () => {
     if (timer) return;
@@ -120,7 +129,7 @@ export function createSupervisor(deps: SupervisorDeps): Supervisor {
     await r.journal.append({ kind: "state", state });
   };
 
-  const activeWorkers = () => [...recs.values()].filter((r) => r.meta.role === "worker" && ACTIVE.includes(r.meta.state)).length;
+  const activeWorkers = () => [...recs.values()].filter((r) => r.meta.role === "worker" && ACTIVE.includes(r.meta.state)).length + reserved.size;
 
   async function startSession(r: Rec, prompt: string, resume?: string): Promise<void> {
     const worktree = r.meta.worktree as string;
@@ -138,7 +147,7 @@ export function createSupervisor(deps: SupervisorDeps): Supervisor {
         home: os.homedir(),
         remote,
         guarded: [],
-        maskDirs: [path.join(cfg.repoRoot, ".secrets")],
+        maskDirs: [path.join(cfg.repoRoot, ".secrets"), cfg.stateDir],
       },
       canUseTool: async (tool, input, ctx) => {
         let approvalId = "";
@@ -157,11 +166,14 @@ export function createSupervisor(deps: SupervisorDeps): Supervisor {
       },
     };
     const session = driver.start(start);
+    const gen = ++r.gen;
+    const current = () => r.gen === gen;
     r.session = session;
     await setState(r, "running");
     r.loop = (async () => {
       try {
         for await (const item of session.events) {
+          if (!current()) continue;
           if ("sessionId" in item) {
             touch(r, { sessionId: item.sessionId });
             continue;
@@ -174,34 +186,48 @@ export function createSupervisor(deps: SupervisorDeps): Supervisor {
             touch(r);
           }
         }
-        if (!r.stopping) await setState(r, "done");
+        if (!r.stopping && current()) await setState(r, "done");
       } catch (err) {
-        if (r.stopping) return;
+        if (r.stopping || !current()) return;
         console.error(`agent ${r.meta.name} failed:`, err instanceof Error ? err.message : err);
         approvals.cancelAgent(r.meta.id);
         await r.journal.append({ kind: "error", message: FAILED_MESSAGE });
         await setState(r, "failed", FAILED_MESSAGE);
+        try {
+          session.close();
+        } catch {
+          /* already closed */
+        }
+        if (r.session === session) r.session = null;
       }
     })();
   }
 
-  async function stop(id: string): Promise<void> {
+  function stop(id: string): Promise<void> {
     const r = need(id);
-    if (!ACTIVE.includes(r.meta.state)) return;
+    if (r.stopP) return r.stopP;
+    if (!ACTIVE.includes(r.meta.state)) return Promise.resolve();
     r.stopping = true;
-    approvals.cancelAgent(id);
-    await setState(r, "stopped");
-    const s = r.session;
-    if (s) {
-      try {
-        await s.interrupt();
-      } catch {
-        /* the session may already be gone */
+    const run = async () => {
+      approvals.cancelAgent(id);
+      await setState(r, "stopped");
+      const s = r.session;
+      if (s) {
+        try {
+          // A wedged session must not keep its write access: ask politely, then close regardless.
+          await Promise.race([s.interrupt(), new Promise((res) => setTimeout(res, interruptWaitMs))]);
+        } catch {
+          /* the session may already be gone */
+        }
+        s.close();
       }
-      s.close();
-    }
-    if (r.loop) await Promise.race([r.loop, new Promise((res) => setTimeout(res, STOP_WAIT_MS))]);
-    r.session = null;
+      if (r.loop) await Promise.race([r.loop, new Promise((res) => setTimeout(res, STOP_WAIT_MS))]);
+      if (r.session === s) r.session = null;
+    };
+    r.stopP = run().finally(() => {
+      r.stopP = null;
+    });
+    return r.stopP;
   }
 
   return {
@@ -219,7 +245,7 @@ export function createSupervisor(deps: SupervisorDeps): Supervisor {
           continue;
         }
         const journal = await openJournal(path.join(dir, "journal.jsonl"));
-        const r: Rec = { meta, journal, dir, session: null, loop: null, stopping: false };
+        const r: Rec = { meta, journal, dir, session: null, loop: null, stopping: false, gen: 0, stopP: null };
         if (ACTIVE.includes(meta.state)) {
           meta.state = "stopped";
           await journal.append({ kind: "state", state: "stopped", detail: "The dashboard restarted." });
@@ -234,53 +260,80 @@ export function createSupervisor(deps: SupervisorDeps): Supervisor {
       if (!task.trim()) throw new AgentError("invalid", "The task cannot be empty.");
       if (task.length > TASK_MAX_CHARS) throw new AgentError("invalid", `The task is limited to ${TASK_MAX_CHARS} characters.`);
       if (issue !== null && (!Number.isInteger(issue) || issue < 1)) throw new AgentError("invalid", "Issue must be a positive whole number.");
-      if (recs.has(name)) throw new AgentError("exists", `An agent named "${name}" already exists.`);
+      if (recs.has(name) || reserved.has(name)) throw new AgentError("exists", `An agent named "${name}" already exists.`);
       if (activeWorkers() >= cfg.agentMax) throw new AgentError("cap", `${cfg.agentMax} agents are already running. Stop one first.`);
-      let wt;
+      reserved.add(name); // claim the slot now: the awaits below must not let parallel spawns slip past the cap
+      let r: Rec | null = null;
+      let made = false;
       try {
-        wt = await worktrees.create(name);
-      } catch (err) {
-        if (!(err instanceof WorktreeError)) {
-          console.error("worktree creation failed:", err);
-          throw new AgentError("invalid", "Could not create the worktree.");
+        let wt;
+        try {
+          wt = await worktrees.create(name);
+          made = true;
+        } catch (err) {
+          if (!(err instanceof WorktreeError)) {
+            console.error("worktree creation failed:", err);
+            throw new AgentError("invalid", "Could not create the worktree.");
+          }
+          throw new AgentError(/already exists/.test(err.message) ? "exists" : "invalid", err.message);
         }
-        throw new AgentError(/already exists/.test(err.message) ? "exists" : "invalid", err.message);
+        const dir = path.join(root, name);
+        const journal = await openJournal(path.join(dir, "journal.jsonl"));
+        const now = new Date().toISOString();
+        const meta: Meta = {
+          id: name, name, role: "worker", task, issue, state: "starting", model: cfg.workerModel, branch: wt.branch, worktree: wt.path,
+          createdAt: now, updatedAt: now, lastActivity: null, turns: 0, costUsd: null, sessionId: null, error: null,
+        };
+        r = { meta, journal, dir, session: null, loop: null, stopping: false, gen: 0, stopP: null };
+        recs.set(name, r);
+        await persist(r);
+        await journal.append({ kind: "user", text: task });
+        await startSession(r, workerPrompt({ name, branch: wt.branch, issue, task }));
+      } catch (err) {
+        // Leave nothing behind that would hold a slot or a name: no record, no worktree, no branch.
+        if (r) {
+          recs.delete(name);
+          await fs.rm(r.dir, { recursive: true, force: true }).catch(() => undefined);
+        }
+        if (made) await worktrees.remove(name, { force: true }).catch(() => undefined);
+        throw err;
+      } finally {
+        reserved.delete(name);
       }
-      const dir = path.join(root, name);
-      const journal = await openJournal(path.join(dir, "journal.jsonl"));
-      const now = new Date().toISOString();
-      const meta: Meta = {
-        id: name, name, role: "worker", task, issue, state: "starting", model: cfg.workerModel, branch: wt.branch, worktree: wt.path,
-        createdAt: now, updatedAt: now, lastActivity: null, turns: 0, costUsd: null, sessionId: null, error: null,
-      };
-      const r: Rec = { meta, journal, dir, session: null, loop: null, stopping: false };
-      recs.set(name, r);
-      await persist(r);
-      await journal.append({ kind: "user", text: task });
-      await startSession(r, workerPrompt({ name, branch: wt.branch, issue, task }));
-      return summary(r);
+      return summary(r as Rec);
     },
 
     async message(id, text) {
       const r = need(id);
       if (!text.trim()) throw new AgentError("invalid", "The message cannot be empty.");
       if (text.length > MESSAGE_MAX_CHARS) throw new AgentError("invalid", `Messages are limited to ${MESSAGE_MAX_CHARS} characters.`);
-      if (!ACTIVE.includes(r.meta.state) || !r.session) throw new AgentError("state", "The agent is not running. Resume it first.");
+      const session = r.session;
+      if (!ACTIVE.includes(r.meta.state) || !session) throw new AgentError("state", "The agent is not running. Resume it first.");
       await r.journal.append({ kind: "user", text });
       if (r.meta.state === "idle") await setState(r, "running");
-      r.session.send(text);
+      // A stop may have finished while the journal was written; do not send into a session that is gone.
+      if (r.session !== session || !ACTIVE.includes(r.meta.state)) throw new AgentError("state", "The agent stopped before the message was delivered.");
+      session.send(text);
     },
 
     stop,
 
     async resume(id) {
       const r = need(id);
+      if (r.stopP) await r.stopP;
       if (ACTIVE.includes(r.meta.state)) throw new AgentError("state", "The agent is already running.");
       if (!r.meta.sessionId) throw new AgentError("state", "This agent has no session to resume.");
       if (activeWorkers() >= cfg.agentMax) throw new AgentError("cap", `${cfg.agentMax} agents are already running. Stop one first.`);
+      const before = r.meta.state;
       r.stopping = false;
       await setState(r, "starting");
-      await startSession(r, RESUME_PROMPT, r.meta.sessionId);
+      try {
+        await startSession(r, RESUME_PROMPT, r.meta.sessionId);
+      } catch (err) {
+        r.stopping = true;
+        await setState(r, before === "starting" ? "stopped" : before, FAILED_MESSAGE);
+        throw err;
+      }
     },
 
     list: () => [...recs.values()].map(summary).sort((a, b) => b.createdAt.localeCompare(a.createdAt)),

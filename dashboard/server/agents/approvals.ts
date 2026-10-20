@@ -4,6 +4,8 @@ import type { Approval, ApprovalDecision } from "../../shared/types";
 import type { EventBus } from "../events";
 
 const SUMMARY_MAX = 200;
+/** The audit keeps the whole request so it shows what was approved, bounded so one record cannot grow without limit. */
+const AUDIT_INPUT_MAX_CHARS = 20_000;
 
 export interface ApprovalOutcome {
   decision: ApprovalDecision;
@@ -21,6 +23,11 @@ export interface Approvals {
   pending(): Approval[];
   count(): number;
   countFor(agentId: string): number;
+}
+
+function auditInput(input: Record<string, unknown>): unknown {
+  const text = JSON.stringify(input);
+  return text.length <= AUDIT_INPUT_MAX_CHARS ? input : { truncated: true, text: text.slice(0, AUDIT_INPUT_MAX_CHARS) };
 }
 
 export function summarise(tool: string, input: Record<string, unknown>): string {
@@ -41,7 +48,7 @@ export function createApprovals(deps: { bus: EventBus; auditPath?: string }): Ap
 
   const audit = (a: Approval, decision: string, message?: string) => {
     if (!deps.auditPath) return;
-    const record = { at: new Date().toISOString(), approvalId: a.id, agentId: a.agentId, agentName: a.agentName, tool: a.tool, summary: a.summary, decision, ...(message ? { message } : {}) };
+    const record = { at: new Date().toISOString(), approvalId: a.id, agentId: a.agentId, agentName: a.agentName, tool: a.tool, summary: a.summary, input: auditInput(a.input), decision, ...(message ? { message } : {}) };
     try {
       fs.appendFileSync(deps.auditPath, JSON.stringify(record) + "\n");
     } catch (err) {

@@ -61,11 +61,14 @@ export async function openJournal(file: string, opts: { maxBytes?: number } = {}
     if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
   }
 
+  // Entries stay in memory (bounded by maxBytes), so a read never re-parses the file.
+  const entries: AgentEvent[] = existing.slice().sort((a, b) => a.seq - b.seq);
   let chain: Promise<unknown> = Promise.resolve();
   const write = async (entry: AgentEvent): Promise<void> => {
     const line = JSON.stringify(entry) + "\n";
     await fs.appendFile(file, line);
     bytes += Buffer.byteLength(line);
+    entries.push(entry);
   };
 
   const append = (body: AgentEventBody): Promise<AgentEvent> => {
@@ -96,8 +99,14 @@ export async function openJournal(file: string, opts: { maxBytes?: number } = {}
     append,
     async read(after, limit) {
       await chain;
-      const all = await readEntries(file);
-      return all.filter((e) => e.seq > after).slice(0, Math.max(0, limit));
+      let lo = 0;
+      let hi = entries.length;
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (entries[mid].seq > after) hi = mid;
+        else lo = mid + 1;
+      }
+      return entries.slice(lo, lo + Math.max(0, limit));
     },
     lastSeq: () => seq,
   };

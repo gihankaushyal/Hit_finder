@@ -40,6 +40,13 @@ describe("Approvals", () => {
     expect(code.textContent).toHaveLength(long.length);
   });
 
+  it("warns when a command has many lines, so nothing hides below the scroll", async () => {
+    const many = Array.from({ length: 30 }, (_, i) => `echo ${i}`).join("\n");
+    mockApi({ "GET /api/approvals": { body: { approvals: [card("a1", { input: { command: many } })] } } });
+    render(<Approvals />);
+    expect(await screen.findByText("This command has 30 lines; scroll the box to read all of it.")).toBeInTheDocument();
+  });
+
   it("renders model-supplied text as text, never as HTML", async () => {
     const hostile = '<img src=x onerror="alert(1)"><script>alert(2)</script>';
     mockApi({ "GET /api/approvals": { body: { approvals: [card("a1", { input: { command: hostile }, agentName: "<b>x</b>" })] } } });

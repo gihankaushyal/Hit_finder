@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import { spawn } from "node:child_process";
 import { query, type CanUseTool, type Options, type SpawnOptions } from "@anthropic-ai/claude-agent-sdk";
-import { bwrapArgs, guardedGitPaths } from "./bwrap";
+import { bwrapArgs, claudeDirGuards, guardedGitPaths } from "./bwrap";
 import type { AgentDriver, DriverItem, Session, SessionStart } from "./driver";
 import { normalise } from "./normalise";
 
@@ -24,7 +24,7 @@ function spawner(s: SessionStart, onStderr: (chunk: string) => void) {
     let command = o.command;
     let args = o.args;
     if (c) {
-      const guarded = c.gitDir && c.ownBranch ? [...guardedGitPaths(c.gitDir, c.ownBranch), ...c.guarded] : c.guarded;
+      const guarded = [...(c.gitDir && c.ownBranch ? guardedGitPaths(c.gitDir, c.ownBranch) : []), ...claudeDirGuards(c.home), ...c.guarded];
       args = bwrapArgs({ ...c, guarded, maskDirs: c.maskDirs.filter((d) => fs.existsSync(d)), cwd: o.cwd ?? c.worktree, command: o.command, args: o.args });
       command = "bwrap";
     }

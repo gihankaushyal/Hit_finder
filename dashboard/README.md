@@ -166,6 +166,13 @@ Limits and caveats:
 - An agent can read `~/.ssh`, `~/.config/gh` and `~/.claude` credentials inside the sandbox (an approved push needs them), so the policy
   allows no generic readers (`cat`, `curl`, `python -c`, `env`) without a card, and denies reading those paths with the file tools.
   Treat an approved command as running with your login.
+- Allowed commands such as `npm test` and `python -m pytest` run code the agent wrote, and that code has the
+  same network access and the same readable credentials as the agent. The approval rules gate the commands an
+  agent types, not what a test script it edited does. Review the diff before trusting a worktree.
+- The sandbox hides `dashboard/.state` (the access token) and `.secrets`, and keeps `~/.claude` settings, hooks,
+  skills and plugins read-only. The repository's `.git` stays writable so commits work; refs of other branches
+  are made read-only at session start, but a worker could still create a new loose ref, so treat the
+  repository metadata as the agent's to touch.
 - The SDK's own sandbox stalls on this node's NFS home, which is why bubblewrap is used directly.
 - `DASH_AGENT_DRIVER=fake` plays scripted sessions for tests; the browser tests refuse to start with anything else.
 - Pinned versions that were tested together: `@anthropic-ai/claude-agent-sdk` 0.3.304 with `claude` 2.1.292.

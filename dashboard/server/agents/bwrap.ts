@@ -59,10 +59,21 @@ function listFiles(dir: string): string[] {
  * ref redirection), plus every branch and tag ref except its own branch. Only paths that exist are returned.
  */
 export function guardedGitPaths(gitDir: string, ownBranch: string): string[] {
-  const fixed = ["hooks", "config", "HEAD", "info", "packed-refs"].map((n) => path.join(gitDir, n)).filter((p) => fs.existsSync(p));
+  const fixed = ["hooks", "config", "HEAD", "info", "packed-refs", "index", "ORIG_HEAD", "refs/remotes"].map((n) => path.join(gitDir, n)).filter((p) => fs.existsSync(p));
   const own = path.join(gitDir, "refs", "heads", ownBranch);
   const refs = ["heads", "tags"].flatMap((k) => listFiles(path.join(gitDir, "refs", k))).filter((p) => p !== own);
   return [...fixed, ...refs];
+}
+
+const CLAUDE_GUARDED = ["settings.json", "settings.local.json", "CLAUDE.md", "hooks", "skills", "plugins", "commands", "agents", "output-styles"];
+
+/**
+ * Parts of `~/.claude` that change what the user's own interactive Claude sessions do (settings, hooks,
+ * skills, plugins, instructions). They stay read-only inside the sandbox even though the directory is writable
+ * for session files, so a worker cannot plant a hook that later runs unsandboxed.
+ */
+export function claudeDirGuards(home: string): string[] {
+  return CLAUDE_GUARDED.map((n) => path.join(home, ".claude", n)).filter((p) => fs.existsSync(p));
 }
 
 export function bwrapAvailable(): boolean {

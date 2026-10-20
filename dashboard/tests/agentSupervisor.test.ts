@@ -140,6 +140,83 @@ describe("spawn", () => {
   });
 });
 
+describe("hardening", () => {
+  const rebuild = async (driver: AgentDriver, env: Record<string, string> = {}, extra: Parameters<typeof createSupervisor>[0] extends infer D ? Partial<D> : never = {}) => {
+    await sup.stopAll(500);
+    sup = build(env, driver);
+    if (Object.keys(extra).length) {
+      sup = createSupervisor({ cfg, bus, driver, approvals, worktrees: createWorktrees({ repoRoot: repo, agentsDir: cfg.agentsDir, base: cfg.agentBase }), env: { PATH: process.env.PATH ?? "" }, notifyMs: 5, ...extra });
+    }
+    await sup.init();
+  };
+
+  it("hides the dashboard state directory (bearer token) and .secrets from the agent", async () => {
+    let seen: SessionStart | undefined;
+    await rebuild({ start: (st: SessionStart) => ((seen = st), createFakeDriver({ stepMs: 0 }).start(st)) });
+    await sup.spawn({ name: "mask-one", task: "t" });
+    expect(seen?.confinement?.maskDirs).toEqual(expect.arrayContaining([cfg.stateDir, path.join(repo, ".secrets")]));
+  });
+
+  it("never lets parallel spawns exceed the cap", async () => {
+    await rebuild(createFakeDriver({ stepMs: 0 }), { DASH_AGENT_MAX: "3" });
+    const names = ["par-a1", "par-b2", "par-c3", "par-d4", "par-e5"];
+    const out = await Promise.allSettled(names.map((n) => sup.spawn({ name: n, task: "t" })));
+    expect(out.filter((o) => o.status === "fulfilled")).toHaveLength(3);
+    expect(out.filter((o) => o.status === "rejected").every((o) => (o as PromiseRejectedResult).reason.code === "cap")).toBe(true);
+    expect(sup.list()).toHaveLength(3);
+  });
+
+  it("rolls back a spawn whose session cannot start, freeing the name, the slot and the worktree", async () => {
+    let first = true;
+    const flaky: AgentDriver = { start: (st) => { if (first) { first = false; throw new Error("cannot start"); } return createFakeDriver({ stepMs: 0 }).start(st); } };
+    await rebuild(flaky, { DASH_AGENT_MAX: "1" });
+    await expect(sup.spawn({ name: "flaky-one", task: "t" })).rejects.toThrow();
+    expect(sup.list()).toEqual([]);
+    expect(fs.existsSync(path.join(cfg.agentsDir, "flaky-one"))).toBe(false);
+    await expect(sup.spawn({ name: "flaky-one", task: "t" })).resolves.toMatchObject({ name: "flaky-one" });
+  });
+
+  it("a resume right after a stop leaves the new session usable and its state intact", async () => {
+    const a = await sup.spawn({ name: "quick-one", task: "push the branch" });
+    await waitState(a.id, "waiting-approval");
+    const stopping = sup.stop(a.id);
+    await sup.resume(a.id).catch(() => undefined);
+    await stopping;
+    await waitState(a.id, "idle");
+    await new Promise((r) => setTimeout(r, 100));
+    expect(stateOf(a.id)).toBe("idle");
+    await expect(sup.message(a.id, "still there?")).resolves.toBeUndefined();
+  });
+
+  it("does not hang when the session ignores interrupt, and still closes it", async () => {
+    let closed = false;
+    const wedged: AgentDriver = {
+      start: () => ({ events: (async function* () { await new Promise(() => {}); })(), send() {}, interrupt: () => new Promise(() => {}), close() { closed = true; } }),
+    };
+    await rebuild(wedged, {}, { interruptWaitMs: 30 });
+    const a = await sup.spawn({ name: "wedged-one", task: "t" });
+    await sup.stop(a.id);
+    expect(closed).toBe(true);
+    expect(stateOf(a.id)).toBe("stopped");
+  });
+
+  it("closes the session of an agent that failed", async () => {
+    let closed = false;
+    const broken: AgentDriver = { start: () => ({ events: (async function* () { throw new Error("boom"); })(), send() {}, interrupt: async () => {}, close() { closed = true; } }) };
+    await rebuild(broken);
+    const a = await sup.spawn({ name: "broken-one", task: "t" });
+    await waitState(a.id, "failed");
+    expect(closed).toBe(true);
+  });
+
+  it("a message racing a stop is refused cleanly, never a TypeError", async () => {
+    const a = await sup.spawn({ name: "race-one", task: "t" });
+    await waitState(a.id, "idle");
+    const out = await Promise.allSettled([sup.message(a.id, "x"), sup.stop(a.id)]);
+    for (const o of out) if (o.status === "rejected") expect(o.reason).toBeInstanceOf(AgentError);
+  });
+});
+
 describe("approvals", () => {
   it("waits for a decision on a gated tool, then continues", async () => {
     const a = await sup.spawn({ name: "pusher", task: "push the branch" });

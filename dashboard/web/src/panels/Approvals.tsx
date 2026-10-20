@@ -6,12 +6,22 @@ import { relTime } from "../lib/time";
 import { AGENTS_REFRESH_MS, useResource } from "../lib/useResource";
 import type { Approval, ApprovalDecision, ApprovalsResponse } from "../../../shared/types";
 
+/** More lines than this get a notice, because the box scrolls and the rest would be easy to miss. */
+const LONG_COMMAND_LINES = 8;
 const FILE_TOOLS = new Set(["Edit", "Write", "NotebookEdit", "MultiEdit"]);
 
 /** What the agent actually asked for, as text. Never HTML: the content is model-supplied. */
 function Request({ a }: { a: Approval }) {
   const input = a.input;
-  if (a.tool === "Bash" && typeof input.command === "string") return <pre className="mono approval__code">{input.command}</pre>;
+  if (a.tool === "Bash" && typeof input.command === "string") {
+    const lines = input.command.split("\n").length;
+    return (
+      <>
+        <pre className="mono approval__code">{input.command}</pre>
+        {lines > LONG_COMMAND_LINES && <p className="approval__meta">This command has {lines} lines; scroll the box to read all of it.</p>}
+      </>
+    );
+  }
   if (FILE_TOOLS.has(a.tool) && typeof input.file_path === "string") {
     const { file_path, ...rest } = input;
     return (
