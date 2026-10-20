@@ -223,6 +223,7 @@ export function createSupervisor(deps: SupervisorDeps): Supervisor {
       }
       if (r.loop) await Promise.race([r.loop, new Promise((res) => setTimeout(res, STOP_WAIT_MS))]);
       if (r.session === s) r.session = null;
+      await writes.get(r); // the final state must be on disk before stop reports done
     };
     r.stopP = run().finally(() => {
       r.stopP = null;

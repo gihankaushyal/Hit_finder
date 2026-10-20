@@ -327,6 +327,15 @@ describe("shutdown and restart", () => {
     expect(approvals.count()).toBe(0);
   });
 
+  it("has written the stopped state to disk by the time stopAll returns", async () => {
+    const a = await sup.spawn({ name: "durable-one", task: "t" });
+    await waitState(a.id, "idle");
+    await sup.stopAll(1000);
+    const meta = JSON.parse(fs.readFileSync(path.join(cfg.stateDir, "agents", a.id, "meta.json"), "utf8"));
+    expect(meta.state).toBe("stopped");
+    expect(meta.sessionId).toMatch(/^fake-/);
+  });
+
   it("reloads agents after a restart as stopped and can resume them", async () => {
     const a = await sup.spawn({ name: "keeper", task: "t" });
     await waitState(a.id, "idle");
