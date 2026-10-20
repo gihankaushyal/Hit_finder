@@ -118,8 +118,8 @@ Unknown, No results, Pretrain checkpoints, Complete). Missing values always sort
 run name. The chosen order survives the 60 s refresh and is announced to screen readers.
 
 The table shows when each run's files last changed (the newest of `best.pt`, `last.pt`, the
-newest epoch snapshot and the result files), runs are ordered by name with generation numbers
-sorted numerically, and the table scrolls inside its panel. The name patterns are copies of
+newest epoch snapshot and the result files), runs start ordered by name (numbers in names compare numerically, so `-v2` comes before `-v10`),
+and the table scrolls inside its panel. The name patterns are copies of
 `src/training/run_naming.py`; `tests/runNamingDrift.test.ts` reads that file as text and fails if
 its own examples stop classifying (it is skipped on a checkout without `src/`).
 

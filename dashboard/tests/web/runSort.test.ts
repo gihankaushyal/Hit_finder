@@ -73,6 +73,12 @@ describe("sortRuns", () => {
     expect(names(sortRuns(rs, "crossAp", "asc"))).toEqual(["a", "b", "c"]);
   });
 
+  it("the order is the same whatever order the rows arrive in, even for names that differ only by case or leading zeros", () => {
+    const x = [row("Run-A"), row("run-a"), row("r-v02-fold1"), row("r-v2-fold1")];
+    const y = [...x].reverse();
+    for (const key of SORT_KEYS) for (const dir of ["asc", "desc"] as const) expect(names(sortRuns(x, key, dir))).toEqual(names(sortRuns(y, key, dir)));
+  });
+
   it("does not change the order of its input", () => {
     const rs = [withCross("a", 0.1), withCross("b", 0.9)];
     sortRuns(rs, "crossAp", "desc");

@@ -1,4 +1,4 @@
-import { useId, useState, type KeyboardEvent } from "react";
+import { useId, useMemo, useState, type KeyboardEvent } from "react";
 import { CaretDown, CaretRight, CaretUp, CaretUpDown } from "@phosphor-icons/react";
 import { PanelFrame } from "../components/PanelFrame";
 import { StatusWord, type StatusKind } from "../components/StatusWord";
@@ -206,10 +206,9 @@ export function Runs() {
   const [announcement, setAnnouncement] = useState("");
   const kindId = useId();
   const data = res.data;
-  const shown = sortRuns(
-    (data?.runs ?? []).filter((r) => (kind === "all" || r.kind === kind) && (showOld || (r.kind !== "legacy" && !r.archivedV1))),
-    sort.key,
-    sort.dir,
+  const shown = useMemo(
+    () => sortRuns((data?.runs ?? []).filter((r) => (kind === "all" || r.kind === kind) && (showOld || (r.kind !== "legacy" && !r.archivedV1))), sort.key, sort.dir),
+    [data, kind, showOld, sort],
   );
   const onSort = (k: SortKey) => {
     const next: SortState = sort.key === k ? { key: k, dir: sort.dir === "asc" ? "desc" : "asc" } : { key: k, dir: defaultDirection(k) };
