@@ -104,3 +104,13 @@ export function createWorktrees(cfg: { repoRoot: string; agentsDir: string; base
     },
   };
 }
+
+/** The path of `origin` when it is a bare repository on local disk (an approved push may write there), else undefined. */
+export async function localRemotePath(repoRoot: string): Promise<string | undefined> {
+  try {
+    const url = await git(repoRoot, ["config", "--get", "remote.origin.url"]);
+    return path.isAbsolute(url) && (await exists(url)) ? await fs.realpath(url) : undefined;
+  } catch {
+    return undefined;
+  }
+}

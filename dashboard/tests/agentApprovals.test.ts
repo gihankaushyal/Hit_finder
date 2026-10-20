@@ -85,6 +85,16 @@ describe("request and decide", () => {
   });
 });
 
+describe("onCreated", () => {
+  it("reports the new approval before anything is decided", async () => {
+    let seen: string | undefined;
+    const p = ap.request(agent, "Bash", { command: "x" }, { onCreated: (a) => (seen = a.id) });
+    expect(seen).toBe(ap.pending()[0].id);
+    ap.decide(seen as string, "allow");
+    await p;
+  });
+});
+
 describe("cancellation", () => {
   it("cancels every pending request of one agent as a denial", async () => {
     const a = ap.request(agent, "Bash", { command: "x" });

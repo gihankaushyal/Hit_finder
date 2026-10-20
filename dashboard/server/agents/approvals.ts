@@ -14,7 +14,7 @@ export interface ApprovalOutcome {
 
 export interface Approvals {
   /** Resolves when a human decides. There is no timeout: nothing is ever decided on its own. */
-  request(agent: { id: string; name: string }, tool: string, input: Record<string, unknown>, opts?: { reason?: string; signal?: AbortSignal }): Promise<ApprovalOutcome>;
+  request(agent: { id: string; name: string }, tool: string, input: Record<string, unknown>, opts?: { reason?: string; signal?: AbortSignal; onCreated?: (a: Approval) => void }): Promise<ApprovalOutcome>;
   /** Single use: an unknown, decided or cancelled id throws. */
   decide(id: string, decision: ApprovalDecision, message?: string): void;
   cancelAgent(agentId: string): void;
@@ -79,6 +79,7 @@ export function createApprovals(deps: { bus: EventBus; auditPath?: string }): Ap
         const onAbort = () => void cancelled(approval.id);
         opts.signal?.addEventListener("abort", onAbort, { once: true });
         entries.set(approval.id, { approval, settle: resolve, detach: () => opts.signal?.removeEventListener("abort", onAbort) });
+        opts.onCreated?.(approval);
         invalidate();
       });
     },
