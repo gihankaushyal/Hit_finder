@@ -35,6 +35,44 @@ def inference_result_path(ckpt_dir: str | Path) -> Path:
     return ckpt_dir / INFERENCE_RESULTS_NAME if primary.exists() else primary
 
 
+def _epoch(value) -> int | None:
+    """An epoch number as a plain int, or None when it is missing, boolean, fractional or not finite."""
+    if isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return int(number) if math.isfinite(number) and number == int(number) else None
+
+
+def training_block(
+    *,
+    configured_epochs,
+    last_epoch,
+    best_epoch,
+    early_stopped: bool,
+) -> dict:
+    """How far a training run got, recorded in results.json.
+
+    ``last_epoch`` is the last epoch completed (1-based, as the training loop counts);
+    ``best_epoch`` is the epoch saved in best.pt. The dashboard's Epochs column reads it,
+    because nothing else in a run directory says how long the run trained.
+    """
+    last = _epoch(last_epoch)
+    best = _epoch(best_epoch)
+    # The fallback checkpoint (no val-F1 improvement ever) is stamped with the configured
+    # epochs, which can lie beyond where the run stopped: that is not a best epoch.
+    if best is not None and last is not None and best > last:
+        best = None
+    return {
+        "configured_epochs": _epoch(configured_epochs),
+        "last_epoch": last,
+        "best_epoch": best,
+        "early_stopped": bool(early_stopped),
+    }
+
+
 def inference_block(
     *,
     aggregation: str,

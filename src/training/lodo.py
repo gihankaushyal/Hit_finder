@@ -36,6 +36,7 @@ from src.training.inference_results import (
     inference_block,
     inference_result_path,
     summary_updates,
+    training_block,
     wandb_enabled,
 )
 from src.training.train_supervised import _set_seeds, train_one_epoch
@@ -151,7 +152,8 @@ def _train_fold(
       Backbone/num_classes checkpoint validation is skipped for custom builders.
     `run_name_prefix`: overrides the default `{backbone}-asymmetric` prefix in
       the wandb run name and checkpoint directory.
-    `extra_results`: extra keys merged into the per-fold results.json.
+    `extra_results`: extra keys merged into the per-fold results.json. The key
+      `training` is reserved for the training loop (see `training_block`).
     `frame_cache`: optional two-tier FrameCache. When supplied, its manifest is
       verified against `cfg` before any training starts, and it is forwarded to
       the training loader and to every run_patch_agg call.
@@ -161,6 +163,11 @@ def _train_fold(
       entries under `inference/`; the result goes to results.json if the run
       has none, else to results.inference.json (see inference_results.py).
     """
+    if extra_results and "training" in extra_results:
+        raise ValueError(
+            "extra_results may not set 'training': that key is written by the training loop"
+        )
+
     import wandb
 
     verify_cache_or_raise(frame_cache, cfg)
@@ -204,6 +211,9 @@ def _train_fold(
                 "(the entry points gate this before calling _train_fold)."
             )
     resume_training_from_ckpt = ckpt_path.exists() and resume_training
+    # Recorded in results.json (training_block); stay None/False when nothing trains here.
+    last_epoch: int | None = None
+    early_stopped = False
 
     train_dl = None
     if not inference_only:
@@ -330,6 +340,7 @@ def _train_fold(
                     "Nothing left to train — proceeding to evaluation."
                 )
 
+        last_epoch = start_epoch - 1
         for epoch in range(start_epoch, epochs + 1):
             train_dl.dataset.set_epoch(epoch)
             train_m = train_one_epoch(model, train_dl, optimizer, criterion, device)
@@ -345,6 +356,7 @@ def _train_fold(
                 frame_cache=frame_cache,
             )
 
+            last_epoch = epoch
             print(
                 f"  Epoch {epoch:3d}/{epochs}  "
                 f"train_loss={train_m['loss']:.4f}  "
@@ -383,6 +395,7 @@ def _train_fold(
             else:
                 epochs_no_improve += 1
                 if epochs_no_improve >= patience:
+                    early_stopped = True
                     print(
                         f"  Early stopping at epoch {epoch} (no improvement for {patience} epochs)"
                     )
@@ -525,6 +538,12 @@ def _train_fold(
         )
     else:
         results_path = ckpt_dir / RESULTS_NAME
+        result["training"] = training_block(
+            configured_epochs=epochs,
+            last_epoch=last_epoch,
+            best_epoch=ckpt.get("epoch"),
+            early_stopped=early_stopped,
+        )
     with open(results_path, "w") as f:
         json.dump(result, f, indent=2)
     print(f"  Results saved → {results_path}")
