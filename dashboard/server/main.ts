@@ -2,6 +2,8 @@ import type { Server } from "node:http";
 import { serve } from "@hono/node-server";
 import path from "node:path";
 import { createApprovals } from "./agents/approvals";
+import { createChief } from "./agents/chief";
+import { createChiefTools } from "./agents/chiefTools";
 import { createFakeDriver } from "./agents/fakeDriver";
 import { sweepOrphans } from "./agents/orphans";
 import { createSdkDriver } from "./agents/sdkDriver";
@@ -66,13 +68,21 @@ const agents = createSupervisor({
   env: process.env,
   sweep: async () => void (await sweepOrphans(config.agentsDir)),
 });
-const app = buildServer({ config, token, bus, gh, tests, kanban, runner: execRunner, runs, agents, approvals });
+const chief = createChief({
+  cfg: config,
+  bus,
+  driver: config.agentDriver === "fake" ? createFakeDriver({ stepMs: 150 }) : createSdkDriver(),
+  approvals,
+  tools: createChiefTools({ supervisor: agents, kanban }),
+  env: process.env,
+});
+const app = buildServer({ config, token, bus, gh, tests, kanban, runner: execRunner, runs, agents, approvals, chief });
 
 if (!isImportCompleted(config)) {
   console.log("Kanban sync is off until you run the first import: npm run kanban:sync -- --dry-run, then -- --yes");
 }
 const triggers = startKanbanTriggers(kanban, config.kanbanPath);
-const agentsReady = agents.init().catch((err) => console.error("agent supervisor failed to start:", err instanceof Error ? err.message : err));
+const agentsReady = Promise.all([agents.init(), chief.init()]).catch((err) => console.error("agent supervisor failed to start:", err instanceof Error ? err.message : err));
 
 const server = serve({ fetch: app.fetch, hostname: config.host, port: config.port }, () => {
   console.log(`http://${config.host}:${config.port}/?token=${token}`);
@@ -81,7 +91,7 @@ const server = serve({ fetch: app.fetch, hostname: config.host, port: config.por
 server.on("error", (err: NodeJS.ErrnoException) => {
   void triggers.close();
   const message = err.code === "EADDRINUSE" ? `dashboard: port ${config.port} is already in use` : `dashboard: could not start the server (${err.code ?? "error"})`;
-  void Promise.all([stopTests(), agentsReady.then(() => agents.stopAll(STOP_AGENTS_TIMEOUT_MS))]).finally(() => fail(message));
+  void Promise.all([stopTests(), agentsReady.then(() => Promise.all([chief.stop(), agents.stopAll(STOP_AGENTS_TIMEOUT_MS)]))]).finally(() => fail(message));
 });
 
 let shuttingDown = false;
@@ -91,7 +101,7 @@ function shutdown(): void {
   const force = setTimeout(() => process.exit(0), STOP_TESTS_TIMEOUT_MS + STOP_AGENTS_TIMEOUT_MS + SHUTDOWN_GRACE_MS);
   force.unref();
   // Exit only after pytest's process group is gone, or the bound above elapses.
-  const testsStopped = Promise.all([stopTests(), agentsReady.then(() => agents.stopAll(STOP_AGENTS_TIMEOUT_MS))]);
+  const testsStopped = Promise.all([stopTests(), agentsReady.then(() => Promise.all([chief.stop(), agents.stopAll(STOP_AGENTS_TIMEOUT_MS)]))]);
   void triggers.close().finally(() => {
     server.close(() => void testsStopped.finally(() => process.exit(0)));
     server.closeAllConnections?.();

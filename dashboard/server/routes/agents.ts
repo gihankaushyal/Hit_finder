@@ -1,32 +1,16 @@
-import type { Context, Hono } from "hono";
-import { bodyLimit } from "hono/body-limit";
+import type { Hono } from "hono";
 import type { AgentsResponse } from "../../shared/types";
-import { AgentError, type AgentErrorCode, type Supervisor } from "../agents/supervisor";
+import { AgentError, type Supervisor } from "../agents/supervisor";
 import type { Approvals } from "../agents/approvals";
 import type { Config } from "../config";
-import { respondWithError } from "../lib/routeErrors";
+import { badRequest, eventsQuery, failAgent, jsonLimit, readObject } from "../lib/http";
 
-const REQUEST_MAX_BYTES = 64 * 1024;
-const EVENTS_DEFAULT_LIMIT = 200;
-const EVENTS_MAX_LIMIT = 500;
 const DECISION_MESSAGE_MAX_CHARS = 500;
-const WHOLE_NUMBER = /^\d{1,12}$/;
-
-const STATUS: Record<AgentErrorCode, 400 | 404 | 409> = { invalid: 400, "not-found": 404, cap: 409, exists: 409, state: 409 };
-
-async function readObject(c: Context): Promise<Record<string, unknown> | null> {
-  try {
-    const v: unknown = await c.req.json();
-    return typeof v === "object" && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
-  } catch {
-    return null;
-  }
-}
 
 export function agentRoutes(api: Hono, d: { agents: Supervisor; approvals: Approvals; config: Config }): void {
-  const limit = bodyLimit({ maxSize: REQUEST_MAX_BYTES, onError: (c) => c.json({ error: "request body must be at most 64 KB" }, 400) });
-  const fail = (c: Context, err: unknown) => (err instanceof AgentError ? c.json({ error: err.message }, STATUS[err.code]) : respondWithError(c, err));
-  const bad = (c: Context, message: string) => c.json({ error: message }, 400);
+  const limit = jsonLimit();
+  const fail = failAgent;
+  const bad = badRequest;
 
   api.get("/agents", (c) => {
     const body: AgentsResponse = { agents: d.agents.list(), max: d.config.agentMax, driver: d.config.agentDriver };
@@ -79,13 +63,10 @@ export function agentRoutes(api: Hono, d: { agents: Supervisor; approvals: Appro
   });
 
   api.get("/agents/:id/events", async (c) => {
-    const afterRaw = c.req.query("after") ?? "0";
-    const limitRaw = c.req.query("limit") ?? String(EVENTS_DEFAULT_LIMIT);
-    if (!WHOLE_NUMBER.test(afterRaw)) return bad(c, "after must be a whole number");
-    const n = Number(limitRaw);
-    if (!WHOLE_NUMBER.test(limitRaw) || n < 1 || n > EVENTS_MAX_LIMIT) return bad(c, `limit must be 1 to ${EVENTS_MAX_LIMIT}`);
+    const q = eventsQuery(c);
+    if (q instanceof Response) return q;
     try {
-      return c.json(await d.agents.events(c.req.param("id"), Number(afterRaw), n));
+      return c.json(await d.agents.events(c.req.param("id"), q.after, q.limit));
     } catch (err) {
       return fail(c, err);
     }

@@ -6,10 +6,12 @@ import type { Gh } from "./lib/gh";
 import type { KanbanService } from "./lib/kanbanService";
 import type { RunScanner } from "./lib/runScan";
 import type { Approvals } from "./agents/approvals";
+import type { Chief } from "./agents/chief";
 import type { Supervisor } from "./agents/supervisor";
 import type { Runner } from "./runner";
 import type { TestRunner } from "./lib/testRunner";
 import { agentRoutes } from "./routes/agents";
+import { chiefRoutes } from "./routes/chief";
 import { ciRoutes } from "./routes/ci";
 import { eventRoutes } from "./routes/events";
 import { issueRoutes } from "./routes/issues";
@@ -30,6 +32,7 @@ export interface ServerDeps {
   runs: RunScanner;
   agents: Supervisor;
   approvals: Approvals;
+  chief: Chief;
 }
 
 /** Builds the app with every route module mounted behind token auth (no listening, no side effects). */
@@ -48,6 +51,7 @@ export function buildServer(d: ServerDeps): Hono {
       runRoutes(api, { scanner: d.runs });
       repoRoutes(api, { runner: d.runner, repoRoot: d.config.repoRoot });
       agentRoutes(api, { agents: d.agents, approvals: d.approvals, config: d.config });
+      chiefRoutes(api, { chief: d.chief });
     },
   });
 }
