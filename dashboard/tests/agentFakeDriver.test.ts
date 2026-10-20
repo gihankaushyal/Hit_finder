@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { createFakeDriver, type Step } from "../server/agents/fakeDriver";
+import { createFakeDriver, chiefScripts, type Step } from "../server/agents/fakeDriver";
 import type { DriverItem, SessionStart } from "../server/agents/driver";
 import { loadConfig } from "../server/config";
 import { workerOptions } from "../server/agents/policy";
@@ -146,5 +146,20 @@ describe("fake driver", () => {
     const kinds = bodies(await take(s.events[Symbol.asyncIterator](), isResult)).map((b) => b.kind);
     expect(kinds).toContain("tool-use");
     s.close();
+  });
+});
+
+describe("chiefScripts", () => {
+  it("turns 'spawn <name>' into a say step and a spawn_worker tool call", () => {
+    const [steps] = chiefScripts("The owner says:\nplease spawn docs-one now", 0);
+    expect(steps).toEqual([{ say: "Starting docs-one." }, { mcp: "spawn_worker", input: { name: "docs-one", task: "Scripted task from the chief of staff." } }]);
+  });
+  it("lists workers on request and otherwise just answers", () => {
+    expect(chiefScripts("what workers are running? list", 0)[0]).toEqual([{ mcp: "list_workers", input: {} }]);
+    expect(chiefScripts("hello", 0)[0]).toEqual([{ say: "Received: hello" }]);
+  });
+  it("ignores role text before the owner's message", () => {
+    const text = "You are the chief ... spawn_worker ... spawn x\n\nThe owner says:\nhello";
+    expect(chiefScripts(text, 0)[0]).toEqual([{ say: "Received: hello" }]);
   });
 });

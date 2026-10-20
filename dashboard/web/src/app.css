@@ -298,3 +298,10 @@ button, a, select, input[type="checkbox"] { touch-action: manipulation; }
 .alog__out { margin: 0 0 var(--s1); padding-left: var(--s2); border-left: 2px solid var(--rule); color: var(--text-dim); font-size: 0.8rem; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 8em; overflow: auto; }
 .alog__out--err { border-left-color: var(--fail); }
 .alog__err { color: var(--fail); }
+
+/* Chief of staff chat */
+.chat { max-height: 26em; min-height: 8em; }
+.chat__row { margin: 0 0 var(--s2); overflow-wrap: anywhere; white-space: pre-wrap; }
+.chat__row--user { border-left: 2px solid var(--rule); padding-left: var(--s2); }
+.chat__tool { margin: 0 0 var(--s2); }
+.chat__chip { display: inline-block; padding: 0 var(--s2); border: 1px solid var(--rule); border-radius: var(--radius); background: var(--surface-2); font-size: 0.8rem; }

@@ -4,7 +4,7 @@ import path from "node:path";
 import { createApprovals } from "./agents/approvals";
 import { createChief } from "./agents/chief";
 import { createChiefTools } from "./agents/chiefTools";
-import { createFakeDriver } from "./agents/fakeDriver";
+import { chiefScripts, createFakeDriver } from "./agents/fakeDriver";
 import { sweepOrphans } from "./agents/orphans";
 import { createSdkDriver } from "./agents/sdkDriver";
 import { createSupervisor } from "./agents/supervisor";
@@ -71,7 +71,7 @@ const agents = createSupervisor({
 const chief = createChief({
   cfg: config,
   bus,
-  driver: config.agentDriver === "fake" ? createFakeDriver({ stepMs: 150 }) : createSdkDriver(),
+  driver: config.agentDriver === "fake" ? createFakeDriver({ stepMs: 150, scripts: chiefScripts }) : createSdkDriver(),
   approvals,
   tools: createChiefTools({ supervisor: agents, kanban }),
   env: process.env,

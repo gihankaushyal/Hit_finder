@@ -478,3 +478,90 @@ test.describe("agents and approvals", () => {
     });
   }
 });
+
+test.describe("chief of staff", () => {
+  const dashboard = withDashboard();
+  const chief = (page: Page) => panel(page, "Chief of staff");
+  const approvals = (page: Page) => panel(page, "Approvals");
+  const agents = (page: Page) => panel(page, "Agents");
+  const say = async (page: Page, text: string) => {
+    await chief(page).getByLabel("Message to the chief of staff").fill(text);
+    await chief(page).getByRole("button", { name: "Send" }).click();
+  };
+
+  test("a chat instruction becomes a worker only after the card is approved", async ({ page }) => {
+    const dash = dashboard();
+    await open(page, dash);
+    await expect(chief(page).getByText(/Ask the chief of staff/)).toBeVisible();
+    await say(page, "please spawn chat-made");
+    const card = approvals(page).getByRole("article", { name: /Chief of staff/ });
+    await expect(card).toBeVisible();
+    await expect(card.getByText("mcp__dashboard__spawn_worker")).toBeVisible();
+    await expect(card.getByText(/"name": "chat-made"/)).toBeVisible();
+    await expect(chief(page).getByText("Waiting for approval")).toBeVisible();
+    await expect(agents(page).getByText(/No agents yet/)).toBeVisible();
+    await card.getByRole("button", { name: "Approve" }).click();
+    await expect(agents(page).getByRole("button", { name: /chat-made/ })).toBeVisible();
+    const log = chief(page).getByRole("log", { name: "Conversation with the chief of staff" });
+    await expect(log).toContainText("Starting chat-made.");
+    await expect(log).toContainText("Started worker chat-made on branch phase-05-agent-chat-made.");
+    await expect(chief(page).getByText("Idle")).toBeVisible();
+    await page.request.post(`${dash.baseUrl}/api/agents/chat-made/stop`, { data: {} });
+  });
+
+  test("denying leaves no worker and the chief carries on", async ({ page }) => {
+    const dash = dashboard();
+    await open(page, dash);
+    await say(page, "please spawn never-made");
+    await approvals(page).getByRole("button", { name: "Deny" }).click();
+    await expect(chief(page).getByText("Idle")).toBeVisible();
+    await expect(chief(page).getByRole("log")).toContainText("You denied it.");
+    await expect(agents(page).getByRole("button", { name: /never-made/ })).toHaveCount(0);
+  });
+
+  test("the conversation survives a reload, and a new conversation clears the session", async ({ page }) => {
+    const dash = dashboard();
+    await open(page, dash);
+    await say(page, "hello chief");
+    await expect(chief(page).getByRole("log")).toContainText("Received: hello chief");
+    await page.reload();
+    await expect(chief(page).getByRole("log")).toContainText("Received: hello chief");
+    await chief(page).getByRole("button", { name: "New conversation" }).click();
+    await chief(page).getByRole("button", { name: "Yes, start over" }).click();
+    await expect(chief(page).getByRole("button", { name: "New conversation" })).toBeDisabled();
+  });
+
+  test("stopping cancels the pending card", async ({ page }) => {
+    const dash = dashboard();
+    await open(page, dash);
+    await say(page, "please spawn stopped-chat");
+    await expect(approvals(page).getByRole("article")).toHaveCount(1);
+    await chief(page).getByRole("button", { name: "Stop", exact: true }).click();
+    await expect(approvals(page).getByText(/Nothing is waiting/)).toBeVisible();
+    await expect(chief(page).getByText("Stopped", { exact: true })).toBeVisible();
+  });
+
+  test("keyboard only: type, send with Ctrl+Enter, approve with Enter", async ({ page }) => {
+    const dash = dashboard();
+    await open(page, dash);
+    await chief(page).getByLabel("Message to the chief of staff").fill("please spawn key-made");
+    await page.keyboard.press("Control+Enter");
+    const approve = approvals(page).getByRole("button", { name: "Approve" });
+    await approve.focus();
+    await page.keyboard.press("Enter");
+    await expect(agents(page).getByRole("button", { name: /key-made/ })).toBeVisible();
+    await page.request.post(`${dash.baseUrl}/api/agents/key-made/stop`, { data: {} });
+  });
+
+  for (const size of [{ width: 1440, height: 900 }, { width: 1024, height: 768 }]) {
+    test(`no horizontal scroll with the chat and a card at ${size.width}x${size.height}`, async ({ page }) => {
+      const dash = dashboard();
+      await page.setViewportSize(size);
+      await open(page, dash);
+      await say(page, `please spawn lay-${size.width}`);
+      await expect(approvals(page).getByRole("article")).toHaveCount(1);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(0);
+      await chief(page).getByRole("button", { name: "Stop", exact: true }).click();
+    });
+  }
+});

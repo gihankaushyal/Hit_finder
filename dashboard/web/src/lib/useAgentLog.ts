@@ -19,6 +19,11 @@ export interface AgentLog {
  * everything from the server; nothing is buffered here that the server does not have.
  */
 export function useAgentLog(id: string, enabled: boolean): AgentLog {
+  return useJournal(`/api/agents/${encodeURIComponent(id)}/events`, "agents", enabled);
+}
+
+/** The same cursor-following read for any journal endpoint, re-reading when `resource` is announced. */
+export function useJournal(basePath: string, resource: string, enabled: boolean): AgentLog {
   const [state, setState] = useState<AgentLog>({ events: [], error: null, loaded: false });
   const cursor = useRef(0);
   const busy = useRef(false);
@@ -34,7 +39,7 @@ export function useAgentLog(id: string, enabled: boolean): AgentLog {
     try {
       for (;;) {
         again.current = false;
-        const res = await apiGet<AgentEventsResponse>(`/api/agents/${encodeURIComponent(id)}/events?after=${cursor.current}&limit=${PAGE}`);
+        const res = await apiGet<AgentEventsResponse>(`${basePath}?after=${cursor.current}&limit=${PAGE}`);
         if (!live.current) return;
         if (res.events.length > 0) {
           cursor.current = res.events[res.events.length - 1].seq;
@@ -49,7 +54,7 @@ export function useAgentLog(id: string, enabled: boolean): AgentLog {
     } finally {
       busy.current = false;
     }
-  }, [id]);
+  }, [basePath]);
 
   useEffect(() => {
     live.current = true;
@@ -57,12 +62,12 @@ export function useAgentLog(id: string, enabled: boolean): AgentLog {
     setState({ events: [], error: null, loaded: false });
     if (!enabled) return;
     void fetchMore();
-    const off = subscribe({ resource: "agents", reload: () => void fetchMore() });
+    const off = subscribe({ resource, reload: () => void fetchMore() });
     return () => {
       live.current = false;
       off();
     };
-  }, [id, enabled, fetchMore]);
+  }, [basePath, resource, enabled, fetchMore]);
 
   return state;
 }

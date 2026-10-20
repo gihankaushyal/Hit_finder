@@ -21,6 +21,17 @@ function defaultScripts(text: string, turn: number): Step[][] {
   return [steps];
 }
 
+/** Scripts for a fake chief of staff (used by the browser tests): "spawn <name>" calls spawn_worker, "list" calls list_workers. */
+export function chiefScripts(text: string): Step[][];
+export function chiefScripts(text: string, turn: number): Step[][];
+export function chiefScripts(text: string): Step[][] {
+  const said = text.split(/\n(?:Task|The owner says):\n/).pop() as string;
+  const spawn = /\bspawn ([a-z0-9][a-z0-9-]{1,30})\b/.exec(said);
+  if (spawn) return [[{ say: `Starting ${spawn[1]}.` }, { mcp: "spawn_worker", input: { name: spawn[1], task: "Scripted task from the chief of staff." } }]];
+  if (/\blist\b/i.test(said)) return [[{ mcp: "list_workers", input: {} }]];
+  return [[{ say: `Received: ${said}` }]];
+}
+
 type Queued = { item: DriverItem } | { error: Error } | { end: true };
 
 class Channel {
