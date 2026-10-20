@@ -1,8 +1,8 @@
-import { GitBranch } from "@phosphor-icons/react";
+import { Bell, GitBranch } from "@phosphor-icons/react";
 import { StatusWord, type StatusKind } from "../components/StatusWord";
 import { ThemeToggle } from "../components/ThemeToggle";
-import { CI_REFRESH_MS, REPO_REFRESH_MS, useResource } from "../lib/useResource";
-import type { CiRun, TestRunState } from "../../../shared/types";
+import { AGENTS_REFRESH_MS, CI_REFRESH_MS, REPO_REFRESH_MS, useResource } from "../lib/useResource";
+import type { ApprovalsResponse, CiRun, TestRunState } from "../../../shared/types";
 
 const REPO_NAME = "Hit_finder";
 
@@ -32,6 +32,8 @@ export function TopBar() {
   const repo = useResource<RepoInfo>("repo", "/api/repo", undefined, REPO_REFRESH_MS);
   const ci = useResource<{ runs: CiRun[] }>("ci", "/api/ci", (d) => d.runs.length === 0, CI_REFRESH_MS);
   const tests = useResource<TestRunState>("tests", "/api/tests");
+  const approvals = useResource<ApprovalsResponse>("approvals", "/api/approvals", (d) => d.approvals.length === 0, AGENTS_REFRESH_MS);
+  const waiting = approvals.data?.approvals.length ?? 0;
   const ciState = ci.error ? { kind: "attention" as const, text: "Unknown" } : ciWord(ci.data?.runs);
   const testState = tests.error ? { kind: "attention" as const, text: "Unknown" } : testWord(tests.data);
   return (
@@ -43,6 +45,11 @@ export function TopBar() {
         {repo.data?.commit && <span className="dim"> {repo.data.commit}</span>}
       </span>
       <span className="topbar__spacer" />
+      {waiting > 0 && (
+        <a className="topbar__approvals" href="#approvals">
+          <Bell size={14} weight="fill" aria-hidden="true" /> {waiting} waiting for approval
+        </a>
+      )}
       <span className="topbar__item">
         <span className="dim">CI</span> <StatusWord kind={ciState.kind}>{ciState.text}</StatusWord>
       </span>
