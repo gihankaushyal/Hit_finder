@@ -142,8 +142,11 @@ describe("workerOptions", () => {
 describe("chiefOptions", () => {
   const o = chiefOptions(cfg, { cwd: "/r/repo", env: { PATH: "/bin" } });
 
-  it("is read-only and has no shell", () => {
-    expect(o.settings.permissions.allow).toEqual(["Read", "Grep", "Glob"]);
+  it("is read-only and has no shell; only listing workers is free, every other dashboard tool asks", () => {
+    expect(o.settings.permissions.allow).toEqual(["Read", "Grep", "Glob", "mcp__dashboard__list_workers"]);
+    expect(o.settings.permissions.ask).toEqual(
+      ["spawn_worker", "message_worker", "stop_worker", "create_task", "update_task"].map((t) => `mcp__dashboard__${t}`),
+    );
     expect(o.settings.permissions.deny).toEqual(expect.arrayContaining(["Bash", "Edit", "Write", "NotebookEdit"]));
     expect(o.model).toBe("opus");
   });

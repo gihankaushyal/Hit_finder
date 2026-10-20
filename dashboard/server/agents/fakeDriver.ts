@@ -1,7 +1,7 @@
-import type { AgentDriver, DriverItem, Session, SessionStart } from "./driver";
+import { mcpToolName, type AgentDriver, type DriverItem, type Session, type SessionStart } from "./driver";
 
 /** One scripted action. A turn is a list of steps; the turn ends with a `result` event. */
-export type Step = { say: string } | { tool: string; input: Record<string, unknown> } | { wait: number } | { fail: string };
+export type Step = { say: string } | { tool: string; input: Record<string, unknown> } | { mcp: string; input: Record<string, unknown> } | { wait: number } | { fail: string };
 
 export interface FakeDriverOptions {
   /** Pause before each step, in milliseconds. Tests use 0; the browser tests use a small value. */
@@ -81,6 +81,21 @@ export function createFakeDriver(opts: FakeDriverOptions = {}): AgentDriver {
             if ("say" in step) emit({ kind: "text", text: step.say });
             else if ("wait" in step) await sleep(step.wait, signal);
             else if ("fail" in step) throw new Error(step.fail);
+            else if ("mcp" in step) {
+              const name = mcpToolName(step.mcp);
+              const id = `toolu_fake${++toolSeq}`;
+              emit({ kind: "tool-use", tool: name, toolUseId: id, input: step.input });
+              const aborted = new Promise<"aborted">((r) => signal.addEventListener("abort", () => r("aborted"), { once: true }));
+              const out = await Promise.race([s.canUseTool(name, step.input, { signal }), aborted]);
+              if (out === "aborted") break;
+              const def = s.tools?.find((t) => t.name === step.mcp);
+              if (out.decision !== "allow") emit({ kind: "tool-result", toolUseId: id, output: out.message ?? "Denied", isError: true });
+              else if (!def) emit({ kind: "tool-result", toolUseId: id, output: `Unknown tool ${step.mcp}`, isError: true });
+              else {
+                const res = await def.handler(step.input);
+                emit({ kind: "tool-result", toolUseId: id, output: res.text, isError: res.isError === true });
+              }
+            }
             else {
               const id = `toolu_fake${++toolSeq}`;
               emit({ kind: "tool-use", tool: step.tool, toolUseId: id, input: step.input });

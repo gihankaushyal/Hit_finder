@@ -1,4 +1,9 @@
 import type { Config } from "../config";
+import { mcpToolName } from "./driver";
+
+/** The only free dashboard tool; every other one changes something and raises an approval card. */
+export const CHIEF_FREE_TOOLS = ["list_workers"] as const;
+export const CHIEF_ASK_TOOLS = ["spawn_worker", "message_worker", "stop_worker", "create_task", "update_task"] as const;
 
 /**
  * What an agent session may do. Pure data: the SDK driver turns it into SDK options and the
@@ -109,6 +114,6 @@ export function chiefOptions(cfg: Config, o: { cwd: string; env: Record<string, 
   return {
     ...base(cfg, o),
     model: o.model ?? cfg.chiefModel,
-    settings: { permissions: { allow: ["Read", "Grep", "Glob"], ask: [], deny: ["Bash", "Edit", "Write", "NotebookEdit", ...rules.deny.filter((r) => r.startsWith("Read("))] } },
+    settings: { permissions: { allow: ["Read", "Grep", "Glob", ...CHIEF_FREE_TOOLS.map(mcpToolName)], ask: CHIEF_ASK_TOOLS.map(mcpToolName), deny: ["Bash", "Edit", "Write", "NotebookEdit", ...rules.deny.filter((r) => r.startsWith("Read("))] } },
   };
 }

@@ -103,6 +103,32 @@ describe("fake driver", () => {
     await p;
   });
 
+  it("calls a dashboard tool by name after asking, passing the handler's answer back", async () => {
+    const seen: string[] = [];
+    const tools = [{ name: "spawn_worker", description: "d", schema: {}, handler: async (a: Record<string, unknown>) => (seen.push(String(a.name)), { text: `started ${a.name}` }) }];
+    const asked: string[] = [];
+    const driver = createFakeDriver({ stepMs: 0, scripts: () => [[{ mcp: "spawn_worker", input: { name: "w-one" } }]] });
+    const s = driver.start(start({ tools, canUseTool: async (t) => (asked.push(t), { decision: "allow" }) }));
+    const items = bodies(await take(s.events[Symbol.asyncIterator](), isResult));
+    expect(asked).toEqual(["mcp__dashboard__spawn_worker"]);
+    expect(seen).toEqual(["w-one"]);
+    expect(items.map((b) => b.kind)).toEqual(["tool-use", "tool-result", "result"]);
+    expect(items[0]).toMatchObject({ tool: "mcp__dashboard__spawn_worker" });
+    expect(items[1]).toMatchObject({ output: "started w-one", isError: false });
+    s.close();
+  });
+
+  it("does not run the handler when the tool call is denied", async () => {
+    let ran = false;
+    const tools = [{ name: "stop_worker", description: "d", schema: {}, handler: async () => ((ran = true), { text: "x" }) }];
+    const driver = createFakeDriver({ stepMs: 0, scripts: () => [[{ mcp: "stop_worker", input: {} }]] });
+    const s = driver.start(start({ tools, canUseTool: async () => ({ decision: "deny", message: "No" }) }));
+    const items = bodies(await take(s.events[Symbol.asyncIterator](), isResult));
+    expect(ran).toBe(false);
+    expect(items[1]).toMatchObject({ isError: true, output: expect.stringContaining("No") });
+    s.close();
+  });
+
   it("throws from the event stream when the script fails", async () => {
     const s = createFakeDriver({ stepMs: 0, scripts: () => [[{ fail: "boom" }]] }).start(start());
     await expect(take(s.events[Symbol.asyncIterator](), () => false)).rejects.toThrow("boom");
