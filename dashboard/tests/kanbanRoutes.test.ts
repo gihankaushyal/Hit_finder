@@ -439,13 +439,16 @@ describe("file watcher trigger", () => {
 
 const NO_RUNS = { scan: async () => ({ runs: [], scannedAt: "", checkpointsDirExists: false, truncated: false, error: null }) };
 
+const NO_AGENTS = { list: () => [], get: () => undefined, spawn: async () => ({}) as never, message: async () => {}, stop: async () => {}, resume: async () => {}, events: async () => ({ events: [], lastSeq: 0 }), init: async () => {}, stopAll: async () => {} };
+const NO_APPROVALS = { pending: () => [], decide: () => {}, request: async () => ({ decision: "deny" as const }), cancelAgent: () => {}, count: () => 0, countFor: () => 0 };
+
 describe("buildServer", () => {
   const config = { webDist: "/nonexistent", repoRoot: "/tmp" } as Config;
   function server() {
     const s = setup();
     const gh = s.gh;
     const tests = { state: () => ({ status: "idle" }) as never, start: () => true, stop: () => Promise.resolve() };
-    const app = buildServer({ config, token: "t".repeat(64), bus: s.bus, gh, tests, kanban: s.service, runner: async () => ({ stdout: "x\n", stderr: "", code: 0 }), runs: NO_RUNS });
+    const app = buildServer({ config, token: "t".repeat(64), bus: s.bus, gh, tests, kanban: s.service, runner: async () => ({ stdout: "x\n", stderr: "", code: 0 }), runs: NO_RUNS, agents: NO_AGENTS, approvals: NO_APPROVALS });
     return { app, gh };
   }
 
@@ -463,6 +466,10 @@ describe("buildServer", () => {
     ["POST", "/api/kanban/sync"],
     ["GET", "/api/repo"],
     ["GET", "/api/runs"],
+    ["GET", "/api/agents"],
+    ["POST", "/api/agents"],
+    ["GET", "/api/approvals"],
+    ["POST", "/api/approvals/x/decision"],
   ])("%s %s without a token is 401", async (method, url) => {
     const { app, gh } = server();
     const res = await app.request(url, { method });
@@ -474,7 +481,7 @@ describe("buildServer", () => {
   it("with the token, every module answers", async () => {
     const { app } = server();
     const auth = { Authorization: `Bearer ${"t".repeat(64)}` };
-    for (const url of ["/api/health", "/api/tests", "/api/kanban", "/api/ci", "/api/issues", "/api/prs", "/api/repo", "/api/runs"]) {
+    for (const url of ["/api/health", "/api/tests", "/api/kanban", "/api/ci", "/api/issues", "/api/prs", "/api/repo", "/api/runs", "/api/agents", "/api/approvals"]) {
       const res = await app.request(url, { headers: auth });
       expect(res.status, url).toBe(200);
     }

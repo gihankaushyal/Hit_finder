@@ -65,4 +65,25 @@ describe("loadConfig", () => {
     expect(loadConfig({ DASH_REPO_ROOT: "/r", DASH_KANBAN: " /x/k.md " }).kanbanPath).toBe("/x/k.md");
     expect(loadConfig({ DASH_PYTHON: " /opt/py " }).pythonBin).toBe("/opt/py");
   });
+
+  describe("agent settings", () => {
+    it("defaults: three workers, sonnet and opus, the sdk driver, agents next to the repo", () => {
+      const c = loadConfig({ DASH_REPO_ROOT: "/data/work/Hit_finder" });
+      expect(c).toMatchObject({
+        agentsDir: "/data/work/Hit_finder-agents", claudeBin: "claude", agentMax: 3, agentMaxTurns: 60,
+        workerModel: "sonnet", chiefModel: "opus", agentDriver: "sdk", agentBase: "origin/phase-05",
+      });
+    });
+    it("honours overrides and resolves the agents directory", () => {
+      const c = loadConfig({ DASH_REPO_ROOT: "/r/x", DASH_AGENTS_DIR: "rel/agents", DASH_CLAUDE_BIN: "/opt/claude", DASH_AGENT_MAX: "5", DASH_AGENT_MAX_TURNS: "20", DASH_WORKER_MODEL: "haiku", DASH_CHIEF_MODEL: "sonnet", DASH_AGENT_DRIVER: "fake", DASH_AGENT_BASE: "main" });
+      expect(path.isAbsolute(c.agentsDir)).toBe(true);
+      expect(c).toMatchObject({ claudeBin: "/opt/claude", agentMax: 5, agentMaxTurns: 20, workerModel: "haiku", chiefModel: "sonnet", agentDriver: "fake", agentBase: "main" });
+    });
+    it.each(["DASH_AGENTS_DIR", "DASH_CLAUDE_BIN", "DASH_AGENT_MAX", "DASH_AGENT_MAX_TURNS", "DASH_WORKER_MODEL", "DASH_CHIEF_MODEL", "DASH_AGENT_DRIVER", "DASH_AGENT_BASE"])("a blank %s means the default", (key) => {
+      expect(loadConfig({ [key]: "  " })).toEqual(loadConfig({}));
+    });
+    it.each([["DASH_AGENT_MAX", "0"], ["DASH_AGENT_MAX", "9"], ["DASH_AGENT_MAX", "two"], ["DASH_AGENT_MAX_TURNS", "0"], ["DASH_AGENT_MAX_TURNS", "501"], ["DASH_AGENT_DRIVER", "real"]])("rejects %s=%s", (key, value) => {
+      expect(() => loadConfig({ [key]: value })).toThrow(new RegExp(key));
+    });
+  });
 });

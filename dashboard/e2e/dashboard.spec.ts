@@ -367,3 +367,114 @@ test.describe("runs panel without a checkpoints directory", () => {
     await expect(panel(page, "Runs")).toContainText("No checkpoints directory on this machine");
   });
 });
+
+test.describe("agents and approvals", () => {
+  const dashboard = withDashboard();
+  const agents = (page: Page) => panel(page, "Agents");
+  const approvals = (page: Page) => panel(page, "Approvals");
+
+  async function start(page: Page, name: string, task: string): Promise<void> {
+    await agents(page).getByRole("button", { name: "New agent" }).click();
+    await page.getByLabel("Name", { exact: true }).fill(name);
+    await page.getByLabel("Task", { exact: true }).fill(task);
+    await page.getByRole("button", { name: "Start agent" }).click();
+    await expect(agents(page).getByRole("button", { name: new RegExp(name) })).toBeVisible();
+  }
+  async function stopAll(page: Page, dash: Dashboard, names: string[]): Promise<void> {
+    for (const n of names) await page.request.post(`${dash.baseUrl}/api/agents/${n}/stop`, { data: {} });
+  }
+  const row = (page: Page, name: string) => agents(page).getByRole("listitem").filter({ hasText: name });
+
+  test("starting an agent shows it working, then idle, with its log", async ({ page }) => {
+    const dash = dashboard();
+    await open(page, dash);
+    await expect(agents(page).getByText(/No agents yet/)).toBeVisible();
+    await start(page, "tidy-notes", "tidy the notes");
+    await expect(row(page, "tidy-notes").getByText("Idle")).toBeVisible();
+    await row(page, "tidy-notes").getByRole("button", { name: /tidy-notes/ }).click();
+    const log = page.getByRole("log", { name: /tidy-notes/ });
+    await expect(log).toContainText("Working on: tidy the notes");
+    await stopAll(page, dash, ["tidy-notes"]);
+    await expect(row(page, "tidy-notes").getByText("Stopped", { exact: true })).toBeVisible();
+  });
+
+  test("a gated command waits on a card with the exact command; approving continues the agent", async ({ page }) => {
+    const dash = dashboard();
+    await open(page, dash);
+    await start(page, "pusher-ok", "please push the branch");
+    const card = approvals(page).getByRole("article", { name: /pusher-ok/ });
+    await expect(card.getByText("git push origin HEAD")).toBeVisible();
+    await expect(row(page, "pusher-ok").getByText("Waiting for approval")).toBeVisible();
+    await expect(page.getByRole("link", { name: /1 waiting for approval/ })).toBeVisible();
+    await card.getByRole("button", { name: "Approve" }).click();
+    await expect(approvals(page).getByText(/Nothing is waiting/)).toBeVisible();
+    await expect(row(page, "pusher-ok").getByText("Idle")).toBeVisible();
+    await expect(page.getByRole("link", { name: /waiting for approval/ })).toHaveCount(0);
+    await row(page, "pusher-ok").getByRole("button", { name: /pusher-ok/ }).click();
+    await expect(page.getByRole("log", { name: /pusher-ok/ })).toContainText("Approval allowed for Bash");
+    await stopAll(page, dash, ["pusher-ok"]);
+  });
+
+  test("denying tells the agent, which carries on", async ({ page }) => {
+    const dash = dashboard();
+    await open(page, dash);
+    await start(page, "pusher-no", "please push the branch");
+    await approvals(page).getByRole("button", { name: "Deny" }).click();
+    await expect(row(page, "pusher-no").getByText("Idle")).toBeVisible();
+    await row(page, "pusher-no").getByRole("button", { name: /pusher-no/ }).click();
+    const log = page.getByRole("log", { name: /pusher-no/ });
+    await expect(log).toContainText("Approval denied for Bash");
+    await expect(log).toContainText("Denied");
+    await stopAll(page, dash, ["pusher-no"]);
+  });
+
+  test("a pending approval survives a reload, and stopping the agent removes its card", async ({ page }) => {
+    const dash = dashboard();
+    await open(page, dash);
+    await start(page, "pusher-wait", "please push the branch");
+    await expect(approvals(page).getByRole("article")).toHaveCount(1);
+    await page.reload();
+    await expect(approvals(page).getByRole("article", { name: /pusher-wait/ })).toBeVisible();
+    await row(page, "pusher-wait").getByRole("button", { name: /pusher-wait/ }).click();
+    await page.getByRole("button", { name: "Stop", exact: true }).click();
+    await expect(approvals(page).getByText(/Nothing is waiting/)).toBeVisible();
+    await expect(row(page, "pusher-wait").getByText("Stopped")).toBeVisible();
+  });
+
+  test("an approval can be made with the keyboard alone", async ({ page }) => {
+    const dash = dashboard();
+    await open(page, dash);
+    await start(page, "pusher-key", "please push the branch");
+    const approve = approvals(page).getByRole("button", { name: "Approve" });
+    await approve.focus();
+    await expect(approve).toBeFocused();
+    await page.keyboard.press("Enter");
+    await expect(approvals(page).getByText(/Nothing is waiting/)).toBeVisible();
+    await stopAll(page, dash, ["pusher-key"]);
+  });
+
+  test("the cap is enforced with a plain message", async ({ page }) => {
+    const dash = dashboard();
+    await open(page, dash);
+    for (const n of ["cap-one", "cap-two", "cap-three"]) await start(page, n, "work");
+    await agents(page).getByRole("button", { name: "New agent" }).click();
+    await page.getByLabel("Name", { exact: true }).fill("cap-four");
+    await page.getByLabel("Task", { exact: true }).fill("work");
+    await page.getByRole("button", { name: "Start agent" }).click();
+    await expect(page.getByRole("alert").filter({ hasText: "3 agents are already running" })).toBeVisible();
+    await stopAll(page, dash, ["cap-one", "cap-two", "cap-three"]);
+  });
+
+  for (const size of [{ width: 1440, height: 900 }, { width: 1024, height: 768 }]) {
+    test(`no horizontal scroll with an approval card open at ${size.width}x${size.height}`, async ({ page }) => {
+      const dash = dashboard();
+      await page.setViewportSize(size);
+      await open(page, dash);
+      await start(page, `layout-${size.width}`, "please push the branch");
+      await expect(approvals(page).getByRole("article")).toHaveCount(1);
+      const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+      expect(overflow).toBeLessThanOrEqual(0);
+      await stopAll(page, dash, [`layout-${size.width}`]);
+    });
+  }
+});

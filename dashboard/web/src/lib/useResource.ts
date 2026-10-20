@@ -19,6 +19,8 @@ export const CI_REFRESH_MS = 60_000;
 export const PRS_REFRESH_MS = 60_000;
 export const REPO_REFRESH_MS = 30_000;
 export const RUNS_REFRESH_MS = 60_000;
+/** Agent state arrives as events; this slow poll only repairs a missed one. */
+export const AGENTS_REFRESH_MS = 30_000;
 
 const defaultIsEmpty = (d: unknown): boolean => Array.isArray(d) && d.length === 0;
 

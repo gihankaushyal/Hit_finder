@@ -4,9 +4,9 @@ A local web dashboard for this repository: the latest pull request, open issues,
 the kanban board, and CI and local test status. It runs on Sol, binds to
 `127.0.0.1` only, and is opened from a laptop through an SSH tunnel.
 
-Milestone 1 (this package) covers the status panels and the kanban. Agent
-orchestration, the chief-of-staff chat and the terminal arrive in later
-milestones; their regions in the UI are labelled placeholders.
+This package covers the status panels, the kanban, the training-runs table and
+worker agents with approval cards. The chief-of-staff chat and the terminal arrive
+in later milestones; their regions in the UI are labelled placeholders.
 
 Nothing here is imported by `src/`, and the Python test suite does not depend on it.
 
@@ -141,6 +141,42 @@ The panel only sees runs when the dashboard runs on the same filesystem as `chec
 otherwise it says so. It never writes to `checkpoints/` and does not talk to W&B. The
 browser refreshes it every 60 s and the server caches each scan for 10 s.
 
+## Agents and approvals
+
+The right-hand rail runs Claude Code worker agents. **New agent** takes a name, a task and an optional issue
+number; the agent works alone in its own git worktree at `<agents dir>/<name>` on the branch
+`phase-05-agent-<name>`, cut from `DASH_AGENT_BASE`. You can read its log, send it messages, stop it and resume
+it. The main checkout is never modified: it is read-only to every agent, so queued SLURM jobs that read `src/`
+from it are unaffected.
+
+Agents use your installed `claude` and its claude.ai login (no API key), through the Claude Agent SDK. Each one
+runs in safe mode (no user hooks, plugins, skills or connectors) inside a bubblewrap sandbox: the whole
+filesystem is read-only except its worktree, the repository's `.git`, `~/.claude` and a private `/tmp`;
+`.secrets` is hidden; the environment holds only `PATH`, `HOME`, `USER`, `LANG`, `TMPDIR` and `SHELL`.
+
+**Approvals.** Reading, editing inside the worktree, `git status/diff/log/add/commit`, `ls`, `npm test/build`,
+`pytest`, `black` and read-only `gh` commands run freely. Everything else waits on a card in the Approvals
+panel that shows the exact command or file: `git push`, `gh pr create/merge/comment`, `sbatch`/`scancel`,
+network tools, `rm`, and git commands that move refs or change configuration. Nothing is approved on a timeout.
+The amber counter in the top bar links to the cards. Reloading the page keeps them; restarting the dashboard
+stops every agent (it can be resumed).
+
+Limits and caveats:
+
+- An agent can read `~/.ssh`, `~/.config/gh` and `~/.claude` credentials inside the sandbox (an approved push needs them), so the policy
+  allows no generic readers (`cat`, `curl`, `python -c`, `env`) without a card, and denies reading those paths with the file tools.
+  Treat an approved command as running with your login.
+- Allowed commands such as `npm test` and `python -m pytest` run code the agent wrote, and that code has the
+  same network access and the same readable credentials as the agent. The approval rules gate the commands an
+  agent types, not what a test script it edited does. Review the diff before trusting a worktree.
+- The sandbox hides `dashboard/.state` (the access token) and `.secrets`, and keeps `~/.claude` settings, hooks,
+  skills and plugins read-only. The repository's `.git` stays writable so commits work; refs of other branches
+  are made read-only at session start, but a worker could still create a new loose ref, so treat the
+  repository metadata as the agent's to touch.
+- The SDK's own sandbox stalls on this node's NFS home, which is why bubblewrap is used directly.
+- `DASH_AGENT_DRIVER=fake` plays scripted sessions for tests; the browser tests refuse to start with anything else.
+- Pinned versions that were tested together: `@anthropic-ai/claude-agent-sdk` 0.3.304 with `claude` 2.1.292.
+
 ## Configuration
 
 | Variable | Default | Meaning |
@@ -152,6 +188,14 @@ browser refreshes it every 60 s and the server caches each scan for 10 s.
 | `DASH_CHECKPOINTS` | `<repo>/checkpoints` | Directory scanned by the Runs panel |
 | `DASH_GH_BIN` | `gh` | GitHub CLI binary |
 | `DASH_PYTHON` | `python` | Interpreter used for the local test run |
+| `DASH_AGENTS_DIR` | `<repo>-agents` (next to the repo) | Where agent worktrees are created |
+| `DASH_AGENT_BASE` | `origin/phase-05` | Branch or ref new agent branches start from |
+| `DASH_AGENT_MAX` | `3` | Agents allowed at once, 1 to 8 |
+| `DASH_AGENT_MAX_TURNS` | `60` | Turn limit per agent session, 1 to 500 |
+| `DASH_WORKER_MODEL` | `sonnet` | Model for worker agents |
+| `DASH_CHIEF_MODEL` | `opus` | Model for the chief of staff (next milestone) |
+| `DASH_CLAUDE_BIN` | `claude` | Claude Code binary the agents drive |
+| `DASH_AGENT_DRIVER` | `sdk` | `sdk` (real) or `fake` (scripted, for tests) |
 
 An empty or whitespace-only value counts as unset and uses the default, so `DASH_CHECKPOINTS=$D npm start`
 with `$D` unset in that shell does not fall back to the current directory. `DASH_PORT` is the exception: a

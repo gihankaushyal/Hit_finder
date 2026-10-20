@@ -53,7 +53,7 @@ export interface Board {
 }
 
 export type DashEvent =
-  | { type: "invalidate"; resource: "prs" | "issues" | "ci" | "tests" | "kanban" }
+  | { type: "invalidate"; resource: "prs" | "issues" | "ci" | "tests" | "kanban" | "agents" | "approvals" | "chat" }
   | { type: "tests-line"; line: string };
 
 export type RunKind = "track1" | "ssl-pretrain" | "ssl-finetune" | "ssl-probe" | "legacy";
@@ -146,4 +146,84 @@ export interface RunsResponse {
   /** More run directories than the scan limit existed; the rest were not listed. */
   truncated: boolean;
   error: string | null;
+}
+
+// ---- Agents (milestone 2) ----
+
+/** starting, running, waiting-approval (blocked on a card), idle (finished a turn, can take a message), then a final state. */
+export type AgentState = "starting" | "running" | "waiting-approval" | "idle" | "done" | "failed" | "stopped";
+export type AgentRole = "worker" | "chief";
+
+export interface AgentSummary {
+  id: string;
+  name: string;
+  role: AgentRole;
+  /** The instruction the agent was started with. */
+  task: string;
+  /** Linked kanban issue number, if any. */
+  issue: number | null;
+  state: AgentState;
+  model: string;
+  /** The worker's git branch and worktree path; null for the chief of staff. */
+  branch: string | null;
+  worktree: string | null;
+  createdAt: string;
+  updatedAt: string;
+  /** ISO time of the newest journal entry, or null before the first. */
+  lastActivity: string | null;
+  turns: number;
+  /** Client-side cost estimate from the session, when reported. */
+  costUsd: number | null;
+  sessionId: string | null;
+  /** A fixed, path-free message when the agent failed. */
+  error: string | null;
+  pendingApprovals: number;
+  /** Sequence number of the newest journal entry; the browser fetches entries after the one it has. */
+  lastSeq: number;
+}
+
+export type AgentEventBody =
+  | { kind: "user"; text: string }
+  | { kind: "text"; text: string }
+  | { kind: "tool-use"; tool: string; toolUseId: string; input: Record<string, unknown> }
+  | { kind: "tool-result"; toolUseId: string; output: string; isError: boolean }
+  | { kind: "state"; state: AgentState; detail?: string }
+  | { kind: "approval"; approvalId: string; tool: string; outcome: "requested" | "allow" | "deny" | "cancelled" }
+  | { kind: "result"; ok: boolean; text: string; turns: number; costUsd: number | null }
+  | { kind: "error"; message: string };
+
+export type AgentEvent = AgentEventBody & { seq: number; at: string };
+
+export interface AgentsResponse {
+  agents: AgentSummary[];
+  /** Workers allowed at once. */
+  max: number;
+  driver: "sdk" | "fake";
+}
+
+export interface AgentEventsResponse {
+  events: AgentEvent[];
+  /** Newest sequence number in the journal, so the browser knows when it has everything. */
+  lastSeq: number;
+}
+
+/** A tool call an agent wants to make that needs a human decision. */
+export interface Approval {
+  id: string;
+  agentId: string;
+  agentName: string;
+  tool: string;
+  /** The exact input the agent supplied (a Bash command, a file path and content, an MCP tool's arguments). */
+  input: Record<string, unknown>;
+  /** One line describing the request, derived from `input`, for lists and screen readers. */
+  summary: string;
+  /** Why the permission system asked, when it said. */
+  reason: string | null;
+  requestedAt: string;
+}
+
+export type ApprovalDecision = "allow" | "deny";
+
+export interface ApprovalsResponse {
+  approvals: Approval[];
 }
