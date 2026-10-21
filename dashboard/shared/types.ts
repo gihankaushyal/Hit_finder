@@ -241,3 +241,12 @@ export interface ChiefSummary {
   pendingApprovals: number;
   lastSeq: number;
 }
+
+// ---- Terminal (milestone 3) ----
+
+export interface TerminalStatus {
+  enabled: boolean;
+  /** Streams (browser connections) allowed at once. */
+  max: number;
+  open: number;
+}
