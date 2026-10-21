@@ -216,9 +216,36 @@ describe("lifecycle", () => {
 });
 
 describe("terminalEnv", () => {
-  it("drops dashboard settings and secrets by name, keeps ordinary variables", () => {
-    const env = terminalEnv({ A: "1", DASH_X: "2", MY_TOKEN: "3", SOME_SECRET: "4", DB_PASSWORD: "5", WANDB_API_KEY: "6", ANTHROPIC_API_KEY: "7", GITHUB_TOKEN: "8", PATH: "/bin" });
-    expect(Object.keys(env).sort()).toEqual(["A", "COLORTERM", "PATH", "TERM"]);
+  it("passes a short list of ordinary variables and nothing else, so no credential name has to be guessed", () => {
+    const env = terminalEnv({
+      PATH: "/bin", HOME: "/h", USER: "u", LOGNAME: "u", SHELL: "/bin/bash", LANG: "C", LC_ALL: "C", TZ: "UTC", TMPDIR: "/t",
+      A: "1", DASH_X: "2", MY_TOKEN: "3", AWS_ACCESS_KEY_ID: "4", DATABASE_URL: "postgres://u:pw@h/db", SSH_AUTH_SOCK: "/s", WANDB_API_KEY: "6", SLURM_JOB_ID: "7", GIT_ASKPASS: "x",
+    });
+    expect(Object.keys(env).sort()).toEqual(["COLORTERM", "HOME", "LANG", "LC_ALL", "LOGNAME", "PATH", "SHELL", "TERM", "TMPDIR", "TZ", "USER"]);
+  });
+});
+
+describe("a helper that cannot start", () => {
+  it("is dropped without taking the server down, and frees its slot at once", async () => {
+    const { id } = term.open(80, 24);
+    const { output } = term.attach(id);
+    let ended = false;
+    output.on("end", () => (ended = true)).on("close", () => (ended = true));
+    children[0].emit("error", Object.assign(new Error("spawn python3 ENOENT"), { code: "ENOENT" }));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(term.count()).toBe(0);
+    expect(ended).toBe(true);
+    expect(() => term.input(id, "x")).toThrow(/not found/i);
+  });
+
+  it("with a real missing interpreter nothing is thrown and the stream just ends", async () => {
+    const real = createTerminal({ cfg: { ...loadConfig({ DASH_REPO_ROOT: "/tmp" }), terminalPython: "/nonexistent/python-for-test" }, env: { PATH: "/bin" } });
+    const { id } = real.open(80, 24);
+    const { output } = real.attach(id);
+    const ended = new Promise<void>((res) => { output.on("close", () => res()); output.on("end", () => res()); output.resume(); });
+    await Promise.race([ended, new Promise((_, rej) => setTimeout(() => rej(new Error("stream never ended")), 3000))]);
+    expect(real.count()).toBe(0);
+    await expect(real.close(id)).resolves.toBeUndefined();
   });
 });
 

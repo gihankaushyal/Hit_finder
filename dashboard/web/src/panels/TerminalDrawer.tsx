@@ -11,6 +11,11 @@ type Mode = "closed" | "connecting" | "live" | "reconnecting" | "error";
 const DEFAULT_BACKOFF_MS = [1000, 2000, 5000, 15000];
 const SCROLLBACK_LINES = 2000;
 const RESIZE_DEBOUNCE_MS = 100;
+/** Characters per input request: well under the server's limit even when every one is escaped in JSON. */
+const INPUT_CHUNK_CHARS = 8000;
+/** A connection that lasts this long counts as working; shorter ones count towards giving up. */
+const STABLE_MS = 3000;
+const MAX_QUICK_ENDINGS = 5;
 const FONT_SIZE_PX = 13;
 /** Errors the server gives for a request that will never work as sent; everything else is retried. */
 const FATAL_STATUSES = new Set([400, 401, 403, 409, 415]);
@@ -32,12 +37,13 @@ async function streamError(res: Response): Promise<ApiError> {
   return new ApiError(res.status, message);
 }
 
-export function TerminalDrawer({ backoffMs = DEFAULT_BACKOFF_MS }: { backoffMs?: number[] }) {
+export function TerminalDrawer({ backoffMs = DEFAULT_BACKOFF_MS, stableMs = STABLE_MS }: { backoffMs?: number[]; stableMs?: number }) {
   const status = useResource<TerminalStatus>("terminal", "/api/terminal", () => false);
   const [wanted, setWanted] = useState(false);
   const [mode, setMode] = useState<Mode>("closed");
   const [error, setError] = useState<string | null>(null);
   const [tall, setTall] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
   const host = useRef<HTMLDivElement>(null);
   const closeButton = useRef<HTMLButtonElement>(null);
   const openButton = useRef<HTMLButtonElement>(null);
@@ -55,24 +61,45 @@ export function TerminalDrawer({ backoffMs = DEFAULT_BACKOFF_MS }: { backoffMs?:
     let cleanup: () => void = () => {};
     setMode("connecting");
     setError(null);
+    setNotice(null);
 
     const fail = (message: string) => {
       setError(message);
       setMode("error");
     };
 
+    /** Takes up to a chunk off the front of the queue without splitting a surrogate pair. */
+    function takeChunk(): string {
+      let end = Math.min(INPUT_CHUNK_CHARS, pending.length);
+      const last = pending.charCodeAt(end - 1);
+      if (end < pending.length && last >= 0xd800 && last <= 0xdbff) end -= 1;
+      const chunk = pending.slice(0, end);
+      pending = pending.slice(end);
+      return chunk;
+    }
+
+    /** Fire-and-forget: ends a stream reservation. Harmless if the server has already dropped it. */
+    const release = (which: string | null) => {
+      if (which) void apiSend("DELETE", `/api/terminal/${encodeURIComponent(which)}`).catch(() => undefined);
+    };
+
     async function flush(): Promise<void> {
       if (sending || !live || !id) return;
       sending = true;
+      const mine = conn; // a late failure belongs to the connection that sent it, not to a newer one
       try {
         while (pending && live && id) {
-          const data = pending;
-          pending = "";
-          await apiSend("POST", `/api/terminal/${encodeURIComponent(id)}/input`, { data });
+          await apiSend("POST", `/api/terminal/${encodeURIComponent(id)}/input`, { data: takeChunk() });
         }
+        setNotice(null);
       } catch (err) {
-        // The server no longer knows this stream: drop it, and the loop below opens a new one.
-        if (err instanceof ApiError && (err.status === 404 || err.status === 0)) conn?.abort();
+        pending = "";
+        if (err instanceof ApiError && (err.status === 404 || err.status === 0)) {
+          // The server no longer knows this stream: end it, and the loop below opens a new one.
+          if (conn === mine) mine?.abort();
+        } else {
+          setNotice(`Some input was not delivered: ${err instanceof ApiError ? err.message : "the request failed"}`);
+        }
       } finally {
         sending = false;
       }
@@ -115,6 +142,7 @@ export function TerminalDrawer({ backoffMs = DEFAULT_BACKOFF_MS }: { backoffMs?:
       observer?.observe(host.current);
 
       cleanup = () => {
+        stopped = true;
         observer?.disconnect();
         if (resizeTimer) clearTimeout(resizeTimer);
         conn?.abort();
@@ -124,15 +152,21 @@ export function TerminalDrawer({ backoffMs = DEFAULT_BACKOFF_MS }: { backoffMs?:
       };
 
       let attempt = 0;
+      let quick = 0;
+      let connectedAt = 0;
       while (!stopped) {
         conn = new AbortController();
+        id = null;
+        connectedAt = 0;
         try {
           const size = fit.proposeDimensions() ?? { cols: term.cols, rows: term.rows };
-          id = (await apiSend<{ id: string }>("POST", "/api/terminal/open", { cols: size.cols, rows: size.rows })).id;
-          const res = await fetch(`/api/terminal/${encodeURIComponent(id)}/stream`, { credentials: "same-origin", signal: conn.signal });
+          const opened = (await apiSend<{ id: string }>("POST", "/api/terminal/open", { cols: size.cols, rows: size.rows })).id;
+          id = opened;
+          if (stopped) return release(opened); // closed while the request was in flight: give the reservation back
+          const res = await fetch(`/api/terminal/${encodeURIComponent(opened)}/stream`, { credentials: "same-origin", signal: conn.signal });
           if (!res.ok || !res.body) throw await streamError(res);
           live = true;
-          attempt = 0;
+          connectedAt = Date.now();
           setMode("live");
           const reader = res.body.getReader();
           for (;;) {
@@ -149,7 +183,14 @@ export function TerminalDrawer({ backoffMs = DEFAULT_BACKOFF_MS }: { backoffMs?:
         }
         live = false;
         pending = "";
+        release(id); // a reservation that never became a working stream must not count against the limit
         if (stopped) return;
+        if (connectedAt && Date.now() - connectedAt >= stableMs) {
+          attempt = 0;
+          quick = 0;
+        } else if (connectedAt && ++quick >= MAX_QUICK_ENDINGS) {
+          return fail("The shell keeps ending right away. Check that tmux and python3 are installed on the node (DASH_TERMINAL_PYTHON), then open the terminal again.");
+        }
         setMode("reconnecting");
         await sleep(backoffMs[Math.min(attempt++, backoffMs.length - 1)]);
       }
@@ -200,6 +241,7 @@ export function TerminalDrawer({ backoffMs = DEFAULT_BACKOFF_MS }: { backoffMs?:
         )}
       </div>
       {error && <p className="approval__error" role="alert">{error}</p>}
+      {notice && <p className="approval__error" role="alert">{notice}</p>}
       {wanted && <div ref={host} className="term" data-testid="terminal" />}
     </footer>
   );

@@ -133,6 +133,36 @@ describe.each(PYTHONS)("pty bridge on %s", (python) => {
     await r.exited;
   });
 
+  it("on SIGTERM hangs up its program and kills one that ignores the hang-up", async () => {
+    const pidFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "bridge-")), "pid");
+    const r = run(python, ["sh", "-c", `trap "" HUP TERM; echo $$ > ${pidFile}; while :; do sleep 1; done`]);
+    await new Promise((res) => setTimeout(res, 500));
+    const pid = Number(fs.readFileSync(pidFile, "utf8").trim());
+    r.child.kill("SIGTERM");
+    await Promise.race([r.exited, new Promise((_, rej) => setTimeout(() => rej(new Error("bridge did not exit")), 8000))]);
+    await new Promise((res) => setTimeout(res, 300));
+    expect(() => process.kill(pid, 0)).toThrow();
+  });
+
+  it("keeps draining output while a large input waits for a program that is not reading", async () => {
+    const r = run(python, ["sh", "-c", "seq 1 150000; sleep 1"]);
+    for (let i = 0; i < 8; i++) r.child.stdin.write(data("y".repeat(200_000)));
+    await r.until(/150000\r\n/, 20_000);
+    r.child.stdin.end();
+    await r.exited;
+  });
+
+  it("hangs up its program when its output pipe is closed on it", async () => {
+    const pidFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "bridge-")), "pid");
+    const r = run(python, ["sh", "-c", `echo $$ > ${pidFile}; while :; do echo tick; sleep 0.1; done`]);
+    await r.until(/tick/);
+    const pid = Number(fs.readFileSync(pidFile, "utf8").trim());
+    r.child.stdout.destroy();
+    await Promise.race([r.exited, new Promise((_, rej) => setTimeout(() => rej(new Error("bridge did not exit")), 8000))]);
+    await new Promise((res) => setTimeout(res, 300));
+    expect(() => process.kill(pid, 0)).toThrow();
+  });
+
   it("refuses to start without a command", async () => {
     const r = run(python, []);
     expect(await r.exited).not.toBe(0);

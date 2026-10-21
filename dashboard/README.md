@@ -203,8 +203,10 @@ Keyboard: xterm keeps Tab for the shell, so press F6 to move focus to the Close 
 `127.0.0.1`, the token and cookie are required, the stream refuses requests that come from another origin, and
 agents cannot reach it (their sandbox hides `dashboard/.state`). Anyone who gets the token has your account on
 this node, so treat the tokenised URL like a password, and set `DASH_TERMINAL=off` to switch the terminal off.
-The shell starts with your ordinary environment minus the dashboard's own settings and anything whose name looks
-like a token, key or secret; your login profile runs as usual.
+The shell inherits only `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, the locale variables, `TZ` and `TMPDIR`
+(plus `TERM`); your login profile sets up the rest, as it does over ssh, so no credential variables are passed on.
+The server also answers only requests addressed to `localhost`, `127.0.0.1` or `[::1]` (any port, so an ssh tunnel
+on another local port works), which blocks DNS-rebinding pages.
 
 ## Configuration
 

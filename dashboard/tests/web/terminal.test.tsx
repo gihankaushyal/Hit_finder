@@ -40,6 +40,9 @@ let opens: number;
 let status: { enabled: boolean; max: number; open: number };
 let openReply: { status: number; body: unknown };
 let inputStatus: number;
+let streamStatus: number;
+let inputGate: Promise<void> | null;
+let openGate: Promise<void> | null;
 
 function installFetch() {
   vi.stubGlobal("fetch", vi.fn(async (path: string, init?: RequestInit) => {
@@ -50,8 +53,10 @@ function installFetch() {
     if (method === "GET" && path === "/api/terminal") return json(200, status);
     if (method === "POST" && path === "/api/terminal/open") {
       opens++;
+      if (openGate) await openGate;
       return json(openReply.status, openReply.status < 300 ? { id: `id-${opens}` } : openReply.body);
     }
+    if (method === "GET" && path.endsWith("/stream") && streamStatus !== 200) return json(streamStatus, { error: "boom" });
     if (method === "GET" && path.endsWith("/stream")) {
       let ctl!: ReadableStreamDefaultController<Uint8Array>;
       const rs = new ReadableStream<Uint8Array>({ start: (c) => (ctl = c) });
@@ -59,6 +64,7 @@ function installFetch() {
       init?.signal?.addEventListener("abort", () => { try { ctl.error(new DOMException("aborted", "AbortError")); } catch { /* closed */ } });
       return { ok: true, status: 200, body: rs, json: async () => ({}) };
     }
+    if (method === "POST" && path.endsWith("/input") && inputGate) await inputGate;
     if (method === "POST" && path.endsWith("/input")) return json(inputStatus, inputStatus < 300 ? { ok: true } : { error: "Terminal not found. Open it again." });
     return json(200, { ok: true });
   }));
@@ -74,6 +80,9 @@ beforeEach(() => {
   status = { enabled: true, max: 2, open: 0 };
   openReply = { status: 201, body: {} };
   inputStatus = 200;
+  streamStatus = 200;
+  inputGate = null;
+  openGate = null;
   installFetch();
 });
 afterEach(() => vi.unstubAllGlobals());
@@ -192,5 +201,76 @@ describe("TerminalDrawer", () => {
     await openIt();
     await waitFor(() => expect(terms).toHaveLength(1));
     expect(terms[0].options).toMatchObject({ screenReaderMode: true, scrollback: 2000 });
+  });
+
+  it("splits a very large paste into several requests and loses none of it", async () => {
+    render(<TerminalDrawer backoffMs={[5]} />);
+    await openIt();
+    await waitFor(() => expect(streams).toHaveLength(1));
+    const big = "ab".repeat(10_000) + "\u{1F600}".repeat(5000);
+    act(() => terms[0].dataCb(big));
+    await waitFor(() => expect(posts("/input").map((c) => (c.body as { data: string }).data).join("")).toBe(big));
+    expect(posts("/input").length).toBeGreaterThan(1);
+    for (const c of posts("/input")) expect((c.body as { data: string }).data.length).toBeLessThanOrEqual(8000);
+  });
+
+  it("tells you when input could not be delivered instead of dropping it silently", async () => {
+    render(<TerminalDrawer backoffMs={[5]} />);
+    await openIt();
+    await waitFor(() => expect(streams).toHaveLength(1));
+    inputStatus = 400;
+    act(() => terms[0].dataCb("x"));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/not delivered/i);
+  });
+
+  it("a late 'not found' for an old stream does not tear down the new one", async () => {
+    let release!: () => void;
+    inputGate = new Promise<void>((r) => (release = r));
+    inputStatus = 404;
+    render(<TerminalDrawer backoffMs={[5]} />);
+    await openIt();
+    await waitFor(() => expect(streams).toHaveLength(1));
+    act(() => terms[0].dataCb("a")); // request now waits on the gate
+    await waitFor(() => expect(posts("/input")).toHaveLength(1));
+    act(() => streams[0].end()); // the stream drops; a new one opens
+    await waitFor(() => expect(streams).toHaveLength(2));
+    release(); // the old request now fails with 404
+    await new Promise((r) => setTimeout(r, 80));
+    expect(streams).toHaveLength(2);
+    expect(posts("/open")).toHaveLength(2);
+  });
+
+  it("gives back the reservation when the stream cannot be started, and does not turn that into a limit error", async () => {
+    streamStatus = 500;
+    render(<TerminalDrawer backoffMs={[5]} />);
+    await openIt();
+    await waitFor(() => expect(calls.some((c) => c.method === "DELETE" && c.path === "/api/terminal/id-1")).toBe(true));
+    streamStatus = 200;
+    await waitFor(() => expect(streams.length).toBeGreaterThan(0));
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("closing while the terminal is still being opened releases what was reserved", async () => {
+    let release!: () => void;
+    openGate = new Promise<void>((r) => (release = r));
+    const { unmount } = render(<TerminalDrawer backoffMs={[5]} />);
+    await openIt();
+    await waitFor(() => expect(posts("/open")).toHaveLength(1));
+    unmount();
+    release();
+    await waitFor(() => expect(calls.some((c) => c.method === "DELETE" && c.path === "/api/terminal/id-1")).toBe(true));
+    expect(calls.some((c) => c.path.endsWith("/stream"))).toBe(false);
+  });
+
+  it("stops retrying and explains when the shell keeps ending right away", async () => {
+    render(<TerminalDrawer backoffMs={[5]} stableMs={500} />);
+    await openIt();
+    for (let i = 1; i <= 5; i++) {
+      await waitFor(() => expect(streams).toHaveLength(i));
+      act(() => streams[i - 1].end());
+    }
+    expect(await screen.findByRole("alert")).toHaveTextContent(/keeps ending right away/i);
+    await new Promise((r) => setTimeout(r, 80));
+    expect(posts("/open")).toHaveLength(5);
   });
 });

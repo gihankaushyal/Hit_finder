@@ -25,6 +25,7 @@ import termios
 
 HEADER = 5
 MAX_FRAME = 1 << 20
+MAX_BUFFERED = 4 << 20  # stop reading input while this much is waiting for the command
 READ_CHUNK = 65536
 HANGUP_WAIT_SECONDS = 1.0
 DEFAULT_COLS = 80
@@ -77,11 +78,27 @@ def exit_status(raw):
     return 1
 
 
-def hang_up(pid):
+class Terminate(Exception):
+    """Raised by the signal handlers to leave the main loop and clean up."""
+
+
+def on_signal(signum, frame):
+    raise Terminate(signum)
+
+
+def signal_group(pid, sig):
+    # The command is a session leader (pty.fork), so its pid is also its process group.
     try:
-        os.kill(pid, signal.SIGHUP)
+        os.killpg(pid, sig)
     except OSError:
-        return
+        try:
+            os.kill(pid, sig)
+        except OSError:
+            pass
+
+
+def hang_up(pid):
+    signal_group(pid, signal.SIGHUP)
     import time
 
     end = time.time() + HANGUP_WAIT_SECONDS
@@ -93,8 +110,8 @@ def hang_up(pid):
         if done:
             return
         time.sleep(0.02)
+    signal_group(pid, signal.SIGKILL)
     try:
-        os.kill(pid, signal.SIGKILL)
         os.waitpid(pid, 0)
     except OSError:
         pass
@@ -112,9 +129,7 @@ def main(argv):
             os.read(go_read, 1)
             os.close(go_read)
             os.execvp(command[0], command)
-        except (
-            Exception
-        ) as err:  # the child must never fall back into the parent's loop
+        except Exception as err:  # the child must never fall back into the parent's loop
             sys.stderr.write("cannot start %s: %s\n" % (command[0], err))
         os._exit(127)
 
@@ -122,34 +137,63 @@ def main(argv):
     set_size(master, cols, rows)
     os.write(go_write, b"x")
     os.close(go_write)
+    for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+        signal.signal(sig, on_signal)
+    os.set_blocking(master, False)
+    try:
+        return relay(pid, master)
+    except Terminate:
+        hang_up(pid)
+        return 143
+    except Exception:
+        # A closed output pipe, a vanished child or any other failure: never leave the command running.
+        hang_up(pid)
+        return 1
+
+
+def relay(pid, master):
     pending = b""
+    to_child = bytearray()
     stdin_open = True
-    status = None
     out_fd = sys.stdout.fileno()
 
     while True:
-        fds = [master] + ([0] if stdin_open else [])
-        try:
-            ready, _, _ = select.select(fds, [], [])
-        except InterruptedError:
-            continue
-        if master in ready:
+        readable = [master]
+        if stdin_open and len(to_child) < MAX_BUFFERED:
+            readable.append(0)
+        writable = [master] if to_child else []
+        ready_r, ready_w, _ = select.select(readable, writable, [])
+
+        if master in ready_w and to_child:
+            try:
+                written = os.write(master, to_child)
+                del to_child[:written]
+            except BlockingIOError:
+                pass
+            except OSError as err:
+                if err.errno != errno.EIO:
+                    raise
+                to_child = bytearray()
+
+        if master in ready_r:
             try:
                 chunk = os.read(master, READ_CHUNK)
+            except BlockingIOError:
+                chunk = None
             except OSError as err:
-                chunk = b"" if err.errno == errno.EIO else None
-                if chunk is None:
+                if err.errno != errno.EIO:
                     raise
-            if not chunk:
-                break  # the command closed its terminal
-            write_all(out_fd, chunk)
-        if stdin_open and 0 in ready:
+                chunk = b""
+            if chunk is not None:
+                if not chunk:
+                    break  # the command closed its terminal
+                write_all(out_fd, chunk)
+
+        if stdin_open and 0 in ready_r:
             chunk = os.read(0, READ_CHUNK)
             if not chunk:
-                stdin_open = False
                 hang_up(pid)
-                status = 0
-                break
+                return 0
             pending += chunk
             while len(pending) >= HEADER:
                 kind = pending[0:1]
@@ -162,14 +206,12 @@ def main(argv):
                 payload = pending[HEADER : HEADER + length]
                 pending = pending[HEADER + length :]
                 if kind == b"d" and payload:
-                    write_all(master, payload)
+                    to_child += payload
                 elif kind == b"r" and length == 4:
                     new_cols, new_rows = struct.unpack(">HH", payload)
                     if new_cols > 0 and new_rows > 0:
                         set_size(master, new_cols, new_rows)
 
-    if status is not None:
-        return status
     try:
         _, raw = os.waitpid(pid, 0)
     except OSError:
