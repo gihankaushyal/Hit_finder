@@ -10,6 +10,7 @@ const E2E_DIR = path.dirname(fileURLToPath(import.meta.url));
 export const DASHBOARD_DIR = path.resolve(E2E_DIR, "..");
 export const FAKE_GH = path.join(E2E_DIR, "fake-gh.mjs");
 export const FAKE_PYTEST = path.join(E2E_DIR, "fake-pytest.mjs");
+export const FAKE_SHELL = path.join(E2E_DIR, "fake-shell.sh");
 const KANBAN_FIXTURE = path.join(E2E_DIR, "fixtures", "kanban-e2e.md");
 const TSX_BIN = path.join(DASHBOARD_DIR, "node_modules", ".bin", "tsx");
 const TOKEN_BYTES = 32;
@@ -58,6 +59,9 @@ export function assertSafeEnv(env: Record<string, string | undefined>, tmpRoot: 
   if (env.DASH_AGENT_DRIVER !== "fake") {
     throw new Error(`e2e: DASH_AGENT_DRIVER must be "fake", got ${env.DASH_AGENT_DRIVER ?? "(unset)"}; refusing to start (a real Claude session must never run here)`);
   }
+  if (!env.DASH_TERMINAL_COMMAND || realPath(env.DASH_TERMINAL_COMMAND) !== realPath(FAKE_SHELL)) {
+    throw new Error(`e2e: DASH_TERMINAL_COMMAND must be ${FAKE_SHELL}, got ${env.DASH_TERMINAL_COMMAND ?? "(unset)"}; refusing to start (a browser test must never open tmux or a real shell)`);
+  }
   if (env.DASH_CLAUDE_BIN) throw new Error("e2e: DASH_CLAUDE_BIN must not be set; refusing to start");
   if (!env.DASH_PYTHON || realPath(env.DASH_PYTHON) !== realPath(FAKE_PYTEST)) {
     throw new Error(`e2e: DASH_PYTHON must be ${FAKE_PYTEST}, got ${env.DASH_PYTHON ?? "(unset)"}; refusing to start`);
@@ -102,6 +106,8 @@ export interface StartOptions {
   pytestDelayMs?: number;
   /** Build the fixture checkpoints/ directory (default true). False leaves it absent. */
   checkpoints?: boolean;
+  /** Terminal on (default) or off. */
+  terminal?: "on" | "off";
 }
 
 async function freePort(): Promise<number> {
@@ -171,6 +177,8 @@ export async function startDashboard(opts: StartOptions = {}): Promise<Dashboard
     DASH_AGENTS_DIR: path.join(dir, "agents"),
     DASH_AGENT_DRIVER: "fake",
     DASH_AGENT_BASE: "e2e-branch",
+    DASH_TERMINAL_COMMAND: FAKE_SHELL,
+    DASH_TERMINAL: opts.terminal ?? "on",
     FAKE_GH_STATE: ghState,
     FAKE_GH_CALLS: ghCallsFile,
     FAKE_GH_SEED: opts.seed ?? "default",

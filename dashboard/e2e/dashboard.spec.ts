@@ -565,3 +565,100 @@ test.describe("chief of staff", () => {
     });
   }
 });
+
+test.describe("terminal", () => {
+  const dashboard = withDashboard();
+  const drawer = (page: Page) => page.getByRole("contentinfo");
+  const screen = (page: Page) => page.locator(".xterm-accessibility-tree");
+  const openTerminal = async (page: Page) => {
+    await drawer(page).getByRole("button", { name: "Open terminal" }).click();
+    await expect(drawer(page).getByText("Connected")).toBeVisible();
+    await expect(screen(page)).toContainText("fake-shell ready");
+  };
+
+  test("is collapsed until opened, then runs what you type", async ({ page }) => {
+    const dash = dashboard();
+    await open(page, dash);
+    await expect(drawer(page).getByRole("button", { name: "Open terminal" })).toBeVisible();
+    await expect(page.locator(".xterm")).toHaveCount(0);
+    await openTerminal(page);
+    await page.locator(".xterm").click();
+    await page.keyboard.type("hello world");
+    await page.keyboard.press("Enter");
+    await expect(screen(page)).toContainText("ran: hello world");
+  });
+
+  test("Close terminal collapses it and it can be opened again", async ({ page }) => {
+    const dash = dashboard();
+    await open(page, dash);
+    await openTerminal(page);
+    await drawer(page).getByRole("button", { name: "Close terminal" }).click();
+    await expect(page.locator(".xterm")).toHaveCount(0);
+    await expect(drawer(page).getByRole("button", { name: "Open terminal" })).toBeFocused();
+    await openTerminal(page);
+  });
+
+  test("a shell that ends is replaced: the drawer reconnects by itself", async ({ page }) => {
+    const dash = dashboard();
+    await open(page, dash);
+    await openTerminal(page);
+    await page.locator(".xterm").click();
+    await page.keyboard.type("exit");
+    await page.keyboard.press("Enter");
+    await expect(drawer(page).getByText("Reconnecting")).toBeVisible({ timeout: 5000 });
+    await expect(drawer(page).getByText("Connected")).toBeVisible({ timeout: 15000 });
+    await expect(screen(page)).toContainText("fake-shell ready");
+  });
+
+  test("reloading the page leaves it collapsed and it opens again", async ({ page }) => {
+    const dash = dashboard();
+    await open(page, dash);
+    await openTerminal(page);
+    await page.reload();
+    await expect(drawer(page).getByRole("button", { name: "Open terminal" })).toBeVisible();
+    await openTerminal(page);
+  });
+
+  test("keyboard only: open with Enter, type, F6 leaves the terminal for the Close button", async ({ page }) => {
+    const dash = dashboard();
+    await open(page, dash);
+    const button = drawer(page).getByRole("button", { name: "Open terminal" });
+    await button.focus();
+    await page.keyboard.press("Enter");
+    await expect(drawer(page).getByText("Connected")).toBeVisible();
+    await page.keyboard.type("via keys");
+    await page.keyboard.press("Enter");
+    await expect(screen(page)).toContainText("ran: via keys");
+    await page.keyboard.press("F6");
+    await expect(drawer(page).getByRole("button", { name: "Close terminal" })).toBeFocused();
+  });
+
+  for (const size of [{ width: 1440, height: 900 }, { width: 1024, height: 768 }]) {
+    test(`no horizontal scroll with the terminal open at ${size.width}x${size.height}`, async ({ page }) => {
+      const dash = dashboard();
+      await page.setViewportSize(size);
+      await open(page, dash);
+      await openTerminal(page);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(0);
+    });
+  }
+
+  test("the stream cannot be attached from another origin", async ({ page, request }) => {
+    const dash = dashboard();
+    await open(page, dash);
+    const opened = await page.request.post(`${dash.baseUrl}/api/terminal/open`, { data: { cols: 80, rows: 24 } });
+    const { id } = (await opened.json()) as { id: string };
+    const res = await request.get(`${dash.baseUrl}/api/terminal/${id}/stream`, { headers: { Authorization: `Bearer ${dash.token}`, Origin: "https://evil.example" } });
+    expect(res.status()).toBe(403);
+  });
+});
+
+test.describe("terminal switched off", () => {
+  const dashboard = withDashboard({ terminal: "off" });
+  test("says so and cannot be opened", async ({ page }) => {
+    const dash = dashboard();
+    await open(page, dash);
+    await expect(page.getByRole("contentinfo").getByText(/switched off/i)).toBeVisible();
+    await expect(page.getByRole("contentinfo").getByRole("button", { name: "Open terminal" })).toBeDisabled();
+  });
+});

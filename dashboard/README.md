@@ -5,8 +5,7 @@ the kanban board, and CI and local test status. It runs on Sol, binds to
 `127.0.0.1` only, and is opened from a laptop through an SSH tunnel.
 
 This package covers the status panels, the kanban, the training-runs table,
-worker agents with approval cards and the chief-of-staff chat. The terminal arrives
-in a later milestone.
+worker agents with approval cards, the chief-of-staff chat and a terminal.
 
 Nothing here is imported by `src/`, and the Python test suite does not depend on it.
 
@@ -188,6 +187,25 @@ Limits and caveats:
 - `DASH_AGENT_DRIVER=fake` plays scripted sessions for tests; the browser tests refuse to start with anything else.
 - Pinned versions that were tested together: `@anthropic-ai/claude-agent-sdk` 0.3.304 with `claude` 2.1.292.
 
+## Terminal
+
+The drawer at the bottom opens a terminal running your normal login shell, like ssh. It runs inside a tmux
+session (`DASH_TERMINAL_SESSION`, default `hitfinder-dash`), so closing the drawer, reloading the page or
+restarting the dashboard leaves the shell, and anything running in it such as `claude`, going; opening the drawer
+again re-attaches. From an ssh session you can join the same shell with `tmux attach -t hitfinder-dash`.
+
+How it works: the browser opens a stream (`POST /api/terminal/open`, then a streaming `GET`), sends keystrokes and
+resizes as `POST`s, and a small Python helper (`server/terminal/ptyBridge.py`, standard library only) owns the PTY.
+There is no WebSocket server and no native add-on. Up to `DASH_TERMINAL_MAX` (default 2) streams at once.
+Keyboard: xterm keeps Tab for the shell, so press F6 to move focus to the Close button.
+
+**This is a full shell as you, protected only by the dashboard token.** It is not sandboxed. The server stays on
+`127.0.0.1`, the token and cookie are required, the stream refuses requests that come from another origin, and
+agents cannot reach it (their sandbox hides `dashboard/.state`). Anyone who gets the token has your account on
+this node, so treat the tokenised URL like a password, and set `DASH_TERMINAL=off` to switch the terminal off.
+The shell starts with your ordinary environment minus the dashboard's own settings and anything whose name looks
+like a token, key or secret; your login profile runs as usual.
+
 ## Configuration
 
 | Variable | Default | Meaning |
@@ -207,6 +225,10 @@ Limits and caveats:
 | `DASH_CHIEF_MODEL` | `opus` | Model for the chief of staff |
 | `DASH_CLAUDE_BIN` | `claude` | Claude Code binary the agents drive |
 | `DASH_AGENT_DRIVER` | `sdk` | `sdk` (real) or `fake` (scripted, for tests) |
+| `DASH_TERMINAL` | `on` | `off` switches the terminal off |
+| `DASH_TERMINAL_SESSION` | `hitfinder-dash` | tmux session the terminal attaches to |
+| `DASH_TERMINAL_MAX` | `2` | Terminal streams at once, 1 to 4 |
+| `DASH_TERMINAL_PYTHON` | `python3` | Interpreter for the PTY helper (3.6 or newer) |
 
 An empty or whitespace-only value counts as unset and uses the default, so `DASH_CHECKPOINTS=$D npm start`
 with `$D` unset in that shell does not fall back to the current directory. `DASH_PORT` is the exception: a
