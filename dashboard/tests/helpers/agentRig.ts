@@ -78,6 +78,7 @@ export async function makeAgentRig(env: Record<string, string> = {}, driver: Fak
     agents: sup,
     approvals,
     chief,
+    terminal: { enabled: false, open: vi.fn(), attach: vi.fn(), input: vi.fn(), resize: vi.fn(), close: vi.fn(async () => {}), closeAll: vi.fn(async () => {}), count: () => 0 } as never,
   });
   return {
     app, sup, chief, approvals, bus, cfg, root, repo,
