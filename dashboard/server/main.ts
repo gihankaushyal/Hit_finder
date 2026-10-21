@@ -10,6 +10,7 @@ import { createSdkDriver } from "./agents/sdkDriver";
 import { createSupervisor } from "./agents/supervisor";
 import { createWorktrees } from "./agents/worktrees";
 import { loadOrCreateToken } from "./auth";
+import { createTerminal } from "./terminal/terminal";
 import { loadConfig, type Config } from "./config";
 import { EventBus } from "./events";
 import { createGh } from "./lib/gh";
@@ -26,6 +27,8 @@ const EXIT_FAILURE = 1;
 const SHUTDOWN_GRACE_MS = 3000;
 /** Upper bound on waiting for pytest's process group to die (SIGTERM, then SIGKILL after 2 s) before exiting. */
 const STOP_TESTS_TIMEOUT_MS = 6000;
+/** Upper bound on closing the terminal streams at shutdown (the tmux session itself is left running). */
+const STOP_TERMINAL_TIMEOUT_MS = 3000;
 /** Upper bound on stopping every agent session (interrupt, close, process-group kill) at shutdown. */
 const STOP_AGENTS_TIMEOUT_MS = 5000;
 
@@ -76,7 +79,8 @@ const chief = createChief({
   tools: createChiefTools({ supervisor: agents, kanban }),
   env: process.env,
 });
-const app = buildServer({ config, token, bus, gh, tests, kanban, runner: execRunner, runs, agents, approvals, chief });
+const terminal = createTerminal({ cfg: config, env: process.env });
+const app = buildServer({ config, token, bus, gh, tests, kanban, runner: execRunner, runs, agents, approvals, chief, terminal });
 
 if (!isImportCompleted(config)) {
   console.log("Kanban sync is off until you run the first import: npm run kanban:sync -- --dry-run, then -- --yes");
@@ -92,17 +96,17 @@ const server = serve({ fetch: app.fetch, hostname: config.host, port: config.por
 server.on("error", (err: NodeJS.ErrnoException) => {
   void triggers.close();
   const message = err.code === "EADDRINUSE" ? `dashboard: port ${config.port} is already in use` : `dashboard: could not start the server (${err.code ?? "error"})`;
-  void Promise.all([stopTests(), agentsReady.then(() => Promise.all([chief.stop(), agents.stopAll(STOP_AGENTS_TIMEOUT_MS)]))]).finally(() => fail(message));
+  void Promise.all([terminal.closeAll(STOP_TERMINAL_TIMEOUT_MS), stopTests(), agentsReady.then(() => Promise.all([chief.stop(), agents.stopAll(STOP_AGENTS_TIMEOUT_MS)]))]).finally(() => fail(message));
 });
 
 let shuttingDown = false;
 function shutdown(): void {
   if (shuttingDown) return;
   shuttingDown = true;
-  const force = setTimeout(() => process.exit(0), STOP_TESTS_TIMEOUT_MS + STOP_AGENTS_TIMEOUT_MS + SHUTDOWN_GRACE_MS);
+  const force = setTimeout(() => process.exit(0), STOP_TESTS_TIMEOUT_MS + STOP_AGENTS_TIMEOUT_MS + STOP_TERMINAL_TIMEOUT_MS + SHUTDOWN_GRACE_MS);
   force.unref();
   // Exit only after pytest's process group is gone, or the bound above elapses.
-  const testsStopped = Promise.all([stopTests(), agentsReady.then(() => Promise.all([chief.stop(), agents.stopAll(STOP_AGENTS_TIMEOUT_MS)]))]);
+  const testsStopped = Promise.all([terminal.closeAll(STOP_TERMINAL_TIMEOUT_MS), stopTests(), agentsReady.then(() => Promise.all([chief.stop(), agents.stopAll(STOP_AGENTS_TIMEOUT_MS)]))]);
   void triggers.close().finally(() => {
     server.close(() => void testsStopped.finally(() => process.exit(0)));
     server.closeAllConnections?.();

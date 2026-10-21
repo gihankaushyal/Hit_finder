@@ -45,7 +45,7 @@ a { color: var(--text); text-underline-offset: 2px; }
 .shell {
   min-height: 100dvh;
   display: grid;
-  grid-template-rows: 40px 1fr 32px;
+  grid-template-rows: 40px 1fr auto;
 }
 .topbar {
   display: flex; align-items: center; gap: var(--s4);
@@ -81,9 +81,13 @@ a { color: var(--text); text-underline-offset: 2px; }
 .rail { border-right: 0; background: var(--surface); }
 
 .drawer {
-  display: flex; align-items: center; gap: var(--s3);
+  display: flex; flex-direction: column; min-width: 0;
   padding: 0 var(--s4); border-top: 1px solid var(--rule); background: var(--surface);
 }
+.drawer__bar { display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap; min-height: 32px; min-width: 0; }
+.drawer__hint { font-size: 0.85rem; }
+.term { height: 17em; margin: 0 0 var(--s3); background: var(--bg); border: 1px solid var(--rule); border-radius: var(--radius); padding: var(--s1); overflow: hidden; min-width: 0; }
+.drawer--tall .term { height: 55vh; }
 .drawer__title { font-size: 1rem; font-weight: 600; }
 
 /* Panels separated by hairlines, no cards */
@@ -136,6 +140,7 @@ a { color: var(--text); text-underline-offset: 2px; }
   .col, .rail { border-right: 0; border-bottom: 1px solid var(--rule); }
   .panel { flex: none; }
   .drawer { min-height: 32px; padding: var(--s2) var(--s4); }
+  .drawer--tall .term { height: 45vh; }
 }
 
 @media (prefers-reduced-motion: reduce) {

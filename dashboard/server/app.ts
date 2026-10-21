@@ -34,9 +34,18 @@ function readFileIfFile(p: string): Buffer | null {
   }
 }
 
+const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]"]);
+
 export function createApp(deps: Deps): Hono {
   const { config, token } = deps;
   const app = new Hono();
+
+  // DNS rebinding: a page on another name that resolves to 127.0.0.1 would otherwise reach this server with the
+  // browser's cookies for that name. Only loopback names are served; any local port is fine (ssh tunnels).
+  app.use("*", async (c, next) => {
+    if (!LOOPBACK_HOSTS.has(new URL(c.req.url).hostname.toLowerCase())) return c.text("Unexpected host name.", 403);
+    await next();
+  });
 
   app.use("*", async (c, next) => {
     await next();

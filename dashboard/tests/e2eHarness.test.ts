@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { assertSafeEnv, DASHBOARD_DIR, FAKE_GH, FAKE_PYTEST } from "../e2e/harness";
+import { assertSafeEnv, DASHBOARD_DIR, FAKE_GH, FAKE_PYTEST, FAKE_SHELL } from "../e2e/harness";
 
 describe("e2e harness guard", () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "dash-guard-"));
@@ -18,6 +18,7 @@ describe("e2e harness guard", () => {
     DASH_AGENTS_DIR: path.join(tmp, "agents"),
     DASH_AGENT_DRIVER: "fake",
     DASH_AGENT_BASE: "e2e-branch",
+    DASH_TERMINAL_COMMAND: FAKE_SHELL,
   });
 
   it("accepts a configuration entirely inside the temp directory with the fakes", () => {
@@ -51,6 +52,11 @@ describe("e2e harness guard", () => {
   it("refuses anything but the fake agent driver, so no real Claude session can start", () => {
     for (const driver of ["sdk", "", undefined]) {
       expect(() => assertSafeEnv({ ...good(), DASH_AGENT_DRIVER: driver as string }, tmp)).toThrow(/DASH_AGENT_DRIVER must be "fake"/);
+    }
+  });
+  it("refuses a real shell for the terminal, so a browser test can never reach tmux or your login shell", () => {
+    for (const cmd of [undefined, "", "tmux new-session", "/bin/bash", "sh -c cat"]) {
+      expect(() => assertSafeEnv({ ...good(), DASH_TERMINAL_COMMAND: cmd as string }, tmp)).toThrow(/DASH_TERMINAL_COMMAND must be/);
     }
   });
   it("refuses a claude binary override", () => {
