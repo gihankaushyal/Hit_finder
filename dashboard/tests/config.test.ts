@@ -86,4 +86,20 @@ describe("loadConfig", () => {
       expect(() => loadConfig({ [key]: value })).toThrow(new RegExp(key));
     });
   });
+
+  describe("terminal settings", () => {
+    it("defaults: on, session hitfinder-dash, two streams, python3, the real tmux command", () => {
+      expect(loadConfig({})).toMatchObject({ terminalEnabled: true, terminalSession: "hitfinder-dash", terminalMax: 2, terminalPython: "python3", terminalCommand: null, terminalTmuxSocket: null });
+    });
+    it("honours overrides", () => {
+      const c = loadConfig({ DASH_TERMINAL: "off", DASH_TERMINAL_SESSION: "my_term-2", DASH_TERMINAL_MAX: "3", DASH_TERMINAL_PYTHON: "/usr/bin/python3", DASH_TERMINAL_COMMAND: "sh -c cat", DASH_TERMINAL_TMUX_SOCKET: "test-sock" });
+      expect(c).toMatchObject({ terminalEnabled: false, terminalSession: "my_term-2", terminalMax: 3, terminalPython: "/usr/bin/python3", terminalCommand: ["sh", "-c", "cat"], terminalTmuxSocket: "test-sock" });
+    });
+    it.each(["DASH_TERMINAL", "DASH_TERMINAL_SESSION", "DASH_TERMINAL_MAX", "DASH_TERMINAL_PYTHON", "DASH_TERMINAL_COMMAND", "DASH_TERMINAL_TMUX_SOCKET"])("a blank %s means the default", (key) => {
+      expect(loadConfig({ [key]: "  " })).toEqual(loadConfig({}));
+    });
+    it.each([["DASH_TERMINAL", "yes"], ["DASH_TERMINAL_MAX", "0"], ["DASH_TERMINAL_MAX", "5"], ["DASH_TERMINAL_SESSION", "a:b"], ["DASH_TERMINAL_SESSION", "x.y"], ["DASH_TERMINAL_TMUX_SOCKET", "../s"]])("rejects %s=%s", (key, value) => {
+      expect(() => loadConfig({ [key]: value })).toThrow(new RegExp(key));
+    });
+  });
 });

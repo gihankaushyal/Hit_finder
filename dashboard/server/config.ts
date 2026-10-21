@@ -17,6 +17,12 @@ export interface Config {
   workerModel: string;    // DASH_WORKER_MODEL, default sonnet
   chiefModel: string;     // DASH_CHIEF_MODEL, default opus
   agentDriver: "sdk" | "fake"; // DASH_AGENT_DRIVER, default sdk; fake is for tests only
+  terminalEnabled: boolean;      // DASH_TERMINAL, on (default) or off
+  terminalSession: string;       // DASH_TERMINAL_SESSION, the tmux session the terminal attaches to
+  terminalMax: number;           // DASH_TERMINAL_MAX, live terminal streams at once (1 to 4)
+  terminalPython: string;        // DASH_TERMINAL_PYTHON, interpreter for the PTY helper
+  terminalCommand: string[] | null; // DASH_TERMINAL_COMMAND, tests only: replaces the tmux command (words split on spaces)
+  terminalTmuxSocket: string | null; // DASH_TERMINAL_TMUX_SOCKET, tests only: a private tmux socket name
   agentBase: string;      // DASH_AGENT_BASE, the ref worker branches start from, default origin/phase-05
   webDist: string;    // dashboard/dist
 }
@@ -45,6 +51,22 @@ const given = (v: string | undefined): string | undefined => {
   const t = v?.trim();
   return t ? t : undefined;
 };
+
+const SAFE_NAME = /^[A-Za-z0-9_-]{1,40}$/;
+const DEFAULT_TERMINAL_MAX = 2;
+const TERMINAL_MAX_LIMIT = 4;
+
+function terminalSwitch(value: string | undefined): boolean {
+  if (value === undefined || value === "on") return true;
+  if (value === "off") return false;
+  throw new Error(`DASH_TERMINAL must be "on" or "off", got "${value}"`);
+}
+
+function safeName(name: string, value: string | undefined, fallback: string | null): string | null {
+  if (value === undefined) return fallback;
+  if (!SAFE_NAME.test(value)) throw new Error(`${name} may contain only letters, digits, hyphens and underscores (1 to 40 characters), got "${value}"`);
+  return value;
+}
 
 function agentDriver(value: string | undefined): "sdk" | "fake" {
   if (value === undefined) return "sdk";
@@ -82,6 +104,12 @@ export function loadConfig(raw: NodeJS.ProcessEnv): Config {
     chiefModel: get("DASH_CHIEF_MODEL") ?? "opus",
     agentDriver: agentDriver(get("DASH_AGENT_DRIVER")),
     agentBase: get("DASH_AGENT_BASE") ?? "origin/phase-05",
+    terminalEnabled: terminalSwitch(get("DASH_TERMINAL")),
+    terminalSession: safeName("DASH_TERMINAL_SESSION", get("DASH_TERMINAL_SESSION"), "hitfinder-dash") as string,
+    terminalMax: boundedInt("DASH_TERMINAL_MAX", get("DASH_TERMINAL_MAX"), DEFAULT_TERMINAL_MAX, TERMINAL_MAX_LIMIT),
+    terminalPython: get("DASH_TERMINAL_PYTHON") ?? "python3",
+    terminalCommand: get("DASH_TERMINAL_COMMAND")?.split(/\s+/) ?? null,
+    terminalTmuxSocket: safeName("DASH_TERMINAL_TMUX_SOCKET", get("DASH_TERMINAL_TMUX_SOCKET"), null),
     webDist: path.join(DASHBOARD_DIR, "dist"),
   };
 }
