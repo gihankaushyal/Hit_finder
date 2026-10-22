@@ -8,6 +8,8 @@ import type { TerminalStatus } from "../../../shared/types";
 
 type Mode = "closed" | "connecting" | "live" | "reconnecting" | "error";
 
+/** The terminal frame is dark in both themes, so its text is light in both. */
+const TERMINAL_FOREGROUND = "#e2e8f0";
 const DEFAULT_BACKOFF_MS = [1000, 2000, 5000, 15000];
 const SCROLLBACK_LINES = 2000;
 const RESIZE_DEBOUNCE_MS = 100;
@@ -114,7 +116,7 @@ export function TerminalDrawer({ backoffMs = DEFAULT_BACKOFF_MS, stableMs = STAB
         cursorBlink: true,
         scrollback: SCROLLBACK_LINES,
         screenReaderMode: true,
-        theme: { background: cssVar("--bg", "#0e1113"), foreground: cssVar("--text", "#e4e7e9"), cursor: cssVar("--accent", "#f0a020") },
+        theme: { background: cssVar("--terminal", "#0a0d13"), foreground: TERMINAL_FOREGROUND, cursor: cssVar("--accent", "#60a5fa") },
       });
       const fit = new FitAddon();
       term.loadAddon(fit);

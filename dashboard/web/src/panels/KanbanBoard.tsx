@@ -78,6 +78,12 @@ function AddTask({ onAdded }: { onAdded: () => void }) {
   );
 }
 
+/** Local-only tasks share number 0, so their control is found through the card that shows the title. */
+function localControl(title: string, control: Control): HTMLElement | null {
+  const card = Array.from(document.querySelectorAll<HTMLElement>(".kb-card")).find((c) => c.querySelector(".kb-card__title")?.textContent === title);
+  return card?.querySelector<HTMLElement>(control === "move" ? ".kb-card__more" : 'input[type="checkbox"]') ?? null;
+}
+
 function TaskRow({ task, editable, error, conflicts, onChange }: { task: Task; editable: boolean; error?: string; conflicts: string[]; onChange: (t: Task, s: TaskStatus, c: Control) => void }) {
   const done = task.status === "done";
   const [menuOpen, setMenuOpen] = useState(false);
@@ -167,7 +173,7 @@ export function KanbanBoard() {
   const latestSeq = useRef(new Map<number, number>());
   // Requests for one task run one after another, so the server applies them in the order chosen.
   const chains = useRef(new Map<number, Promise<void>>());
-  const focusAfter = useRef<{ number: number; control: Control } | null>(null);
+  const focusAfter = useRef<{ number: number; title: string; control: Control } | null>(null);
 
   const { reload } = res;
   useEffect(() => {
@@ -181,7 +187,7 @@ export function KanbanBoard() {
   useEffect(() => {
     const f = focusAfter.current;
     if (!f) return;
-    const el = document.getElementById(`kb-${f.number}-${f.control}`);
+    const el = f.number > 0 ? document.getElementById(`kb-${f.number}-${f.control}`) : localControl(f.title, f.control);
     if (el) {
       focusAfter.current = null;
       if (document.activeElement !== el) el.focus();
@@ -193,7 +199,7 @@ export function KanbanBoard() {
       if (status === task.status) return;
       const mine = ++seq.current;
       latestSeq.current.set(task.number, mine);
-      focusAfter.current = { number: task.number, control };
+      focusAfter.current = { number: task.number, title: task.title, control };
       setErrors((e) => {
         const { [task.number]: _drop, ...rest } = e;
         return rest;

@@ -47,6 +47,13 @@ describe("TestStatus", () => {
     await waitFor(() => expect(api.count("GET", "/api/tests")).toBe(2));
   });
 
+  it("shows no empty output box before the first local run", async () => {
+    mockApi({ "GET /api/ci": ci, "GET /api/tests": { body: idle } });
+    render(<TestStatus />);
+    await screen.findByText(/No local run yet/);
+    expect(screen.queryByLabelText("Test output")).not.toBeInTheDocument();
+  });
+
   it("the button is disabled and reads Running while a run is active", async () => {
     mockApi({ "GET /api/ci": ci, "GET /api/tests": { body: running } });
     render(<TestStatus />);

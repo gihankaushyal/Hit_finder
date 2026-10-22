@@ -51,6 +51,13 @@ describe("colour contrast (WCAG AA, at least 4.5:1)", () => {
         expect(ratio(t["text"], t["surface-2"])).toBeGreaterThanOrEqual(MIN_RATIO);
         expect(ratio(t["text-dim"], t["surface-2"])).toBeGreaterThanOrEqual(MIN_RATIO);
       });
+      it("status colours and muted text on every surface", () => {
+        for (const fg of ["warn", "merged", "info", "code", "text-faint"]) {
+          for (const bg of ["bg", "surface", "surface-2"]) {
+            expect(ratio(t[fg], t[bg]), `${fg} ${t[fg]} on ${bg} ${t[bg]}`).toBeGreaterThanOrEqual(MIN_RATIO);
+          }
+        }
+      });
       it("the primary button text on the accent", () => {
         expect(ratio(t["accent-text"], t["accent"])).toBeGreaterThanOrEqual(MIN_RATIO);
       });

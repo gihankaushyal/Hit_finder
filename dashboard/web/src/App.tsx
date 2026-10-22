@@ -9,7 +9,7 @@ import { PipelineCard } from "./panels/PipelineCard";
 import { PrCard } from "./panels/PrCard";
 import { RunsTable } from "./panels/RunsTable";
 import { TerminalDrawer } from "./panels/TerminalDrawer";
-import "./App.css";
+import "./layout.css";
 
 function Unauthorized({ message }: { message: string }) {
   return (

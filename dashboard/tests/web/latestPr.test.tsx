@@ -112,6 +112,13 @@ describe("LatestPr", () => {
     expect(within(open).getByText(text)).toBeInTheDocument();
   });
 
+  it("the merged latest PR does not claim a checks status the server never sent", async () => {
+    mockApi({ "GET /api/prs": { body: payload() } });
+    render(<LatestPr />);
+    await screen.findByRole("article");
+    expect(screen.queryByText("No checks reported")).not.toBeInTheDocument();
+  });
+
   it("empty: says what would appear", async () => {
     mockApi({ "GET /api/prs": { body: { latest: null, recent: [], open: [] } }, "GET /api/ci": { body: { runs: [] } } });
     render(<LatestPr />);

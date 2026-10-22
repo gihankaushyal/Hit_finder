@@ -225,7 +225,7 @@ function LocalRun() {
               )}
             </>
           )}
-          <Log lines={lines} />
+          {(lines.length > 0 || running) && <Log lines={lines} />}
         </>
       )}
     </section>

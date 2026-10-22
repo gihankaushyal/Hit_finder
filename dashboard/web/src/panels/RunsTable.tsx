@@ -6,7 +6,7 @@ import { MetricGauge } from "../components/MetricGauge";
 import { StaleNotice, absoluteTime, panelState } from "../components/bits";
 import { SORT_LABEL, defaultDirection, describeSort, sortRuns, type SortDir, type SortKey } from "../lib/runSort";
 import { relTime } from "../lib/time";
-import { useQueryParam } from "../lib/useQueryState";
+import { setQueryParams, useQueryParam } from "../lib/useQueryState";
 import { RUNS_REFRESH_MS, useResource } from "../lib/useResource";
 import type { MetricBlock, RunEpochs, RunKind, RunResult, RunRow, RunStatus, RunsResponse } from "../../../shared/types";
 import "./RunsTable.css";
@@ -34,6 +34,7 @@ const STATUS: Record<RunStatus, { tone: BadgeTone; text: string }> = {
 const KINDS = Object.keys(KIND_LABEL) as RunKind[];
 const SORT_KEYS = Object.keys(SORT_LABEL) as SortKey[];
 const DEFAULT_SORT: SortKey = "name";
+const DEFAULT_DIR: SortDir = "asc";
 const asKind = (v: string): RunKind | "all" => ((KINDS as string[]).includes(v) ? (v as RunKind) : "all");
 const asSortKey = (v: string): SortKey => ((SORT_KEYS as string[]).includes(v) ? (v as SortKey) : DEFAULT_SORT);
 const asDir = (v: string): SortDir => (v === "desc" ? "desc" : "asc");
@@ -237,8 +238,8 @@ export function RunsTable() {
   const res = useResource<RunsResponse>("runs", "/api/runs", isEmpty, RUNS_REFRESH_MS);
   const [kindParam, setKindParam] = useQueryParam("kind", "all");
   const [archivedParam, setArchivedParam] = useQueryParam("archived", "1");
-  const [sortParam, setSortParam] = useQueryParam("sort", DEFAULT_SORT);
-  const [dirParam, setDirParam] = useQueryParam("dir", "asc");
+  const [sortParam] = useQueryParam("sort", DEFAULT_SORT);
+  const [dirParam] = useQueryParam("dir", DEFAULT_DIR);
   const kind = asKind(kindParam);
   const showOld = archivedParam !== "0";
   const sort: SortState = { key: asSortKey(sortParam), dir: asDir(dirParam) };
@@ -252,8 +253,8 @@ export function RunsTable() {
   );
   const onSort = (k: SortKey) => {
     const next: SortState = sort.key === k ? { key: k, dir: sort.dir === "asc" ? "desc" : "asc" } : { key: k, dir: defaultDirection(k) };
-    setSortParam(next.key);
-    setDirParam(next.dir);
+    // One update, so the table never renders the new key with the old direction.
+    setQueryParams({ sort: next.key === DEFAULT_SORT ? null : next.key, dir: next.dir === DEFAULT_DIR ? null : next.dir });
     setAnnouncement(describeSort(next.key, next.dir));
   };
   const actions =

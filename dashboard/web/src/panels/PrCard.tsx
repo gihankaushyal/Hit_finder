@@ -116,7 +116,6 @@ export function PrCard() {
           </h3>
           <div className="pr__badges">
             <StateBadge state={latest.state} />
-            <Checks checks={latest.checks} />
             <DiffChips additions={latest.additions} deletions={latest.deletions} />
           </div>
           <p className="meta">
