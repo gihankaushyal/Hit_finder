@@ -1,0 +1,45 @@
+.pipeline { display: flex; flex-direction: column; gap: var(--s5); }
+.subpanel { min-width: 0; }
+.subpanel > .sub { margin-top: 0; }
+
+/* GitHub Actions runs */
+.ci-runs { display: flex; flex-direction: column; }
+.ci-run {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: var(--s2) var(--s3);
+  padding: var(--s2) 0; border-bottom: 1px solid var(--rule); min-width: 0;
+}
+.ci-run:last-child { border-bottom: 0; }
+.ci-run__icon { display: inline-flex; color: var(--text-dim); }
+.ci-run__icon[data-kind="ok"] { color: var(--ok); }
+.ci-run__icon[data-kind="fail"] { color: var(--fail); }
+.ci-run__icon[data-kind="running"] { color: var(--info); }
+.ci-run__icon[data-kind="idle"] { color: var(--text-faint); }
+.ci-run__title { color: var(--text); text-decoration: none; font-weight: 500; overflow-wrap: anywhere; }
+.ci-run__title:hover { text-decoration: underline; }
+.ci-run__branch {
+  max-width: 14ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  padding: 0 7px; border-radius: 999px; background: var(--surface-2); border: 1px solid var(--rule); font-size: 0.78rem; line-height: 1.6;
+}
+.ci-run__when { font-size: 0.85rem; white-space: nowrap; }
+
+/* Local run */
+.local-head { display: flex; align-items: center; gap: var(--s3); margin-bottom: var(--s3); min-height: 28px; }
+.local-head .sub { margin: 0; }
+.local-head__run { margin-left: auto; }
+.failure { display: flex; flex-direction: column; padding: var(--s1) 0; border-bottom: 1px solid var(--rule); overflow-wrap: anywhere; }
+.log { position: relative; margin-top: var(--s3); }
+.log__body {
+  margin: 0; height: 11em; overflow: auto; padding: var(--s3);
+  background: var(--terminal); color: #cbd5e1; border: 1px solid var(--rule-strong); border-radius: var(--radius);
+  font-size: 0.8rem; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; overscroll-behavior: contain;
+}
+/* The shell prompt and caret trail the output; generated content, so it is not copied or read as output. */
+.log__body::after {
+  content: "$"; display: block; width: fit-content; padding-right: 0.45ch; color: #34d399;
+  border-right: 0.55em solid transparent; animation: caret 1.1s steps(1) infinite;
+}
+@keyframes caret { 50% { border-right-color: #94a3b8; } }
+.log__body .t-url { color: #67e8f9; }
+.log__body .t-sum { color: #fcd34d; font-weight: 500; }
+.log__body .t-fail { color: #fca5a5; }
+.log__follow { position: absolute; right: var(--s3); bottom: var(--s3); }

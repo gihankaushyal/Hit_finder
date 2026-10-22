@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { TestStatus } from "../../web/src/panels/TestStatus";
+import { PipelineCard as TestStatus } from "../../web/src/panels/PipelineCard";
 import { FakeEventSource, mockApi, stubEventSource } from "./helpers";
 import type { CiRun, TestRunState } from "../../shared/types";
 
@@ -27,7 +27,8 @@ describe("TestStatus", () => {
     render(<TestStatus />);
     const gh = await screen.findByRole("region", { name: "GitHub Actions" });
     expect(within(gh).getByText("Passed")).toBeInTheDocument();
-    expect(within(gh).getAllByRole("link", { name: "main" })[0]).toHaveAttribute("href", "https://github.com/o/r/actions/runs/1");
+    expect(within(gh).getAllByRole("link", { name: "Push" })[0]).toHaveAttribute("href", "https://github.com/o/r/actions/runs/1");
+    expect(within(gh).getAllByText("main")[0]).toHaveClass("ci-run__branch");
     expect(within(gh).getAllByText("2 h ago").length).toBeGreaterThan(0);
     const local = screen.getByRole("region", { name: "Local run" });
     expect(await within(local).findByText("17")).toHaveClass("mono");

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type FormEvent } from "react";
-import { ArrowsClockwise, Plus } from "@phosphor-icons/react";
+import { ArrowsClockwise, DotsThree, Plus, Tray } from "@phosphor-icons/react";
 import { PanelFrame } from "../components/PanelFrame";
 import { StatusWord } from "../components/StatusWord";
 import { ExternalLink, StaleNotice, panelState } from "../components/bits";
@@ -7,6 +7,7 @@ import { ApiError, apiSend } from "../lib/api";
 import { relTime } from "../lib/time";
 import { useResource } from "../lib/useResource";
 import type { Board, Task, TaskStatus } from "../../../shared/types";
+import "./KanbanBoard.css";
 
 /** The Done column shows this many of the most recently updated tasks until asked for all. */
 export const DONE_VISIBLE_COUNT = 30;
@@ -14,13 +15,14 @@ export const DONE_VISIBLE_COUNT = 30;
 export const TASK_TITLE_MAX_CHARS = 200;
 const IMPORT_PREVIEW_COMMAND = "npm run kanban:sync -- --dry-run";
 
-const COLUMNS: { status: TaskStatus; label: string }[] = [
-  { status: "todo", label: "Todo" },
-  { status: "in-progress", label: "In progress" },
-  { status: "blocked", label: "Blocked" },
-  { status: "done", label: "Done" },
+const COLUMNS: { status: TaskStatus; label: string; empty: string }[] = [
+  { status: "todo", label: "Todo", empty: "No tasks to do" },
+  { status: "in-progress", label: "In progress", empty: "Nothing in progress" },
+  { status: "blocked", label: "Blocked", empty: "No blocked issues" },
+  { status: "done", label: "Done", empty: "Nothing done yet" },
 ];
 const LABELS = Object.fromEntries(COLUMNS.map((c) => [c.status, c.label])) as Record<TaskStatus, string>;
+const ICON_SIZE = 14;
 
 interface Override {
   status: TaskStatus;
@@ -66,7 +68,7 @@ function AddTask({ onAdded }: { onAdded: () => void }) {
       <div className="kb-add__row">
         <input id={id} ref={ref} name="task-title" autoComplete="off" value={title} maxLength={TASK_TITLE_MAX_CHARS} onChange={(e) => setTitle(e.target.value)}
           aria-invalid={error !== null} aria-describedby={error ? errId : undefined} />
-        <button type="submit" className="btn" disabled={pending}>
+        <button type="submit" className="btn btn--sm" disabled={pending}>
           <Plus size={14} aria-hidden="true" />
           <span>Add task</span>
         </button>
@@ -78,41 +80,67 @@ function AddTask({ onAdded }: { onAdded: () => void }) {
 
 function TaskRow({ task, editable, error, conflicts, onChange }: { task: Task; editable: boolean; error?: string; conflicts: string[]; onChange: (t: Task, s: TaskStatus, c: Control) => void }) {
   const done = task.status === "done";
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuId = useId();
+  const card = useRef<HTMLLIElement>(null);
   const title = done ? <s className="dim">{task.title}</s> : <span>{task.title}</span>;
+  useEffect(() => {
+    if (!menuOpen) return;
+    const away = (e: PointerEvent) => {
+      if (card.current && !card.current.contains(e.target as Node)) setMenuOpen(false);
+    };
+    document.addEventListener("pointerdown", away);
+    return () => document.removeEventListener("pointerdown", away);
+  }, [menuOpen]);
+  const closeMenu = () => {
+    setMenuOpen(false);
+    document.getElementById(`kb-${task.number}-move`)?.focus();
+  };
   return (
-    <li className="kb-item">
-      <div className="kb-item__main">
+    <li ref={card} className="kb-card" onKeyDown={(e) => { if (e.key === "Escape" && menuOpen) closeMenu(); }}>
+      <div className="kb-card__main">
         {editable && (
           <input
-            type="checkbox" id={`kb-${task.number}-check`} checked={done}
+            type="checkbox" id={`kb-${task.number}-check`} name={`done-${task.number}`} checked={done}
             aria-label={`Mark ${task.title} done`}
             onChange={() => onChange(task, done ? "todo" : "done", "check")}
           />
         )}
-        <span className="kb-item__title">{title}</span>
+        <span className="kb-card__title">{title}</span>
+        {editable && (
+          <button
+            type="button" id={`kb-${task.number}-move`} className="kb-card__more" aria-label={`Actions for ${task.title}`}
+            aria-expanded={menuOpen} aria-controls={menuId} onClick={() => setMenuOpen(!menuOpen)}
+          >
+            <DotsThree size={18} weight="bold" aria-hidden="true" />
+          </button>
+        )}
       </div>
-      <div className="kb-item__meta">
+      <div className="kb-card__meta">
         {task.number > 0 && (editable && task.url ? (
-          <ExternalLink href={task.url} className="mono">
+          <ExternalLink href={task.url} className="chip chip--ref mono">
             <span aria-hidden="true">#{task.number}</span>
             <span className="sr-only">Issue #{task.number}, {task.title}</span>
           </ExternalLink>
         ) : (
-          <span className="mono dim">#{task.number}</span>
+          <span className="chip chip--ref mono">#{task.number}</span>
         ))}
-        {task.kind && <span className="chip">{task.kind}</span>}
+        {task.kind && <span className="chip chip--kind">{task.kind}</span>}
         {!task.inFile && <span className="chip">not in file</span>}
-        {editable && (
+      </div>
+      {menuOpen && (
+        <div id={menuId} className="kb-card__menu">
+          <label htmlFor={`kb-${task.number}-movesel`}>Move to</label>
           <select
-            id={`kb-${task.number}-move`} className="kb-item__move" aria-label={`Move ${task.title}`} value={task.status}
-            onChange={(e) => onChange(task, e.target.value as TaskStatus, "move")}
+            id={`kb-${task.number}-movesel`} name={`move-${task.number}`} autoComplete="off" aria-label={`Move ${task.title}`} value={task.status} autoFocus
+            onChange={(e) => { setMenuOpen(false); onChange(task, e.target.value as TaskStatus, "move"); }}
           >
             {COLUMNS.map((c) => <option key={c.status} value={c.status}>{c.label}</option>)}
           </select>
-        )}
-      </div>
+        </div>
+      )}
       {conflicts.map((c, i) => (
-        <p key={i} className="kb-item__conflict">
+        <p key={i} className="kb-card__note">
           <StatusWord kind="attention">Conflict</StatusWord> <span>{c}</span>
         </p>
       ))}
@@ -121,7 +149,7 @@ function TaskRow({ task, editable, error, conflicts, onChange }: { task: Task; e
   );
 }
 
-export function Kanban() {
+export function KanbanBoard() {
   const res = useResource<Board>("kanban", "/api/kanban", isEmpty);
   const board = res.data;
   const editable = board?.imported === true;
@@ -233,8 +261,8 @@ export function Kanban() {
         {board.lastSyncAt && (
           <span className="dim kb-sync">Synced <time dateTime={board.lastSyncAt}>{relTime(board.lastSyncAt)}</time></span>
         )}
-        <button type="button" className="btn" disabled={syncing} onClick={sync}>
-          <ArrowsClockwise size={14} aria-hidden="true" className={syncing ? "spin" : undefined} />
+        <button type="button" className="btn btn--sm" disabled={syncing} onClick={sync}>
+          <ArrowsClockwise size={ICON_SIZE} aria-hidden="true" className={syncing ? "spin" : undefined} />
           <span>{syncing ? "Syncing…" : "Sync now"}</span>
         </button>
       </>
@@ -276,14 +304,14 @@ export function Kanban() {
       )}
       {board && (
         <div className="kb">
-          {COLUMNS.map(({ status, label }) => {
+          {COLUMNS.map(({ status, label, empty }) => {
             const tasks = columns[status];
             const capped = status === "done" && !showAllDone && tasks.length > DONE_VISIBLE_COUNT;
             const shown = capped ? tasks.slice(0, DONE_VISIBLE_COUNT) : tasks;
             return (
               <section key={status} className="kb-col" aria-labelledby={`kb-h-${status}`}>
                 <h3 id={`kb-h-${status}`} className="kb-col__head">
-                  {label} <span className="mono dim">{tasks.length}</span>
+                  {label} <span className="kb-col__count mono">{tasks.length}</span>
                 </h3>
                 {status === "todo" && editable && <AddTask onAdded={reload} />}
                 <ul className="plain kb-col__list">
@@ -291,7 +319,12 @@ export function Kanban() {
                     <TaskRow key={`${t.number}-${i}`} task={t} editable={editable} error={errors[t.number]} conflicts={conflictsByIssue.get(t.number) ?? []} onChange={change} />
                   ))}
                 </ul>
-                {tasks.length === 0 && <p className="dim">Nothing here.</p>}
+                {tasks.length === 0 && (
+                  <div className="kb-empty">
+                    <Tray size={20} aria-hidden="true" />
+                    <p>{empty}</p>
+                  </div>
+                )}
                 {status === "done" && tasks.length > DONE_VISIBLE_COUNT && (
                   <button type="button" className="btn btn--quiet" onClick={() => setShowAllDone(!showAllDone)}>
                     {showAllDone ? "Show fewer" : `Show all (${tasks.length})`}

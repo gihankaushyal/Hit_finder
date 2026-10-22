@@ -1,5 +1,5 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { Play } from "@phosphor-icons/react";
+import { Fragment, memo, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { CheckCircle, CircleNotch, Play, Prohibit, XCircle } from "@phosphor-icons/react";
 import { PanelFrame } from "../components/PanelFrame";
 import { StatusWord, type StatusKind } from "../components/StatusWord";
 import { ExternalLink, SectionState, StaleNotice } from "../components/bits";
@@ -8,6 +8,7 @@ import { subscribe } from "../lib/events";
 import { duration, relTime } from "../lib/time";
 import { CI_REFRESH_MS, useResource } from "../lib/useResource";
 import type { CiRun, TestRunState } from "../../../shared/types";
+import "./PipelineCard.css";
 
 const EARLIER_CI_RUNS = 5;
 const MAX_LOG_LINES = 500;
@@ -30,36 +31,55 @@ function localWord(t: TestRunState): { kind: StatusKind; text: string } {
   return (t.summary?.failed ?? 0) + (t.summary?.errors ?? 0) > 0 ? { kind: "fail", text: "Failed" } : { kind: "ok", text: "Passed" };
 }
 
+const EVENT_LABEL: Record<string, string> = {
+  push: "Push",
+  pull_request: "Pull request",
+  workflow_dispatch: "Manual run",
+  schedule: "Scheduled run",
+};
+const RUN_ICON_SIZE = 16;
+const eventLabel = (event: string) => EVENT_LABEL[event] ?? event.replace(/_/g, " ");
+
+/** Icon per state; the word is for assistive tech, since colour and shape are not enough on their own. */
+function RunIcon({ run }: { run: CiRun }) {
+  const word = ciWord(run);
+  const common = { size: RUN_ICON_SIZE, weight: "fill" as const, "aria-hidden": true };
+  const icon =
+    word.kind === "running" ? <CircleNotch {...common} weight="bold" className="spin" />
+    : word.kind === "ok" ? <CheckCircle {...common} />
+    : word.kind === "fail" ? <XCircle {...common} />
+    : <Prohibit {...common} weight="bold" />;
+  return (
+    <span className="ci-run__icon" data-kind={word.kind}>
+      {icon}
+      <span className="sr-only">{word.text}</span>
+    </span>
+  );
+}
+
 function GithubActions() {
   const ci = useResource<{ runs: CiRun[] }>("ci", "/api/ci", (d) => d.runs.length === 0, CI_REFRESH_MS);
-  const runs = ci.data?.runs ?? [];
-  const [first, ...rest] = runs;
+  const runs = (ci.data?.runs ?? []).slice(0, EARLIER_CI_RUNS + 1);
   return (
     <section className="subpanel" aria-labelledby="ts-gh">
       <h3 id="ts-gh" className="sub">GitHub Actions</h3>
       {ci.data === null ? (
         <SectionState res={ci} label="GitHub Actions" />
-      ) : !first ? (
+      ) : runs.length === 0 ? (
         <p className="dim">No CI runs found for this repository.</p>
       ) : (
         <>
           <StaleNotice res={ci} label="CI runs" />
-          <p className="row row--wrap">
-            <StatusWord kind={ciWord(first).kind}>{ciWord(first).text}</StatusWord>
-            <ExternalLink href={first.url} className="mono">{first.branch}</ExternalLink>
-            <span className="dim">{relTime(first.createdAt)}</span>
-          </p>
-          {rest.length > 0 && (
-            <ul className="rows" aria-label="Earlier CI runs">
-              {rest.slice(0, EARLIER_CI_RUNS).map((r) => (
-                <li key={r.id} className="row row--wrap dim">
-                  <span>{ciWord(r).text}</span>
-                  <ExternalLink href={r.url} className="mono">{r.branch}</ExternalLink>
-                  <span>{relTime(r.createdAt)}</span>
-                </li>
-              ))}
-            </ul>
-          )}
+          <ul className="plain ci-runs" aria-label="CI runs">
+            {runs.map((r) => (
+              <li key={r.id} className="ci-run">
+                <RunIcon run={r} />
+                <ExternalLink href={r.url} className="ci-run__title">{eventLabel(r.event)}</ExternalLink>
+                <span className="ci-run__branch mono" translate="no">{r.branch}</span>
+                <time className="ci-run__when dim" dateTime={r.createdAt}>{relTime(r.createdAt)}</time>
+              </li>
+            ))}
+          </ul>
         </>
       )}
     </section>
@@ -84,6 +104,23 @@ function useTestLines(tail: string[] | undefined): string[] {
   return lines;
 }
 
+const URL_SPLIT = /(https?:\/\/[^\s)]+)/;
+const SUMMARY_LINE = /\b\d+ (?:passed|failed|skipped|errors?|warnings?)\b.*\bin [\d.]+s/;
+const FAIL_LINE = /^(?:FAILED|ERROR)\b/;
+
+/** One output line. Summary lines are yellow, URLs cyan, failures red; the text itself is never altered. */
+const TermLine = memo(function TermLine({ text }: { text: string }) {
+  if (SUMMARY_LINE.test(text)) return <span className="t-sum">{text}</span>;
+  if (FAIL_LINE.test(text)) return <span className="t-fail">{text}</span>;
+  const parts = text.split(URL_SPLIT);
+  if (parts.length === 1) return <>{text}</>;
+  return (
+    <>
+      {parts.map((p, i) => (i % 2 === 1 ? <span key={i} className="t-url">{p}</span> : p))}
+    </>
+  );
+});
+
 function Log({ lines }: { lines: string[] }) {
   const ref = useRef<HTMLPreElement>(null);
   const [following, setFollowing] = useState(true);
@@ -104,12 +141,17 @@ function Log({ lines }: { lines: string[] }) {
   };
   return (
     <div className="log">
-      {/* Focusable so keyboard users can scroll it. */}
+      {/* Focusable so keyboard users can scroll it. The trailing shell prompt is drawn by CSS, so it is not part of the output text. */}
       <pre ref={ref} className="log__body mono" aria-live="off" aria-label="Test output" tabIndex={0} onScroll={onScroll}>
-        {lines.join("\n")}
+        {lines.map((line, i) => (
+          <Fragment key={i}>
+            <TermLine text={line} />
+            {i < lines.length - 1 ? "\n" : ""}
+          </Fragment>
+        ))}
       </pre>
       {!following && (
-        <button type="button" className="btn btn--quiet log__follow" onClick={() => { followRef.current = true; setFollowing(true); toTail(); }}>
+        <button type="button" className="btn btn--sm log__follow" onClick={() => { followRef.current = true; setFollowing(true); toTail(); }}>
           Follow output
         </button>
       )}
@@ -156,20 +198,22 @@ function LocalRun() {
   const s = t?.summary;
   return (
     <section className="subpanel" aria-labelledby="ts-local">
-      <h3 id="ts-local" className="sub">Local run</h3>
+      <div className="local-head">
+        <h3 id="ts-local" className="sub">Local run</h3>
+        {word && <StatusWord kind={word.kind}>{word.text}</StatusWord>}
+        {t !== null && (
+          <button type="button" className="btn btn--sm local-head__run" disabled={running || starting} onClick={run}>
+            <Play size={13} weight="fill" aria-hidden="true" />
+            <span>{running ? "Running…" : "Run tests"}</span>
+          </button>
+        )}
+      </div>
       <div role="status" aria-live="polite" className="sr-only">{announcement}</div>
       {t === null ? (
         <SectionState res={tests} label="Local run" />
       ) : (
         <>
           <StaleNotice res={tests} label="local run" />
-          <div className="row row--wrap">
-            {word && <StatusWord kind={word.kind}>{word.text}</StatusWord>}
-            <button type="button" className="btn" disabled={running || starting} onClick={run}>
-              <Play size={14} aria-hidden="true" />
-              <span>{running ? "Running…" : "Run tests"}</span>
-            </button>
-          </div>
           {startError && <p className="field__error" role="alert">{startError}</p>}
           {t.status === "idle" && <p className="dim">No local run yet. Run tests to start one.</p>}
           {t.status === "error" && t.error && <p className="field__error">{t.error}</p>}
@@ -194,17 +238,17 @@ function LocalRun() {
               )}
             </>
           )}
-          {(running || lines.length > 0) && <Log lines={lines} />}
+          <Log lines={lines} />
         </>
       )}
     </section>
   );
 }
 
-export function TestStatus() {
+export function PipelineCard() {
   return (
     <PanelFrame title="Tests" state="ready">
-      <div className="ts-grid">
+      <div className="pipeline">
         <GithubActions />
         <LocalRun />
       </div>

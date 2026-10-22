@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { Runs } from "../../web/src/panels/Runs";
+import { RunsTable as Runs } from "../../web/src/panels/RunsTable";
 import { FakeEventSource, mockApi, stubEventSource } from "./helpers";
 import type { RunResult, RunRow, RunsResponse } from "../../shared/types";
 
@@ -224,7 +224,7 @@ describe("Runs", () => {
   it("loading, empty (no directory), empty (no runs) and error states", async () => {
     mockApi({ "GET /api/runs": () => new Promise(() => {}) as never });
     const a = render(<Runs />);
-    expect(screen.getByText("Loading Runs")).toBeInTheDocument();
+    expect(screen.getByText("Loading Active Runs")).toBeInTheDocument();
     a.unmount();
     mockApi({ "GET /api/runs": { body: body([], { checkpointsDirExists: false }) } });
     const b = render(<Runs />);

@@ -1,52 +1,86 @@
-/* Design tokens. Dark is the default; light swaps the same names. */
+/* Design tokens. Dark is the default; light swaps the same names.
+   tests/web/contrast.test.ts parses this file: keep the tested names as 6-digit hex
+   and keep the media-query light block identical to the explicit light block. */
 :root {
   color-scheme: dark;
-  --bg: #0e1113;
-  --surface: #14181b;
-  --surface-2: #1a1f23;
-  --rule: #262d33;
-  --text: #e4e7e9;
-  --text-dim: #9aa4ab;
-  --accent: #f0a020;
-  --accent-text: #14181b;
-  --fail: #e5604d;
-  --ok: #7fb88a;
-  --radius: 2px;
-  --font-sans: "IBM Plex Sans", system-ui, sans-serif;
-  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+  --bg: #0b0f17;
+  --surface: #131722;
+  --surface-2: #1c2230;
+  --text: #f1f5f9;
+  --text-dim: #94a3b8;
+  --accent: #60a5fa;
+  --accent-text: #0b0f17;
+  --fail: #f87171;
+  --ok: #34d399;
+  /* Status colours outside the contrast-tested set; each is paired with a word or icon. */
+  --warn: #fbbf24;
+  --merged: #c084fc;
+  --info: #38bdf8;
+  --code: #7dd3fc;
+  /* Decorative text only (hashes, n/a); below AA, never used for content a reader needs. */
+  --text-faint: #64748b;
+  --rule: rgba(255, 255, 255, 0.08);
+  --rule-strong: rgba(255, 255, 255, 0.16);
+  --shadow: 0 1px 2px rgba(2, 6, 23, 0.4);
+  --terminal: #0a0d13;
+  --font-sans: "Geist Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  /* One radius scale: controls, then panels. Pills use 999px. */
+  --radius: 6px;
+  --radius-lg: 10px;
+  --ease: cubic-bezier(0.32, 0.72, 0, 1);
   --s1: 4px;
   --s2: 8px;
   --s3: 12px;
   --s4: 16px;
   --s5: 24px;
+  --nav-h: 52px;
+  --z-nav: 20;
+  --z-drawer: 30;
 }
 
 :root[data-theme="light"] {
   color-scheme: light;
-  --bg: #f4f5f5;
-  --surface: #fcfcfc;
-  --surface-2: #eef0f1;
-  --rule: #d5dadd;
-  --text: #15191c;
-  --text-dim: #56616a;
-  --accent: #a65f00;
-  --accent-text: #fcfcfc;
-  --fail: #b3261e;
-  --ok: #2e6b3c;
+  --bg: #f6f8fa;
+  --surface: #ffffff;
+  --surface-2: #eef1f4;
+  --text: #0f172a;
+  --text-dim: #475569;
+  --accent: #1d4ed8;
+  --accent-text: #ffffff;
+  --fail: #b91c1c;
+  --ok: #047857;
+  --warn: #b45309;
+  --merged: #7e22ce;
+  --info: #0369a1;
+  --code: #0369a1;
+  --text-faint: #64748b;
+  --rule: rgba(15, 23, 42, 0.12);
+  --rule-strong: rgba(15, 23, 42, 0.22);
+  --shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
+  --terminal: #0f172a;
 }
 
 @media (prefers-color-scheme: light) {
   :root:not([data-theme]) {
     color-scheme: light;
-    --bg: #f4f5f5;
-    --surface: #fcfcfc;
-    --surface-2: #eef0f1;
-    --rule: #d5dadd;
-    --text: #15191c;
-    --text-dim: #56616a;
-    --accent: #a65f00;
-    --accent-text: #fcfcfc;
-    --fail: #b3261e;
-    --ok: #2e6b3c;
+    --bg: #f6f8fa;
+    --surface: #ffffff;
+    --surface-2: #eef1f4;
+    --text: #0f172a;
+    --text-dim: #475569;
+    --accent: #1d4ed8;
+    --accent-text: #ffffff;
+    --fail: #b91c1c;
+    --ok: #047857;
+    --warn: #b45309;
+    --merged: #7e22ce;
+    --info: #0369a1;
+    --code: #0369a1;
+    --text-faint: #64748b;
+    --rule: rgba(15, 23, 42, 0.12);
+    --rule-strong: rgba(15, 23, 42, 0.22);
+    --shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
+    --terminal: #0f172a;
   }
 }

@@ -1,30 +1,25 @@
 import { useState } from "react";
-import { CheckSquare, Square } from "@phosphor-icons/react";
+import { CheckCircle, FileText, GitMerge, GitPullRequest, Hourglass, ProhibitInset, XCircle } from "@phosphor-icons/react";
+import { Badge } from "../components/Badge";
+import { DiffChips } from "../components/DiffChips";
 import { PanelFrame } from "../components/PanelFrame";
-import { StatusWord } from "../components/StatusWord";
 import { ExternalLink, StaleNotice, absoluteTime, panelState } from "../components/bits";
+import { renderInline } from "../lib/inlineMarkdown";
 import { relTime } from "../lib/time";
 import { PRS_REFRESH_MS, useResource } from "../lib/useResource";
 import type { PrChecks, PrDetail, PrSummary, PrsResponse } from "../../../shared/types";
+import "./PrCard.css";
 
 /** Longer file lists are cut to this many rows until the user asks for all of them. */
 export const FILES_COLLAPSED_COUNT = 8;
-const ICON_SIZE = 14;
+const ICON_SIZE = 13;
 
 const isEmpty = (d: PrsResponse) => d.latest === null && d.open.length === 0 && d.recent.length === 0;
 
 function Branches({ head, base }: { head: string; base: string }) {
   return (
-    <span>
-      <span className="mono">{head}</span> into <span className="mono">{base}</span>
-    </span>
-  );
-}
-
-function Stats({ pr }: { pr: PrSummary }) {
-  return (
-    <span className="mono">
-      <span className="add">+{pr.additions}</span> <span className="del">-{pr.deletions}</span>
+    <span className="pr-branches">
+      <span className="pr-branch mono">{head}</span> into <span className="pr-branch mono">{base}</span>
     </span>
   );
 }
@@ -37,12 +32,22 @@ function When({ iso }: { iso: string }) {
   );
 }
 
+function StateBadge({ state }: { state: PrSummary["state"] }) {
+  if (state === "MERGED") return <Badge tone="merged" icon={<GitMerge size={ICON_SIZE} weight="bold" aria-hidden="true" />}>Merged</Badge>;
+  if (state === "OPEN") return <Badge tone="open" icon={<GitPullRequest size={ICON_SIZE} weight="bold" aria-hidden="true" />}>Open</Badge>;
+  return <Badge tone="fail" icon={<ProhibitInset size={ICON_SIZE} weight="bold" aria-hidden="true" />}>Closed</Badge>;
+}
+
 function Checks({ checks }: { checks: PrChecks | undefined }) {
   if (!checks || checks.state === "none") return <span className="dim">No checks reported</span>;
   const total = checks.passing + checks.failing + checks.pending;
-  if (checks.state === "failing") return <StatusWord kind="fail">Checks failing ({checks.failing} of {total})</StatusWord>;
-  if (checks.state === "pending") return <StatusWord kind="running">Checks running ({checks.pending} of {total})</StatusWord>;
-  return <StatusWord kind="ok">Checks passed ({checks.passing})</StatusWord>;
+  if (checks.state === "failing") {
+    return <Badge tone="fail" icon={<XCircle size={ICON_SIZE} weight="bold" aria-hidden="true" />}>Checks failing ({checks.failing} of {total})</Badge>;
+  }
+  if (checks.state === "pending") {
+    return <Badge tone="info" icon={<Hourglass size={ICON_SIZE} weight="bold" aria-hidden="true" />}>Checks running ({checks.pending} of {total})</Badge>;
+  }
+  return <Badge tone="ok" icon={<CheckCircle size={ICON_SIZE} weight="bold" aria-hidden="true" />}>Checks passed ({checks.passing})</Badge>;
 }
 
 function Files({ files }: { files: PrDetail["files"] }) {
@@ -50,11 +55,12 @@ function Files({ files }: { files: PrDetail["files"] }) {
   const shown = all ? files : files.slice(0, FILES_COLLAPSED_COUNT);
   return (
     <>
-      <ul className="plain mono" aria-label="Touched files">
+      <ul className="plain pr-files" aria-label="Touched files">
         {shown.map((f) => (
-          <li key={f.path} className="file-row">
-            <span className="file-row__path">{f.path}</span>
-            <span><span className="add">+{f.additions}</span> <span className="del">-{f.deletions}</span></span>
+          <li key={f.path} className="pr-file">
+            <FileText size={14} aria-hidden="true" className="pr-file__icon" />
+            <span className="pr-file__path mono" translate="no">{f.path}</span>
+            <DiffChips additions={f.additions} deletions={f.deletions} />
           </li>
         ))}
       </ul>
@@ -67,7 +73,22 @@ function Files({ files }: { files: PrDetail["files"] }) {
   );
 }
 
-export function LatestPr() {
+function TestPlan({ items }: { items: PrDetail["testPlan"] }) {
+  return (
+    <ul className="plain pr-plan" aria-label="Test plan">
+      {items.map((t, i) => (
+        <li key={i}>
+          <label className="pr-check" data-checked={t.checked}>
+            <input type="checkbox" name={`plan-${i}`} checked={t.checked} disabled readOnly />
+            <span className="pr-check__text">{t.checked ? <s>{renderInline(t.text)}</s> : renderInline(t.text)}</span>
+          </label>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+export function PrCard() {
   const prs = useResource<PrsResponse>("prs", "/api/prs", isEmpty, PRS_REFRESH_MS);
   const state = panelState(prs);
   const data = prs.data;
@@ -76,12 +97,12 @@ export function LatestPr() {
     <PanelFrame title="Latest pull request" state={state} error={prs.error ?? undefined} onRetry={prs.reload}>
       <StaleNotice res={prs} label="pull requests" />
       {data && data.open.length > 0 && (
-        <ul className="rows" aria-label="Open pull requests">
+        <ul className="rows pr-open" aria-label="Open pull requests">
           {data.open.map((p) => (
             <li key={p.number} className="row row--wrap">
-              <StatusWord kind="attention">Open</StatusWord>
+              <Badge tone="open" icon={<GitPullRequest size={ICON_SIZE} weight="bold" aria-hidden="true" />}>Open</Badge>
               <ExternalLink href={p.url}>{p.title}</ExternalLink>
-              <span className="mono dim">#{p.number}</span>
+              <span className="mono faint">#{p.number}</span>
               <span className="dim"><Branches head={p.headRefName} base={p.baseRefName} /></span>
               <Checks checks={p.checks} />
             </li>
@@ -91,39 +112,35 @@ export function LatestPr() {
       {latest ? (
         <article className="pr">
           <h3 className="pr__title">
-            <ExternalLink href={latest.url}>{latest.title}</ExternalLink> <span className="mono dim">#{latest.number}</span>
+            <span className="mono faint">#{latest.number}</span> <ExternalLink href={latest.url}>{latest.title}</ExternalLink>
           </h3>
+          <div className="pr__badges">
+            <StateBadge state={latest.state} />
+            <Checks checks={latest.checks} />
+            <DiffChips additions={latest.additions} deletions={latest.deletions} />
+          </div>
           <p className="meta">
             <Branches head={latest.headRefName} base={latest.baseRefName} />
             {latest.mergedAt && <span>merged <When iso={latest.mergedAt} /></span>}
-            <Stats pr={latest} />
             <span><span className="mono">{latest.changedFiles}</span> {latest.changedFiles === 1 ? "file" : "files"}</span>
           </p>
           {latest.summary.length > 0 && (
             <>
               <h4 className="sub">What it did</h4>
               <ul className="bullets" aria-label="What it did">
-                {latest.summary.map((s, i) => <li key={i}>{s}</li>)}
+                {latest.summary.map((s, i) => <li key={i}>{renderInline(s)}</li>)}
               </ul>
             </>
           )}
           {latest.testPlan.length > 0 && (
             <>
               <h4 className="sub">Test plan</h4>
-              <ul className="plain" aria-label="Test plan">
-                {latest.testPlan.map((t, i) => (
-                  <li key={i} className="check-row">
-                    {t.checked ? <CheckSquare size={ICON_SIZE} aria-hidden="true" /> : <Square size={ICON_SIZE} aria-hidden="true" />}
-                    <span className="sr-only">{t.checked ? "Done: " : "Not done: "}</span>
-                    {t.checked ? <s className="dim">{t.text}</s> : <span>{t.text}</span>}
-                  </li>
-                ))}
-              </ul>
+              <TestPlan items={latest.testPlan} />
             </>
           )}
           {latest.files.length > 0 && (
             <>
-              <h4 className="sub">Files <span className="mono dim">{latest.files.length}</span></h4>
+              <h4 className="sub">Files ({latest.files.length})</h4>
               <Files files={latest.files} />
             </>
           )}
@@ -137,7 +154,7 @@ export function LatestPr() {
           <ul className="rows" aria-label="Earlier pull requests">
             {data.recent.map((p) => (
               <li key={p.number} className="row row--wrap">
-                <span className="mono dim">#{p.number}</span>
+                <span className="mono faint">#{p.number}</span>
                 <ExternalLink href={p.url}>{p.title}</ExternalLink>
                 {p.mergedAt && <span className="dim"><When iso={p.mergedAt} /></span>}
               </li>

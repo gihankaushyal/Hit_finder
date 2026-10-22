@@ -2,7 +2,10 @@ import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Approvals } from "../../web/src/panels/Approvals";
-import { TopBar } from "../../web/src/panels/TopBar";
+import { DashboardNav } from "../../web/src/components/DashboardNav";
+
+/** The top bar as the tests use it: nothing opens a drawer or changes tab. */
+const TopBar = () => <DashboardNav tab="overview" onTab={() => {}} agentsOpen={false} onToggleAgents={() => {}} />;
 import { FakeEventSource, mockApi, stubEventSource } from "./helpers";
 import type { Approval } from "../../shared/types";
 
@@ -157,17 +160,18 @@ describe("Approvals", () => {
 describe("top bar counter", () => {
   const routes = { "GET /api/repo": { body: { branch: "phase-05", commit: "abc" } }, "GET /api/ci": { body: { runs: [] } }, "GET /api/tests": { body: { status: "idle" } } };
 
-  it("shows how many approvals are waiting, as a link to the cards", async () => {
+  it("shows how many approvals are waiting, on the button that opens the agents drawer", async () => {
     mockApi({ ...routes, "GET /api/approvals": { body: { approvals: [card("a1"), card("a2")] } } });
     render(<TopBar />);
-    const link = await screen.findByRole("link", { name: /2 waiting for approval/ });
-    expect(link).toHaveAttribute("href", "#approvals");
+    const button = await screen.findByRole("button", { name: "Agents, 2 waiting for approval" });
+    expect(button).toHaveAttribute("aria-controls", "agents-drawer");
   });
 
   it("is absent when nothing is waiting", async () => {
     mockApi({ ...routes, "GET /api/approvals": none });
     render(<TopBar />);
     await screen.findByText("phase-05");
-    expect(screen.queryByRole("link", { name: /waiting for approval/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /waiting for approval/ })).toBeNull();
+    expect(screen.getByRole("button", { name: "Agents" })).toBeInTheDocument();
   });
 });

@@ -11,9 +11,9 @@ export function ThemeToggle() {
     saveTheme(next);
   };
   return (
-    <button type="button" className="btn btn--icon" aria-pressed={theme === "light"} onClick={toggle}>
+    <button type="button" className="btn btn--sm btn--icon" aria-pressed={theme === "light"} onClick={toggle}>
       {theme === "light" ? <Sun size={16} aria-hidden="true" /> : <Moon size={16} aria-hidden="true" />}
-      <span>Light theme</span>
+      <span className="sr-only">Light theme</span>
     </button>
   );
 }

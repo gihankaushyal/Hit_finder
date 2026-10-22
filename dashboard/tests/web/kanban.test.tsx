@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { Kanban, DONE_VISIBLE_COUNT } from "../../web/src/panels/Kanban";
+import { KanbanBoard as Kanban, DONE_VISIBLE_COUNT } from "../../web/src/panels/KanbanBoard";
 import { FakeEventSource, deferred, mockApi, stubEventSource, type Handler } from "./helpers";
 import type { Board, Task, TaskStatus } from "../../shared/types";
 
@@ -168,12 +168,14 @@ describe("Kanban changes", () => {
   it("the Move select is the keyboard path and PATCHes the chosen status", async () => {
     const { api } = server(boardOf(standard()));
     render(<Kanban />);
+    await userEvent.click(await screen.findByRole("button", { name: "Actions for Write docs" }));
     const sel = await screen.findByRole("combobox", { name: "Move Write docs" });
     expect(sel).toHaveValue("todo");
     await userEvent.selectOptions(sel, "blocked");
     expect(api.calls.find((c) => c.method === "PATCH")).toMatchObject({ path: "/api/kanban/tasks/1", body: { status: "blocked" } });
     expect(within(column("Blocked")).getByText("Write docs")).toBeInTheDocument();
-    expect(screen.getByRole("combobox", { name: "Move Write docs" })).toHaveFocus();
+    // The menu closes and the card changes column, so focus lands on its actions button.
+    expect(screen.getByRole("button", { name: "Actions for Write docs" })).toHaveFocus();
   });
 
   it("two quick changes to one task, with replies out of order, end in the last chosen column", async () => {
@@ -217,6 +219,7 @@ describe("Kanban changes", () => {
     });
     render(<Kanban />);
     await userEvent.click(await screen.findByRole("checkbox", { name: "Mark Write docs done" }));
+    await userEvent.click(screen.getByRole("button", { name: "Actions for Write docs" }));
     await userEvent.selectOptions(screen.getByRole("combobox", { name: "Move Write docs" }), "blocked");
     await waitFor(() => expect(state.board.columns.blocked.map((t) => t.title)).toContain("Write docs"));
     expect(within(column("Blocked")).getByText("Write docs")).toBeInTheDocument();
