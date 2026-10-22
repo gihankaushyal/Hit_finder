@@ -33,7 +33,7 @@
 }
 .nav__tabs a:hover { color: var(--text); }
 .nav__tabs a::after {
-  content: ""; position: absolute; left: var(--s2); right: var(--s2); bottom: -1px; height: 2px; border-radius: 2px;
+  content: ""; position: absolute; left: var(--s2); right: var(--s2); bottom: 0; height: 2px; border-radius: 2px;
   background: var(--accent); transform: scaleX(0); transition: transform 220ms var(--ease);
 }
 .nav__tabs a[aria-current="page"] { color: var(--text); }

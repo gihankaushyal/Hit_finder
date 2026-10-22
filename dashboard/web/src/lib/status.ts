@@ -6,21 +6,26 @@ export interface StatusReading {
   text: string;
 }
 
-/** The newest CI run, as one word for the top bar. */
-export function ciWord(runs: CiRun[] | undefined): StatusReading {
-  const run = runs?.[0];
-  if (!run) return { kind: "idle", text: "No runs" };
+/** One CI run as one word. Used by the nav badge and the Tests card, so both always agree. */
+export function ciRunWord(run: CiRun): StatusReading {
   if (run.status !== "completed") return { kind: "running", text: "Running" };
-  if (run.conclusion === "success") return { kind: "ok", text: "Passing" };
-  if (run.conclusion === "cancelled" || run.conclusion === "skipped") return { kind: "idle", text: "Cancelled" };
-  return { kind: "fail", text: "Failing" };
+  if (run.conclusion === "success") return { kind: "ok", text: "Passed" };
+  if (run.conclusion === "cancelled") return { kind: "idle", text: "Cancelled" };
+  if (run.conclusion === "skipped") return { kind: "idle", text: "Skipped" };
+  return { kind: "fail", text: "Failed" };
 }
 
-/** The local test run, as one word for the top bar. */
+/** The newest CI run, as one word for the nav. */
+export function ciWord(runs: CiRun[] | undefined): StatusReading {
+  const run = runs?.[0];
+  return run ? ciRunWord(run) : { kind: "idle", text: "No runs" };
+}
+
+/** The local test run, as one word. */
 export function testWord(t: TestRunState | null): StatusReading {
   if (!t || t.status === "idle") return { kind: "idle", text: "Not run" };
   if (t.status === "running") return { kind: "running", text: "Running" };
   if (t.status === "error") return { kind: "fail", text: "Error" };
   const bad = (t.summary?.failed ?? 0) + (t.summary?.errors ?? 0);
-  return bad > 0 ? { kind: "fail", text: "Failing" } : { kind: "ok", text: "Passing" };
+  return bad > 0 ? { kind: "fail", text: "Failed" } : { kind: "ok", text: "Passed" };
 }

@@ -168,6 +168,7 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .drawer__hint { font-size: 0.85rem; }
 .term { height: 17em; margin: 0 0 var(--s3); background: var(--terminal); border: 1px solid var(--rule-strong); border-radius: var(--radius); padding: var(--s1); overflow: hidden; min-width: 0; }
 .drawer--tall .term { height: 55vh; }
+.drawer__spacer { flex: 1; }
 .drawer__title { font-size: 0.95rem; font-weight: 600; }
 @media (max-width: 1099px) {
   .drawer { min-height: 40px; padding: var(--s2) var(--s4); }

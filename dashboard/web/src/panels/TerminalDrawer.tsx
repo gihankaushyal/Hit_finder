@@ -223,7 +223,7 @@ export function TerminalDrawer({ backoffMs = DEFAULT_BACKOFF_MS, stableMs = STAB
         {word && <StatusWord kind={word.kind}>{word.text}</StatusWord>}
         {off && <span className="dim">The terminal is switched off (DASH_TERMINAL=off).</span>}
         {wanted && <span className="dim drawer__hint">Your shell keeps running in tmux when you close this. F6 leaves the terminal.</span>}
-        <span className="topbar__spacer" />
+        <span className="drawer__spacer" />
         {wanted && (
           <>
             <button type="button" className="btn btn--quiet" aria-pressed={tall} onClick={() => setTall((v) => !v)}>

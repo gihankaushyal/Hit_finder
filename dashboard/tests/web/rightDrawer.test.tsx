@@ -51,4 +51,27 @@ describe("RightDrawer", () => {
     await userEvent.keyboard("{Escape}");
     expect(onClose).not.toHaveBeenCalled();
   });
+
+  it("is modal: Tab wraps inside the drawer in both directions", async () => {
+    render(<RightDrawer open onClose={() => {}} />);
+    const drawer = document.getElementById("agents-drawer")!;
+    expect(drawer).toHaveAttribute("aria-modal", "true");
+    const stops = Array.from(drawer.querySelectorAll<HTMLElement>("button:not([disabled]), input, select, textarea, a[href]"));
+    const last = stops[stops.length - 1];
+    last.focus();
+    await userEvent.tab();
+    expect(document.activeElement).toBe(stops[0]);
+    await userEvent.tab({ shift: true });
+    expect(document.activeElement).toBe(last);
+  });
+
+  it("does not close when Escape is pressed inside a select", async () => {
+    const onClose = vi.fn();
+    render(<RightDrawer open onClose={onClose} />);
+    const select = document.createElement("select");
+    document.getElementById("agents-drawer")!.appendChild(select);
+    select.focus();
+    await userEvent.keyboard("{Escape}");
+    expect(onClose).not.toHaveBeenCalled();
+  });
 });

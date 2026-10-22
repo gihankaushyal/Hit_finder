@@ -75,7 +75,7 @@ test.describe("panels with data", () => {
 
   test("the top bar shows the branch of the repository", async ({ page }) => {
     await open(page, dashboard());
-    await expect(page.getByLabel("Current branch")).toHaveText("e2e-branch");
+    await expect(page.locator(".nav__branch")).toContainText("e2e-branch");
   });
 
   test("latest pull request shows the summary bullets and the open PR's check state", async ({ page }) => {

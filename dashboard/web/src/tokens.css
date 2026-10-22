@@ -17,8 +17,8 @@
   --merged: #c084fc;
   --info: #38bdf8;
   --code: #7dd3fc;
-  /* Decorative text only (hashes, n/a); below AA, never used for content a reader needs. */
-  --text-faint: #64748b;
+  /* Muted text for PR numbers, n/a and icons; still above 4.5:1 on surface and surface-2 in both themes. */
+  --text-faint: #7c8aa0;
   --rule: rgba(255, 255, 255, 0.08);
   --rule-strong: rgba(255, 255, 255, 0.16);
   --shadow: 0 1px 2px rgba(2, 6, 23, 0.4);
@@ -54,7 +54,7 @@
   --merged: #7e22ce;
   --info: #0369a1;
   --code: #0369a1;
-  --text-faint: #64748b;
+  --text-faint: #5b6a7e;
   --rule: rgba(15, 23, 42, 0.12);
   --rule-strong: rgba(15, 23, 42, 0.22);
   --shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
@@ -77,7 +77,7 @@
     --merged: #7e22ce;
     --info: #0369a1;
     --code: #0369a1;
-    --text-faint: #64748b;
+    --text-faint: #5b6a7e;
     --rule: rgba(15, 23, 42, 0.12);
     --rule-strong: rgba(15, 23, 42, 0.22);
     --shadow: 0 1px 2px rgba(15, 23, 42, 0.08);

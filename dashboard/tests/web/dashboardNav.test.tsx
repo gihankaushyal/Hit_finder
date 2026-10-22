@@ -28,10 +28,11 @@ describe("DashboardNav", () => {
     mockApi(routes);
     mount();
     expect(screen.getByRole("heading", { level: 1, name: "Hit_finder" })).toBeInTheDocument();
-    expect(await screen.findByLabelText("Current branch")).toHaveTextContent("phase-05");
+    expect(await screen.findByText("phase-05")).toBeInTheDocument();
+    expect(screen.getByText(/Current branch/)).toBeInTheDocument();
     expect(screen.getByText("610ae0e")).toBeInTheDocument();
-    expect(await screen.findByText("CI Passing")).toBeInTheDocument();
-    expect(await screen.findByText("Tests Passing")).toBeInTheDocument();
+    expect(await screen.findByText("CI Passed")).toBeInTheDocument();
+    expect(await screen.findByText("Tests Passed")).toBeInTheDocument();
   });
 
   it("lists the three tabs as links and marks the current one", () => {
@@ -80,6 +81,11 @@ describe("DashboardNav", () => {
   it("marks a failing or still-running state with its word, not just a colour", async () => {
     mockApi({ ...routes, "GET /api/ci": { body: { runs: [{ id: 2, status: "completed", conclusion: "failure", branch: "x", event: "push", createdAt: "2026-10-01T10:00:00Z", url: "https://x/2" }] } } });
     mount();
-    expect(await screen.findByText("CI Failing")).toBeInTheDocument();
+    expect(await screen.findByText("CI Failed")).toBeInTheDocument();
+  });
+
+  it("names the Agents button even with no approvals waiting (its text is hidden on phones)", () => {
+    mount();
+    expect(screen.getByRole("button", { name: "Agents" })).toBeInTheDocument();
   });
 });

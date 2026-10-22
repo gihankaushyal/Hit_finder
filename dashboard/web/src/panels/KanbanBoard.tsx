@@ -82,6 +82,10 @@ function TaskRow({ task, editable, error, conflicts, onChange }: { task: Task; e
   const done = task.status === "done";
   const [menuOpen, setMenuOpen] = useState(false);
   const menuId = useId();
+  const rowId = useId();
+  // Local-only tasks all have number 0, so they need their own id stem.
+  const key = task.number > 0 ? String(task.number) : `local${rowId.replace(/:/g, "")}`;
+  const moreButton = useRef<HTMLButtonElement>(null);
   const card = useRef<HTMLLIElement>(null);
   const title = done ? <s className="dim">{task.title}</s> : <span>{task.title}</span>;
   useEffect(() => {
@@ -94,14 +98,14 @@ function TaskRow({ task, editable, error, conflicts, onChange }: { task: Task; e
   }, [menuOpen]);
   const closeMenu = () => {
     setMenuOpen(false);
-    document.getElementById(`kb-${task.number}-move`)?.focus();
+    moreButton.current?.focus();
   };
   return (
     <li ref={card} className="kb-card" onKeyDown={(e) => { if (e.key === "Escape" && menuOpen) closeMenu(); }}>
       <div className="kb-card__main">
         {editable && (
           <input
-            type="checkbox" id={`kb-${task.number}-check`} name={`done-${task.number}`} checked={done}
+            type="checkbox" id={`kb-${key}-check`} name={`done-${key}`} checked={done}
             aria-label={`Mark ${task.title} done`}
             onChange={() => onChange(task, done ? "todo" : "done", "check")}
           />
@@ -109,7 +113,7 @@ function TaskRow({ task, editable, error, conflicts, onChange }: { task: Task; e
         <span className="kb-card__title">{title}</span>
         {editable && (
           <button
-            type="button" id={`kb-${task.number}-move`} className="kb-card__more" aria-label={`Actions for ${task.title}`}
+            ref={moreButton} type="button" id={`kb-${key}-move`} className="kb-card__more" aria-label={`Actions for ${task.title}`}
             aria-expanded={menuOpen} aria-controls={menuId} onClick={() => setMenuOpen(!menuOpen)}
           >
             <DotsThree size={18} weight="bold" aria-hidden="true" />
@@ -130,9 +134,9 @@ function TaskRow({ task, editable, error, conflicts, onChange }: { task: Task; e
       </div>
       {menuOpen && (
         <div id={menuId} className="kb-card__menu">
-          <label htmlFor={`kb-${task.number}-movesel`}>Move to</label>
+          <label htmlFor={`kb-${key}-movesel`}>Move to</label>
           <select
-            id={`kb-${task.number}-movesel`} name={`move-${task.number}`} autoComplete="off" aria-label={`Move ${task.title}`} value={task.status} autoFocus
+            id={`kb-${key}-movesel`} name={`move-${key}`} autoComplete="off" aria-label={`Move ${task.title}`} value={task.status} autoFocus
             onChange={(e) => { setMenuOpen(false); onChange(task, e.target.value as TaskStatus, "move"); }}
           >
             {COLUMNS.map((c) => <option key={c.status} value={c.status}>{c.label}</option>)}

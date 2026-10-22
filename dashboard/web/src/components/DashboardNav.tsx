@@ -65,7 +65,8 @@ export const DashboardNav = forwardRef<HTMLButtonElement, NavProps>(function Das
         </h1>
         <span className="nav__branch mono" translate="no">
           <GitBranch size={13} aria-hidden="true" />
-          <span aria-label="Current branch">{repo.data?.branch ?? "unknown"}</span>
+          <span className="sr-only">Current branch: </span>
+          <span>{repo.data?.branch ?? "unknown"}</span>
         </span>
         {repo.data?.commit && (
           <span className="nav__commit">
@@ -80,7 +81,7 @@ export const DashboardNav = forwardRef<HTMLButtonElement, NavProps>(function Das
         <span className="nav__spacer" />
         <button
           ref={agentsButton} type="button" className="btn btn--sm nav__agents" aria-haspopup="dialog" aria-expanded={agentsOpen}
-          aria-controls="agents-drawer" aria-label={waiting > 0 ? `Agents, ${waiting} waiting for approval` : undefined} onClick={onToggleAgents}
+          aria-controls="agents-drawer" aria-label={waiting > 0 ? `Agents, ${waiting} waiting for approval` : "Agents"} onClick={onToggleAgents}
         >
           <Robot size={15} aria-hidden="true" />
           <span>Agents</span>

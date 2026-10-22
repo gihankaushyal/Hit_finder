@@ -1,9 +1,10 @@
 import { Fragment, memo, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { CheckCircle, CircleNotch, Play, Prohibit, XCircle } from "@phosphor-icons/react";
 import { PanelFrame } from "../components/PanelFrame";
-import { StatusWord, type StatusKind } from "../components/StatusWord";
+import { StatusWord } from "../components/StatusWord";
 import { ExternalLink, SectionState, StaleNotice } from "../components/bits";
 import { ApiError, apiSend } from "../lib/api";
+import { ciRunWord, testWord } from "../lib/status";
 import { subscribe } from "../lib/events";
 import { duration, relTime } from "../lib/time";
 import { CI_REFRESH_MS, useResource } from "../lib/useResource";
@@ -17,20 +18,6 @@ const TAIL_SLACK_PX = 6;
 const SHORT_SHA = 7;
 const ALREADY_RUNNING = "A test run is already in progress";
 
-function ciWord(run: CiRun): { kind: StatusKind; text: string } {
-  if (run.status !== "completed") return { kind: "running", text: "Running" };
-  if (run.conclusion === "success") return { kind: "ok", text: "Passed" };
-  if (run.conclusion === "cancelled" || run.conclusion === "skipped") return { kind: "idle", text: run.conclusion === "skipped" ? "Skipped" : "Cancelled" };
-  return { kind: "fail", text: "Failed" };
-}
-
-function localWord(t: TestRunState): { kind: StatusKind; text: string } {
-  if (t.status === "idle") return { kind: "idle", text: "Not run" };
-  if (t.status === "running") return { kind: "running", text: "Running" };
-  if (t.status === "error") return { kind: "fail", text: "Error" };
-  return (t.summary?.failed ?? 0) + (t.summary?.errors ?? 0) > 0 ? { kind: "fail", text: "Failed" } : { kind: "ok", text: "Passed" };
-}
-
 const EVENT_LABEL: Record<string, string> = {
   push: "Push",
   pull_request: "Pull request",
@@ -42,7 +29,7 @@ const eventLabel = (event: string) => EVENT_LABEL[event] ?? event.replace(/_/g, 
 
 /** Icon per state; the word is for assistive tech, since colour and shape are not enough on their own. */
 function RunIcon({ run }: { run: CiRun }) {
-  const word = ciWord(run);
+  const word = ciRunWord(run);
   const common = { size: RUN_ICON_SIZE, weight: "fill" as const, "aria-hidden": true };
   const icon =
     word.kind === "running" ? <CircleNotch {...common} weight="bold" className="spin" />
@@ -194,7 +181,7 @@ function LocalRun() {
   };
 
   const running = t?.status === "running";
-  const word = t ? localWord(t) : null;
+  const word = t ? testWord(t) : null;
   const s = t?.summary;
   return (
     <section className="subpanel" aria-labelledby="ts-local">
