@@ -40,4 +40,16 @@ describe("renderInline", () => {
     expect(Array.from(p.querySelectorAll("code")).map((c) => c.textContent)).toEqual(["a", "b"]);
     expect(Array.from(p.querySelectorAll("strong")).map((c) => c.textContent)).toEqual(["c", "d"]);
   });
+
+  it("renders a code span inside bold", () => {
+    const p = html("**use `x` here**");
+    expect(p.querySelector("strong code")?.textContent).toBe("x");
+    expect(p.textContent).toBe("use x here");
+  });
+
+  it("does not turn plain text that merely starts and ends with backticks into code", () => {
+    const p = html("`a\nb`");
+    expect(p.querySelector("code")).toBeNull();
+    expect(p.textContent).toBe("`a\nb`");
+  });
 });

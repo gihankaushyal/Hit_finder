@@ -78,19 +78,27 @@ function AddTask({ onAdded }: { onAdded: () => void }) {
   );
 }
 
-/** Local-only tasks share number 0, so their control is found through the card that shows the title. */
-function localControl(title: string, control: Control): HTMLElement | null {
-  const card = Array.from(document.querySelectorAll<HTMLElement>(".kb-card")).find((c) => c.querySelector(".kb-card__title")?.textContent === title);
-  return card?.querySelector<HTMLElement>(control === "move" ? ".kb-card__more" : 'input[type="checkbox"]') ?? null;
+/** A stable, id-safe name for each card. Issues use their number; local-only tasks (number 0) use their title plus a count for repeats. */
+function rowKeys(tasks: Task[]): Map<Task, string> {
+  const seen = new Map<string, number>();
+  const keys = new Map<Task, string>();
+  for (const t of tasks) {
+    if (t.number > 0) {
+      keys.set(t, String(t.number));
+      continue;
+    }
+    const stem = `local-${t.title.replace(/[^A-Za-z0-9]+/g, "-")}`;
+    const n = seen.get(stem) ?? 0;
+    seen.set(stem, n + 1);
+    keys.set(t, `${stem}-${n}`);
+  }
+  return keys;
 }
 
-function TaskRow({ task, editable, error, conflicts, onChange }: { task: Task; editable: boolean; error?: string; conflicts: string[]; onChange: (t: Task, s: TaskStatus, c: Control) => void }) {
+function TaskRow({ task, rowKey: key, editable, error, conflicts, onChange }: { task: Task; rowKey: string; editable: boolean; error?: string; conflicts: string[]; onChange: (t: Task, s: TaskStatus, c: Control) => void }) {
   const done = task.status === "done";
   const [menuOpen, setMenuOpen] = useState(false);
   const menuId = useId();
-  const rowId = useId();
-  // Local-only tasks all have number 0, so they need their own id stem.
-  const key = task.number > 0 ? String(task.number) : `local${rowId.replace(/:/g, "")}`;
   const moreButton = useRef<HTMLButtonElement>(null);
   const card = useRef<HTMLLIElement>(null);
   const title = done ? <s className="dim">{task.title}</s> : <span>{task.title}</span>;
@@ -173,7 +181,7 @@ export function KanbanBoard() {
   const latestSeq = useRef(new Map<number, number>());
   // Requests for one task run one after another, so the server applies them in the order chosen.
   const chains = useRef(new Map<number, Promise<void>>());
-  const focusAfter = useRef<{ number: number; title: string; control: Control } | null>(null);
+  const focusAfter = useRef<{ key: string; control: Control } | null>(null);
 
   const { reload } = res;
   useEffect(() => {
@@ -187,7 +195,7 @@ export function KanbanBoard() {
   useEffect(() => {
     const f = focusAfter.current;
     if (!f) return;
-    const el = f.number > 0 ? document.getElementById(`kb-${f.number}-${f.control}`) : localControl(f.title, f.control);
+    const el = document.getElementById(`kb-${f.key}-${f.control}`);
     if (el) {
       focusAfter.current = null;
       if (document.activeElement !== el) el.focus();
@@ -199,7 +207,7 @@ export function KanbanBoard() {
       if (status === task.status) return;
       const mine = ++seq.current;
       latestSeq.current.set(task.number, mine);
-      focusAfter.current = { number: task.number, title: task.title, control };
+      focusAfter.current = { key: keyOf.current.get(task) ?? String(task.number), control };
       setErrors((e) => {
         const { [task.number]: _drop, ...rest } = e;
         return rest;
@@ -228,21 +236,27 @@ export function KanbanBoard() {
     [reload],
   );
 
-  const columns = useMemo(() => {
+  const { columns, keys } = useMemo(() => {
     const out: Record<TaskStatus, Task[]> = { todo: [], "in-progress": [], blocked: [], done: [] };
-    if (!board) return out;
+    const keys = new Map<Task, string>();
+    if (!board) return { columns: out, keys };
+    const names = rowKeys(COLUMNS.flatMap((c) => board.columns[c.status]));
     for (const c of COLUMNS) {
       for (const t of board.columns[c.status]) {
         const o = overrides[t.number];
         const effective = o ? o.status : t.status;
-        out[effective].push(effective === t.status ? t : { ...t, status: effective });
+        const shown = effective === t.status ? t : { ...t, status: effective };
+        keys.set(shown, names.get(t) ?? String(t.number));
+        out[effective].push(shown);
       }
     }
     // A task just completed goes to the top of Done; the server sorts the rest by recency.
     out.done.sort((a, b) => Number(overrides[b.number]?.status === "done") - Number(overrides[a.number]?.status === "done"));
     for (const s of ["todo", "in-progress", "blocked"] as const) out[s].sort((a, b) => a.number - b.number);
-    return out;
+    return { columns: out, keys };
   }, [board, overrides]);
+  const keyOf = useRef(keys);
+  keyOf.current = keys;
 
   const sync = async () => {
     setSyncing(true);
@@ -325,8 +339,8 @@ export function KanbanBoard() {
                 </h3>
                 {status === "todo" && editable && <AddTask onAdded={reload} />}
                 <ul className="plain kb-col__list">
-                  {shown.map((t, i) => (
-                    <TaskRow key={`${t.number}-${i}`} task={t} editable={editable} error={errors[t.number]} conflicts={conflictsByIssue.get(t.number) ?? []} onChange={change} />
+                  {shown.map((t) => (
+                    <TaskRow key={keys.get(t)} rowKey={keys.get(t) ?? String(t.number)} task={t} editable={editable} error={errors[t.number]} conflicts={conflictsByIssue.get(t.number) ?? []} onChange={change} />
                   ))}
                 </ul>
                 {tasks.length === 0 && (

@@ -302,4 +302,13 @@ describe("Kanban sync and notices", () => {
     gate.resolve();
     expect(await screen.findByRole("button", { name: "Sync now" })).toBeEnabled();
   });
+
+  it("gives local-only tasks with the same title different ids", async () => {
+    const local = (title: string, status: TaskStatus) => task(0, title, status, { url: null as unknown as string, inFile: true });
+    const a = boardOf([local("TODO", "todo"), local("TODO", "todo")]);
+    server(a);
+    render(<Kanban />);
+    const boxes = await screen.findAllByRole("checkbox", { name: "Mark TODO done" });
+    expect(new Set(boxes.map((b) => b.id)).size).toBe(2);
+  });
 });

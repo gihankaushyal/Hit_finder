@@ -76,18 +76,34 @@ function GithubActions() {
 /** Output lines: what the server already has, plus lines streamed since. */
 function useTestLines(tail: string[] | undefined): string[] {
   const [lines, setLines] = useState<string[]>([]);
+  const pending = useRef<string[]>([]);
+  const frame = useRef(0);
   useEffect(() => {
+    pending.current = [];
     if (tail) setLines(tail.slice(-MAX_LOG_LINES));
   }, [tail]);
-  useEffect(
-    () =>
-      subscribe({
-        resource: "tests-line",
-        reload: () => {},
-        onLine: (line) => setLines((prev) => [...prev, line].slice(-MAX_LOG_LINES)),
-      }),
-    [],
-  );
+  useEffect(() => {
+    // Lines can arrive faster than the screen refreshes; one render per frame is enough.
+    const flush = () => {
+      frame.current = 0;
+      const batch = pending.current;
+      pending.current = [];
+      if (batch.length > 0) setLines((prev) => [...prev, ...batch].slice(-MAX_LOG_LINES));
+    };
+    const stop = subscribe({
+      resource: "tests-line",
+      reload: () => {},
+      onLine: (line) => {
+        pending.current.push(line);
+        if (frame.current === 0) frame.current = requestAnimationFrame(flush);
+      },
+    });
+    return () => {
+      stop();
+      cancelAnimationFrame(frame.current);
+      frame.current = 0;
+    };
+  }, []);
   return lines;
 }
 
@@ -108,7 +124,7 @@ const TermLine = memo(function TermLine({ text }: { text: string }) {
   );
 });
 
-function Log({ lines }: { lines: string[] }) {
+function Log({ lines, live }: { lines: string[]; live: boolean }) {
   const ref = useRef<HTMLPreElement>(null);
   const [following, setFollowing] = useState(true);
   const followRef = useRef(true);
@@ -127,7 +143,7 @@ function Log({ lines }: { lines: string[] }) {
     setFollowing(atTail);
   };
   return (
-    <div className="log">
+    <div className="log" data-live={live}>
       {/* Focusable so keyboard users can scroll it. The trailing shell prompt is drawn by CSS, so it is not part of the output text. */}
       <pre ref={ref} className="log__body mono" aria-live="off" aria-label="Test output" tabIndex={0} onScroll={onScroll}>
         {lines.map((line, i) => (
@@ -225,7 +241,7 @@ function LocalRun() {
               )}
             </>
           )}
-          {(lines.length > 0 || running) && <Log lines={lines} />}
+          {(lines.length > 0 || running) && <Log lines={lines} live={running} />}
         </>
       )}
     </section>

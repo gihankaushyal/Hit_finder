@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { act, renderHook } from "@testing-library/react";
-import { setQueryParams, useQueryParam } from "../../web/src/lib/useQueryState";
+import { setQueryParams, tabHref, useQueryParam } from "../../web/src/lib/useQueryState";
 
 describe("useQueryParam", () => {
   it("reads the fallback when the param is absent and the value when present", () => {
@@ -47,4 +47,14 @@ describe("useQueryParam", () => {
     act(() => setQueryParams({ a: null, c: "3" }));
     expect(window.location.search).toBe("?b=2&c=3");
   });
+
+describe("tabHref", () => {
+  it("carries the other params into a tab address", () => {
+    expect(tabHref("?tab=runs&kind=track1&sort=crossAp&dir=desc", "kanban", "overview")).toBe("?tab=kanban&kind=track1&sort=crossAp&dir=desc");
+  });
+  it("leaves the default tab out of the address, and is just ? when nothing else is set", () => {
+    expect(tabHref("?tab=runs&kind=track1", "overview", "overview")).toBe("?kind=track1");
+    expect(tabHref("?tab=runs", "overview", "overview")).toBe("?");
+  });
+});
 });

@@ -77,12 +77,12 @@ describe("TestStatus", () => {
     Object.defineProperty(log, "clientHeight", { configurable: true, get: () => 100 });
     Object.defineProperty(log, "scrollTop", { configurable: true, get: () => top, set: (v: number) => { top = v; } });
     act(() => FakeEventSource.emit({ type: "tests-line", line: "tests/test_b.py F" }));
-    expect(log).toHaveTextContent("tests/test_b.py F");
+    await waitFor(() => expect(log).toHaveTextContent("tests/test_b.py F")); // lines are batched to one render per frame
     expect(top).toBe(1000); // at the tail: follows
     top = 0;
     fireEvent.scroll(log); // user scrolled up
     act(() => FakeEventSource.emit({ type: "tests-line", line: "tests/test_c.py ." }));
-    expect(log).toHaveTextContent("tests/test_c.py .");
+    await waitFor(() => expect(log).toHaveTextContent("tests/test_c.py ."));
     expect(top).toBe(0); // not yanked back
     await userEvent.click(screen.getByRole("button", { name: "Follow output" }));
     expect(top).toBe(1000);
@@ -123,5 +123,20 @@ describe("TestStatus", () => {
     render(<TestStatus />);
     expect(screen.getByText("Loading GitHub Actions")).toBeInTheDocument();
     expect(screen.getByText("Loading Local run")).toBeInTheDocument();
+  });
+});
+
+describe("PipelineCard log prompt", () => {
+  beforeEach(() => stubEventSource());
+  afterEach(() => vi.unstubAllGlobals());
+  it("only trails a live prompt while a run is active", async () => {
+    mockApi({ "GET /api/ci": ci, "GET /api/tests": { body: { ...done, tail: ["17 passed in 252.00s"] } } });
+    const finished = render(<TestStatus />);
+    const log = await screen.findByLabelText("Test output");
+    expect(log.closest(".log")).toHaveAttribute("data-live", "false");
+    finished.unmount();
+    mockApi({ "GET /api/ci": ci, "GET /api/tests": { body: running } });
+    render(<TestStatus />);
+    expect((await screen.findByLabelText("Test output")).closest(".log")).toHaveAttribute("data-live", "true");
   });
 });

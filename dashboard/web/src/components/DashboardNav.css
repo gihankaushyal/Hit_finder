@@ -3,7 +3,7 @@
   background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
   border-bottom: 1px solid var(--rule);
 }
-.nav__bar { display: flex; align-items: center; gap: var(--s3); min-height: 48px; padding: 0 var(--s5); min-width: 0; flex-wrap: wrap; row-gap: var(--s1); }
+.nav__bar { display: flex; align-items: center; gap: var(--s3); min-height: var(--nav-h); padding: 0 var(--s5); min-width: 0; flex-wrap: wrap; row-gap: var(--s1); }
 .nav__brand { display: inline-flex; align-items: center; gap: var(--s2); font-size: 1rem; font-weight: 600; letter-spacing: -0.01em; white-space: nowrap; }
 .nav__brand svg { color: var(--accent); }
 .nav__branch {

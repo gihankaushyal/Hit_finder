@@ -11,6 +11,7 @@ async function writeClipboard(text: string): Promise<boolean> {
     await navigator.clipboard.writeText(text);
     return true;
   } catch {
+    const before = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const field = document.createElement("textarea");
     field.value = text;
     field.setAttribute("readonly", "");
@@ -23,6 +24,7 @@ async function writeClipboard(text: string): Promise<boolean> {
       return false;
     } finally {
       field.remove();
+      before?.focus();
     }
   }
 }

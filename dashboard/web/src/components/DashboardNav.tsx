@@ -4,6 +4,7 @@ import { Badge, type BadgeTone } from "./Badge";
 import { CopyButton } from "./CopyButton";
 import { ThemeToggle } from "./ThemeToggle";
 import { ciWord, testWord, type StatusReading } from "../lib/status";
+import { tabHref, useSearch } from "../lib/useQueryState";
 import { AGENTS_REFRESH_MS, CI_REFRESH_MS, REPO_REFRESH_MS, useResource } from "../lib/useResource";
 import type { ApprovalsResponse, CiRun, TestRunState } from "../../../shared/types";
 import "./DashboardNav.css";
@@ -50,6 +51,7 @@ export const DashboardNav = forwardRef<HTMLButtonElement, NavProps>(function Das
   const waiting = approvals.data?.approvals.length ?? 0;
   const ciReading: StatusReading = ci.error ? { kind: "attention", text: "Unknown" } : ciWord(ci.data?.runs);
   const testReading: StatusReading = tests.error ? { kind: "attention", text: "Unknown" } : testWord(tests.data);
+  const search = useSearch();
   const go = (id: TabId) => (e: MouseEvent<HTMLAnchorElement>) => {
     // Leave Cmd/Ctrl/middle-click alone so a tab can open in a new window.
     if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
@@ -95,7 +97,7 @@ export const DashboardNav = forwardRef<HTMLButtonElement, NavProps>(function Das
         <ul>
           {TABS.map((t) => (
             <li key={t.id}>
-              <a href={t.id === DEFAULT_TAB ? "?" : `?tab=${t.id}`} aria-current={tab === t.id ? "page" : undefined} onClick={go(t.id)}>
+              <a href={tabHref(search, t.id, DEFAULT_TAB)} aria-current={tab === t.id ? "page" : undefined} onClick={go(t.id)}>
                 {t.label}
               </a>
             </li>

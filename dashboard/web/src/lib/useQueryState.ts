@@ -30,6 +30,20 @@ export function setQueryParams(updates: Record<string, string | null>, mode: Upd
   window.dispatchEvent(new Event(CHANGE_EVENT));
 }
 
+/** The whole query string, kept current as it changes. */
+export function useSearch(): string {
+  return useSyncExternalStore(subscribe, getSearch, getServerSearch);
+}
+
+/** The address of a tab with every other param (filters, sort) carried over, so a new window opens the same view. */
+export function tabHref(search: string, tab: string, defaultTab: string): string {
+  const params = new URLSearchParams(search);
+  if (tab === defaultTab) params.delete("tab");
+  else params.set("tab", tab);
+  const qs = params.toString();
+  return qs ? `?${qs}` : "?";
+}
+
 /** One query param as state. The default value is kept out of the URL so addresses stay short. */
 export function useQueryParam(key: string, fallback: string): [string, (value: string, mode?: UpdateMode) => void] {
   const search = useSyncExternalStore(subscribe, getSearch, getServerSearch);

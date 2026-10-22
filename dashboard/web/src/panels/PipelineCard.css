@@ -33,8 +33,8 @@
   background: var(--terminal); color: #cbd5e1; border: 1px solid var(--rule-strong); border-radius: var(--radius);
   font-size: 0.8rem; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; overscroll-behavior: contain;
 }
-/* The shell prompt and caret trail the output; generated content, so it is not copied or read as output. */
-.log__body::after {
+/* While a run is active, a shell prompt and caret trail the output; generated content, so it is not copied or read as output. */
+.log[data-live="true"] .log__body::after {
   content: "$"; display: block; width: fit-content; padding-right: 0.45ch; color: #34d399;
   border-right: 0.55em solid transparent; animation: caret 1.1s steps(1) infinite;
 }
