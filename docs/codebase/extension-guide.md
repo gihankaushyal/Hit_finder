@@ -1,61 +1,66 @@
 # Extension Guide
 
-Step-by-step recipes for the four most common extension points.
+Step-by-step recipes for the common extension points: a new detector, hitfinder backend, model backbone, metric or SSL config, plus the frame cache and the SLURM submit scripts. The last sections (run naming, re-evaluating a finished run, W&B ids) describe behaviour you must keep intact when extending the training entry points.
 
 ---
 
 ## New Detector {#new-detector}
 
-Add support for a detector geometry not yet in the system.
+Add support for a detector geometry not yet in the system. Detector identity always comes from the CXI description string (`entry_1/instrument_1/detector_1/description`), never from the pixels.
 
-- [ ] **1. Add geometry loader to `src/preprocessing/geometry.py`**
+- [ ] **1. Write a geometry loader in `src/preprocessing/geometry.py`**
 
-  Add a branch in `get_geometry()` for the new detector description string:
+  It must return a Reborn `PADGeometryList`. Either delegate to a Reborn bundled loader (as `jungfrau_8_pad_geometry_list()` and `eiger4m_64_pad_geometry_list()` do) or parse a CrystFEL file with `geometry_file_to_pad_geometry_list()` (as `eiger_resonet_pad_geometry_list()` does, using `src/preprocessing/data/eiger_resonet.geom`). If the CXI file stores all panels in one 2D canvas, the geometry must define `parent_data_slice` (`pads.defines_slicing()` is True): `assemble_only()` then slices panels out with `extract_panels_from_canvas()` before `PADAssembler`.
 
   ```python
-  elif desc == "MY_DETECTOR":
-      return load_pad_geometry(cxi_path, geom_file="src/preprocessing/data/my_detector.geom")
+  def my_detector_pad_geometry_list(detector_distance: float = 0.1) -> detector.PADGeometryList:
+      return detector.my_detector_pad_geometry_list(detector_distance=detector_distance)
   ```
 
-- [ ] **2. Add `.geom` file (if CrystFEL-style geometry)**
-
-  Place it at `src/preprocessing/data/my_detector.geom`. This directory co-locates geometry files with the preprocessing code that loads them. CrystFEL geometry format:
-  `p0/corner_x`, `p0/corner_y`, `p0/fs`, `p0/ss`, etc.
-
-- [ ] **3. Add to `DETECTOR_LOADERS` in `src/preprocessing/geometry.py`**
+- [ ] **2. Register it in three places in `geometry.py`**
 
   ```python
-  DETECTOR_LOADERS = {
-      "AGIPD":       _load_agipd,
-      "JUNGFRAU_4M": _load_crystfel,
-      "ePix10k":     _load_crystfel,
-      "Eiger4M":     _load_eiger,
-      "MY_DETECTOR": _load_crystfel,   # ← add here
+  _KNOWN_DESCS = {"AGIPD 1M", "ePix10k 2.2M", "EIGER 4M", "Jungfrau 4M", "My Detector 2M"}   # CXI description strings
+
+  _DESC_LOADERS = {          # keyed by the CXI description string, used by get_geometry()
+      ...,
+      "My Detector 2M": my_detector_pad_geometry_list,
+  }
+
+  DETECTOR_LOADERS = {       # keyed by short detector name, used by load_pad_geometry()
+      ...,
+      "MyDetector": my_detector_pad_geometry_list,
   }
   ```
 
-- [ ] **4. Add to LODO fold definition in `src/evaluation/benchmark.py`**
+  `get_geometry(detector_desc)` and `get_assembler(detector_desc)` take only the description string and cache their results; `assemble_only()` raises `ValueError` for a description that is not in `_KNOWN_DESCS`.
+
+- [ ] **3. Check the valid-pixel mask**
+
+  `valid_pixel_mask(detector_desc)` in `src/preprocessing/pipeline.py` builds the gap/padding mask automatically by assembling an all-ones array through the same assembler, then erodes it by `EDGE_EROSION_PX` (2). Call it once for the new description and check the returned shape equals the assembled canvas.
+
+- [ ] **4. Add to the LODO fold definition in `src/evaluation/benchmark.py`** (only if it should be a held-out fold)
 
   ```python
-  DETECTORS: list[str] = ["AGIPD", "JUNGFRAU_4M", "ePix10k", "Eiger4M", "MY_DETECTOR"]
+  DETECTORS: list[str] = ["AGIPD", "JUNGFRAU_4M", "ePix10k", "Eiger4M", "MyDetector"]
   ```
 
-  This automatically creates a new fold in `build_lodo_folds()`.
+  `build_lodo_folds()` derives one fold per entry. Also add the detector directory to `lodo.detector_dirs` in the run configs (`configs/supervised/*.yaml`, `configs/ssl/*.yaml`); `build_sessions()` globs `compressed*.cxi` under it.
 
-- [ ] **5. Add smoke-test entry in `scripts/smoke_test_detector_shapes.py`**
+- [ ] **5. Frame cache**
 
-  Add a dict entry with a sample CXI path and expected assembled shape.
+  If you use the frame cache, build entries for the new directory: `python -m scripts.build_frame_cache --config <cfg> --detectors MyDetector`. A new local `.geom`/`.json` file under `src/preprocessing/data/` is picked up by the manifest's geometry digest automatically. Geometry that comes from **Reborn's bundled loaders is invisible to that digest**; if such geometry changes, bump `PIPELINE_VERSION` in `src/data/frame_cache.py` by hand to force a rebuild. See [Build or invalidate the frame cache](#frame-cache).
 
-- [ ] **6. Add test in `tests/test_geometry_assembly.py`**
+- [ ] **6. Smoke test and unit test**
+
+  Add the detector to `scripts/smoke_test_detector_shapes.py`, and a test in `tests/test_geometry_assembly.py` using the existing style (`get_geometry(desc)` returns a `PADGeometryList`; `assemble_only(frame, pads, desc)` returns a 2D float32 canvas):
 
   ```python
   def test_my_detector_assembly():
-      frame = np.zeros((512, 512), dtype=np.float32)   # native shape
-      geom = get_geometry("MY_DETECTOR", cxi_path=None)
-      assembler = get_assembler(geom)
-      canvas = assembler.assemble_image(frame)
-      assert canvas.ndim == 2
-      assert canvas.shape[0] > 0
+      pads = get_geometry("My Detector 2M")
+      frame = np.zeros(NATIVE_SHAPE, dtype=np.float32)      # shape as stored in the CXI file
+      canvas = assemble_only(frame, pads, "My Detector 2M")
+      assert canvas.ndim == 2 and canvas.dtype == np.float32
   ```
 
 ---
@@ -81,28 +86,24 @@ Add a new peak-finding algorithm that implements the `Hitfinder` protocol.
               (N_peaks, 2) float32 array of [x, y] centroids
               (0, 2) array if no peaks found
           """
-          # your implementation here
           centroids = []
           return np.array(centroids, dtype=np.float32).reshape(-1, 2)
   ```
 
+  Optionally add `set_geometry(dist, wavelength, pixel_size)`; the dataset calls it (when present) each time the CXI file changes.
+
 - [ ] **2. Register in `src/hitfinders/__init__.py`**
 
-  ```python
-  from .my_finder import MyHitfinder
+  `get_hitfinder(cfg)` takes the whole config dict and dispatches with an `if`/`elif` chain on `cfg["hitfinder"]["backend"]` (currently `pf8`, `pf8_numpy`, `pf8_python`, `gpu`, `mock`; unknown names raise `ValueError`). Add a branch that reads its keys from `cfg["hitfinder"]`, and export the class in `__all__`:
 
-  def get_hitfinder(name: str, **kwargs):
-      backends = {
-          "pf8":       PF8Hitfinder,
-          "numpy":     NumpyPF8Hitfinder,
-          "gpu":       GPUHitfinder,
-          "mock":      MockHitfinder,
-          "my_finder": MyHitfinder,   # ← add here
-      }
-      ...
+  ```python
+  from src.hitfinders.my_finder import MyHitfinder
+  ...
+      if backend == "my_finder":
+          return MyHitfinder(threshold=hf_cfg.get("my_finder_threshold", 100.0))
   ```
 
-- [ ] **3. Add config key in `configs/supervised/resnet18_resonet.yaml`**
+- [ ] **3. Add config keys** to the `hitfinder:` block of the config you run (for example `configs/supervised/resnet18_asymmetric.yaml`; shared defaults live in `configs/base.yaml`):
 
   ```yaml
   hitfinder:
@@ -110,41 +111,27 @@ Add a new peak-finding algorithm that implements the `Hitfinder` protocol.
     my_finder_threshold: 100.0
   ```
 
-- [ ] **4. Add test in `tests/test_hitfinders.py`**
+- [ ] **4. Add tests in `tests/test_hitfinders.py`**, which already contains the patterns to copy (`test_get_hitfinder_mock`, `test_get_hitfinder_unknown_backend_raises`, `test_hitfinder_protocol_isinstance`):
 
   ```python
   def test_my_hitfinder_returns_correct_shape():
-      hf = MyHitfinder(threshold=100.0)
-      frame = np.random.rand(512, 512).astype(np.float32)
-      peaks = hf.find_peaks(frame)
-      assert peaks.ndim == 2
-      assert peaks.shape[1] == 2
+      peaks = MyHitfinder(threshold=100.0).find_peaks(np.random.rand(512, 512).astype(np.float32))
+      assert peaks.ndim == 2 and peaks.shape[1] == 2
 
   def test_get_hitfinder_my_finder():
-      hf = get_hitfinder("my_finder", threshold=100.0)
-      assert isinstance(hf, MyHitfinder)
+      cfg = {"hitfinder": {"backend": "my_finder", "my_finder_threshold": 100.0}}
+      assert isinstance(get_hitfinder(cfg), MyHitfinder)
   ```
+
+  The frame-cache manifest records the hitfinder config through `_HITFINDER_KEYS` in `src/data/frame_cache.py`. Add your new config keys (and `backend` is already covered) to that tuple, otherwise a changed `my_finder_*` setting will not mark an existing cache stale; then rebuild the cache.
 
 ---
 
 ## New Model / Backbone {#new-model}
 
-Add a new backbone or architecture variant to the supervised track.
+Add a new backbone to the supervised track. `build_supervised_model(backbone, pretrained, num_classes=2)` in `src/models/supervised.py` is already generic: it passes the name straight to `timm.create_model(backbone, pretrained=..., in_chans=1, num_classes=...)` and raises `RuntimeError` if timm cannot create it. Any timm single-channel-capable backbone therefore needs **no code change**.
 
-- [ ] **1. Add a branch in `src/models/supervised.py`**
-
-  ```python
-  def build_supervised_model(backbone: str = "resnet18", pretrained: bool = True, num_classes: int = 2):
-      if backbone in ("resnet18", "resnet50"):
-          model = timm.create_model(backbone, pretrained=pretrained, in_chans=1, num_classes=num_classes)
-      elif backbone == "efficientnet_b0":
-          model = timm.create_model("efficientnet_b0", pretrained=pretrained, in_chans=1, num_classes=num_classes)
-      else:
-          raise ValueError(f"Unknown backbone: {backbone}")
-      return model
-  ```
-
-- [ ] **2. Add a config YAML in `configs/supervised/`**
+- [ ] **1. Add a config YAML in `configs/supervised/`** (it is deep-merged over `configs/base.yaml`; do not add `defaults:`)
 
   ```yaml
   # configs/supervised/efficientnet_b0.yaml
@@ -154,22 +141,22 @@ Add a new backbone or architecture variant to the supervised track.
     num_classes: 2
   training:
     learning_rate: 5.0e-5
-    num_epochs: 100
+    epochs: 100
   ```
 
-- [ ] **3. Add to `scripts/smoke_test_detector_shapes.py` model list**
+  Copy the `lodo:`, `hitfinder:`, `asymmetric:`, `benchmark:` and `cache:` blocks from `configs/supervised/resnet18_asymmetric.yaml`, and note the cache default (see the frame-cache section).
 
-  Add `"efficientnet_b0"` to the list of backbones the smoke test exercises.
-
-- [ ] **4. Add test in `tests/test_models.py`**
+- [ ] **2. Add a test in `tests/test_models.py`** (existing tests: `test_resnet18_output_shape`, `test_invalid_backbone_raises`, …)
 
   ```python
   def test_build_efficientnet_b0():
       model = build_supervised_model("efficientnet_b0", pretrained=False, num_classes=2)
-      x = torch.zeros(2, 1, 224, 224)
-      out = model(x)
-      assert out.shape == (2, 2)
+      assert model(torch.zeros(2, 1, 224, 224)).shape == (2, 2)
   ```
+
+- [ ] **3. Launch with a versioned run name.** Track 1 prefixes must match `<backbone>-asymmetric-v<N>` (`run_naming.ASYMMETRIC_PREFIX_RE`), so `--run-name-prefix efficientnet-asymmetric-v1`. A non-ResNet18 name means the prefix, not the config's backbone, labels the results.
+
+For a new **self-supervised** backbone, `src/models/ssl.py` (`MAEViT`, `ViTClassifier`, `build_mae_model`, `build_ssl_classifier`) is fixed to ViT-S/16; changing the architecture changes the Track 1 / Track 2 comparison and needs design review.
 
 ---
 
@@ -190,27 +177,26 @@ Add a metric that is computed alongside AP, AUC-ROC, and F1 after vote aggregati
       """
       if len(np.unique(y_true)) < 2:
           return 0.0
-      # your implementation
       return float(value)
   ```
 
-- [ ] **2. Wire into `run_patch_agg()` results dict in `src/evaluation/benchmark.py`**
+- [ ] **2. Wire into the return dicts in `src/evaluation/benchmark.py`**
 
-  Find the return dict in `run_patch_agg()` and add:
+  Both `run_on_loader()` and `run_patch_agg()` return `{"ap", "auc_roc", "f1", "threshold"}` (and a NaN version for empty input). Add the key to each, including the all-NaN fallback:
 
   ```python
-  from src.evaluation.metrics import my_metric
-  ...
   return {
       "ap":        average_precision(y_true, y_score),
       "auc_roc":   auc_roc(y_true, y_score),
-      "f1":        f1_at_optimal_threshold(y_true, y_score)[0],
-      "threshold": f1_at_optimal_threshold(y_true, y_score)[1],
+      "f1":        best_f1,
+      "threshold": threshold,
       "my_metric": my_metric(y_true, y_score),      # ← add here
   }
   ```
 
-- [ ] **3. Add test in `tests/test_evaluation.py`**
+- [ ] **3. Carry it into the result files.** `src/training/lodo.py` copies `ap`, `auc_roc`, `f1`, `threshold` explicitly into the `cross` and `in_domain` blocks of `results.json`, and `summary_updates()` in `src/training/inference_results.py` builds the `inference/*` W&B keys. Add the new key in both places, and in `scripts/aggregate_lodo_results.py` if it should appear in the tables. Remember that an F1-style metric computed at the evaluated split's own optimum is a best-case figure (see [eval_protocol.md](../eval_protocol.md)).
+
+- [ ] **4. Add test in `tests/test_evaluation.py`**
 
   ```python
   def test_my_metric_perfect():
@@ -219,64 +205,86 @@ Add a metric that is computed alongside AP, AUC-ROC, and F1 after vote aggregati
       assert my_metric(y_true, y_score) == pytest.approx(1.0, abs=0.01)
 
   def test_my_metric_no_positives():
-      y_true  = np.array([0, 0, 0])
-      y_score = np.array([0.1, 0.2, 0.3])
-      assert my_metric(y_true, y_score) == 0.0
+      assert my_metric(np.array([0, 0, 0]), np.array([0.1, 0.2, 0.3])) == 0.0
   ```
 
 ---
 
 ## New SSL Pretraining Config {#new-ssl-config}
 
-Add a hyperparameter variant for MAE pretraining (different mask ratio, patch size, or learning rate). The MAE backbone is fixed at ViT-S/16 — this recipe is for config variants only, not new architectures.
+Add a hyperparameter variant for MAE pretraining (different mask ratio, crops per frame, or learning rate). The MAE backbone is fixed at ViT-S/16 — this recipe is for config variants only, not new architectures. The pretraining config reads the `ssl:`, `training:` and `lodo:` blocks; there is no `data.file_list` (sessions come from `lodo.detector_dirs`).
 
-- [ ] **1. Create a YAML file under `configs/ssl/`**
+- [ ] **1. Create a YAML file under `configs/ssl/`** — copy `configs/ssl/mae_pretrain.yaml` and change what you need:
 
   ```yaml
-  # configs/ssl/mae_pretrain_v2.yaml
-  model:
-    mask_ratio: 0.80          # fraction of patches masked (default: 0.75)
-    patch_size: 16            # ViT patch size in pixels
+  # configs/ssl/mae_pretrain_mask75.yaml
+  ssl:
+    masking: random          # random | peak_aware
+    mask_ratio: 0.75         # default 0.6
+    norm_pix_loss: false
+    crops_per_frame: 4
+    min_valid_frac: 0.5
   training:
+    epochs: 400
+    warmup_epochs: 20
     learning_rate: 1.5e-4
-    num_epochs: 200
-    batch_size: 64
-    warmup_epochs: 10
-  data:
-    file_list: data/splits/ssl_train.txt   # plaintext list of .img or .cxi paths
+    batch_size: 256
   ```
 
-  Required keys: `model.mask_ratio`, `model.patch_size`, `training.learning_rate`, `training.num_epochs`, `data.file_list`. All other keys are optional and fall back to `configs/base.yaml` via `load_config()`.
+  Keep the unchanged `model:`, `lodo:`, `hitfinder:` and `cache:` blocks too. Anything omitted falls back to `configs/base.yaml`.
 
 - [ ] **2. Verify `load_config()` merges correctly**
 
   ```python
   from src.utils.config import load_config
-  cfg = load_config("ssl/mae_pretrain_v2")
-  assert cfg["model"]["mask_ratio"] == 0.80
+  cfg = load_config("configs/ssl/mae_pretrain_mask75.yaml")
+  assert cfg["ssl"]["mask_ratio"] == 0.75
   assert "training" in cfg
   ```
 
-- [ ] **3. Launch pretraining with the new config**
+- [ ] **3. Launch pretraining with a versioned run name**
 
   ```bash
   source .secrets/wandb.env
-  python -m src.training.train_ssl_pretrain \
-      --config configs/ssl/mae_pretrain_v2.yaml \
+  python -u -m src.training.train_ssl_pretrain \
+      --config configs/ssl/mae_pretrain_mask75.yaml \
       --fold 1 \
-      --run-name-prefix mae-vits16-v2   # required; mae-<backbone>-v<N>
+      --run-name-prefix mae-vits16-v3   # required; matches mae-<backbone>-v<N>
   ```
 
-- [ ] **4. Add a config-load test in `tests/test_config.py`**
+  For all folds use `bash scripts/submit_ssl_pretrain_all.sh --run-name-prefix mae-vits16-v3`. Fine-tune with the matching `--pretrain-checkpoint checkpoints/mae-vits16-v3-fold1-seed42/last.pt`.
+
+- [ ] **4. Add a config-load test in `tests/test_config.py`** (existing tests build a temporary YAML and call `load_config(path)`):
 
   ```python
   def test_ssl_config_loads_mask_ratio(tmp_path):
-      cfg_path = tmp_path / "ssl" / "mae_pretrain_v2.yaml"
-      cfg_path.parent.mkdir()
-      cfg_path.write_text("model:\n  mask_ratio: 0.80\n  patch_size: 16\n")
+      cfg_path = tmp_path / "mae_pretrain_mask75.yaml"
+      cfg_path.write_text("ssl:\n  mask_ratio: 0.75\n")
       cfg = load_config(str(cfg_path))
-      assert cfg["model"]["mask_ratio"] == pytest.approx(0.80)
+      assert cfg["ssl"]["mask_ratio"] == pytest.approx(0.75)
   ```
+
+---
+
+## Build or Invalidate the Frame Cache {#frame-cache}
+
+The frame cache (`src/data/frame_cache.py`) holds the read → assemble → hitfinder → GCN prefix per frame. It is opt-in per run through the `cache:` block (`enabled: false` in `configs/base.yaml`; the production LODO configs set `true`).
+
+- [ ] **Build:** `python -m scripts.build_frame_cache --config configs/supervised/resnet18_asymmetric.yaml [--cache-root <path>] [--detectors AGIPD ePix10k] [--workers 32] [--overwrite]`. Entries are written per CXI file as float16 arrays; the manifest is written last, so an interrupted build looks unbuilt.
+- [ ] **Stage to NVMe for a fold:** `python scripts/plan_cache_staging.py …` emits entry directories in priority order and `bash scripts/stage_frame_cache.sh <fold-plan>` rsyncs them (`xargs -P 8`); `submit_asymmetric_lodo_all.sh` does this per fold.
+- [ ] **What invalidates it:** `verify_cache_or_raise()` compares the manifest with the live config and raises `CacheStaleError` naming the first differing key — hitfinder parameters (`_HITFINDER_KEYS`), GCN/LCN constants, `EDGE_EROSION_PX`, the cache dtype, the hash of every `.geom`/`.json` file in `src/preprocessing/data/`, and `PIPELINE_VERSION`. Not covered: Reborn-bundled geometry changes, and changes to *how* a detector's assembler is chosen — bump `PIPELINE_VERSION` and rebuild.
+- [ ] **Missing entries are not errors.** A `CacheMissError` makes the dataset compute the frame live; a partially staged NVMe tier is therefore slower, not wrong.
+- [ ] **Test:** extend `tests/test_frame_cache.py` (manifest staleness, two-tier resolution, `TestBitExactnessAgainstRealData`, which is skipped when no real cache exists).
+
+---
+
+## New or Changed SLURM Submit Script {#submit-scripts}
+
+Start from `scripts/templates/slurm_gpu_job.sh` (partition `general`, QOS `grp_cxfel`, `gpu:h100:1`, node `scg020`) and `source .secrets/wandb.env` before the training command.
+
+- The SSL orchestrators re-implement two Python rules in bash so a typo fails at submit time: the run-name prefix regexes and the top-level seed lookup. If you change `run_naming.SSL_PRETRAIN_PREFIX_RE`, `SSL_FINETUNE_PREFIX_RE` or the seed lookup in `load_config()`, update `submit_ssl_pretrain_all.sh` / `submit_ssl_finetune_all.sh`; `tests/test_submit_script_parity.py` fails if the copies drift.
+- Retired scripts must exit immediately and name their replacement; add them to the table in `tests/test_deprecated_scripts.py`.
+- Queued SLURM jobs read the **live checkout** when they start. Do not leave the main checkout on an older branch while jobs are pending.
 
 ---
 
