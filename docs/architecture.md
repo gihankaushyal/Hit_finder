@@ -6,7 +6,7 @@ Hit_finder is a deep learning system for per-frame hit classification in Serial 
 
 The system is designed around two core challenges: (1) **detector diversity** — models must generalize across four distinct detector geometries from different facilities without retraining, and (2) **label quality** — frame-level labels from a classical peak-finder are noisy, so patch-level supervision guided by Bragg peak locations produces more reliable training signal.
 
-Two pipeline tracks exist. **Track 1 (primary, production)** is an asymmetric supervised pipeline using a ResNet18 classifier trained on hitfinder-guided 224×224 patches. **Track 2 (implemented; full-LODO runs complete for the September 2026 generation, rerun in progress)** is a self-supervised (MAE, ViT-S/16) pretraining stage followed by supervised fine-tuning or a linear probe, exploiting the large corpus of unlabeled CXI frames. Both tracks share one preprocessing pipeline, bit-for-bit.
+Two pipeline tracks exist. **Track 1 (primary, production)** is an asymmetric supervised pipeline using a ResNet18 classifier trained on hitfinder-guided 224×224 patches. **Track 2 (implemented; full-LODO runs complete for the September 2026 generation, rerun in progress)** is a self-supervised (MAE, ViT-S/16) pretraining stage followed by supervised fine-tuning or a linear probe, exploiting the large corpus of unlabeled CXI frames. Both tracks share one preprocessing pipeline (the same code path up to the crop step; Track 2 uses MAE masking instead of cutout).
 
 A self-contained local web dashboard for the repository lives in `dashboard/` (see [Dashboard](#dashboard)); it is not imported by `src/`.
 
@@ -58,7 +58,7 @@ All four go through Reborn's `PADAssembler`; stacked/canvas frames are sliced in
 
 **LODO evaluation** holds out one detector at test time and trains on the other three. This tests whether learned features are genuinely detector-agnostic rather than encoding detector-specific artifacts.
 
-Sessions (CXI files, one per beamtime run chunk) are the unit of splitting: `build_sessions()` in `src/training/lodo.py` globs `compressed*.cxi` under each `lodo.detector_dirs` entry and names a session `<detector>_<file stem>`. An 80/10/10 session-stratified split (seed=42) is applied within the training detectors to produce train / val / in-domain-test subsets. The held-out detector forms a separate cross-detector test split that the model never sees during training or hyperparameter selection.
+Sessions (CXI files, one per beamtime run chunk) are the unit of splitting: `build_sessions()` in `src/training/lodo.py` globs `compressed*.cxi` under each `lodo.detector_dirs` entry and names a session `<detector>_<file stem>`. A deterministic 80/10/10 session-stratified split (greedy by frame count; the `seed` argument has no effect) is applied within the training detectors to produce train / val / in-domain-test subsets. The held-out detector forms a separate cross-detector test split that the model never sees during training or hyperparameter selection.
 
 ---
 

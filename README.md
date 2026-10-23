@@ -25,7 +25,7 @@ Current hitfinders are calibrated per-detector. A model trained on AGIPD data at
 
 ### Shared Preprocessing Pipeline
 
-All four detector types pass through an **identical, bit-for-bit pipeline** before reaching either model. Detector type is always read from file metadata — never inferred from image content.
+All four detector types pass through an **identical pipeline** (the same code path up to the crop step; Track 2 replaces cutout with MAE masking) before reaching either model. Detector type is always read from file metadata — never inferred from image content.
 
 ```mermaid
 flowchart TD
@@ -160,7 +160,7 @@ Same preprocessing as the baseline above, now backed by the on-disk frame cache 
 | 4 | Eiger4M | 0.9980 | 0.9998 | 0.9921 | +0.165 |
 | **Mean** | | **0.900 ± 0.090** | | | **+0.061** |
 
-- **Mean cross AP improved to 0.900 ± 0.090**, but with higher fold-to-fold variance than v1 (±0.021 → ±0.090) — AGIPD is the only fold that regressed, while ePix10k and Eiger4M improved substantially.
+- **Mean cross AP improved to 0.900 ± 0.090**, but with higher fold-to-fold variance than v1 (±0.024 → ±0.090) — AGIPD is the only fold that regressed, while ePix10k and Eiger4M improved substantially.
 - Full details and discussion → [docs/progress_notes.md §21](docs/progress_notes.md)
 
 ## Results — Track 2 Self-Supervised (MAE, ViT-S/16)
@@ -240,7 +240,7 @@ python scripts/aggregate_lodo_results.py
 
 ```bash
 python -m scripts.build_frame_cache --config configs/ssl/mae_pretrain.yaml --cache-root <path>
-bash scripts/stage_frame_cache.sh <fold-plan>   # rsync a fold's entries to local NVMe
+sbatch scripts/stage_frame_cache.sh <fold_id>   # SLURM job (scg020): copies the fold's entries to local NVMe; env CONFIG, CACHE_NVME
 ```
 
 SLURM submit scripts live in `scripts/` (start from `scripts/templates/slurm_gpu_job.sh`). A local repository dashboard (TypeScript, Hono API + React/Vite) is described in [dashboard/README.md](dashboard/README.md).

@@ -139,7 +139,7 @@ Per-item pipeline (one item = one frame; it yields `crops_per_frame` crops):
 
 Crop positions are re-seeded per epoch: `set_epoch(epoch)` folds the epoch into the per-item RNG seed, so each epoch draws different crops from the same cached frame. `asymmetric_loader()` flattens the per-frame stacks into ordinary batches via `_flatten_collate`.
 
-**Output tensor contract:** `(B, 1, 224, 224)` float32, label `(B,)` int64
+**Output tensor contract:** `(B, 1, 224, 224)` float32, label `(B,)` int64, where `B = batch_size × crops_per_frame` for `asymmetric_loader()` (`batch_size` counts frames)
 
 ---
 
@@ -236,7 +236,7 @@ The pretrained ViT-S/16 encoder is loaded from the fold's `last.pt`, a 2-class h
 | Stage | Shape | dtype |
 |-------|-------|-------|
 | GCN canvas | `(H, W)` | float64 live / float16 cached |
-| Pretraining crop batch | `(B × crops_per_frame, 1, 224, 224)` after flatten | float32 |
+| Pretraining crop batch | `(batch_size, 1, 224, 224)` after flatten; for `ssl_crop_loader()` `batch_size` counts crops and must be divisible by `crops_per_frame` | float32 |
 | Peak-patch flags | `(…, 196)` | bool |
 | MAE encoder input (visible patches) | `(N_visible, patch_dim)` — 196 patches of 16×16 per crop, 60% masked | float32 |
 | MAE decoder output (reconstructed) | `(N_masked, 16·16)` | float32 |

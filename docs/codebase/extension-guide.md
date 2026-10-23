@@ -90,6 +90,8 @@ Add a new peak-finding algorithm that implements the `Hitfinder` protocol.
           return np.array(centroids, dtype=np.float32).reshape(-1, 2)
   ```
 
+  If the backend holds a GPU context it is not fork-safe: the `num_workers=0` guard in the loaders is an `isinstance(..., GPUHitfinder)` check, so extend it for your class.
+
   Optionally add `set_geometry(dist, wavelength, pixel_size)`; the dataset calls it (when present) each time the CXI file changes.
 
 - [ ] **2. Register in `src/hitfinders/__init__.py`**
@@ -154,7 +156,7 @@ Add a new backbone to the supervised track. `build_supervised_model(backbone, pr
       assert model(torch.zeros(2, 1, 224, 224)).shape == (2, 2)
   ```
 
-- [ ] **3. Launch with a versioned run name.** Track 1 prefixes must match `<backbone>-asymmetric-v<N>` (`run_naming.ASYMMETRIC_PREFIX_RE`), so `--run-name-prefix efficientnet-asymmetric-v1`. A non-ResNet18 name means the prefix, not the config's backbone, labels the results.
+- [ ] **3. Launch with a versioned run name.** Track 1 prefixes must match `<backbone>-asymmetric-v<N>` (`run_naming.ASYMMETRIC_PREFIX_RE`), so `--run-name-prefix efficientnet-asymmetric-v1`. The prefix is only a label: it allows lowercase letters and digits before `-asymmetric-`, so drop underscores and hyphens from a timm name (`efficientnet_b0` → `efficientnet`); the backbone actually trained is `model.backbone` in the config.
 
 For a new **self-supervised** backbone, `src/models/ssl.py` (`MAEViT`, `ViTClassifier`, `build_mae_model`, `build_ssl_classifier`) is fixed to ViT-S/16; changing the architecture changes the Track 1 / Track 2 comparison and needs design review.
 
@@ -271,7 +273,7 @@ Add a hyperparameter variant for MAE pretraining (different mask ratio, crops pe
 The frame cache (`src/data/frame_cache.py`) holds the read → assemble → hitfinder → GCN prefix per frame. It is opt-in per run through the `cache:` block (`enabled: false` in `configs/base.yaml`; the production LODO configs set `true`).
 
 - [ ] **Build:** `python -m scripts.build_frame_cache --config configs/supervised/resnet18_asymmetric.yaml [--cache-root <path>] [--detectors AGIPD ePix10k] [--workers 32] [--overwrite]`. Entries are written per CXI file as float16 arrays; the manifest is written last, so an interrupted build looks unbuilt.
-- [ ] **Stage to NVMe for a fold:** `python scripts/plan_cache_staging.py …` emits entry directories in priority order and `bash scripts/stage_frame_cache.sh <fold-plan>` rsyncs them (`xargs -P 8`); `submit_asymmetric_lodo_all.sh` does this per fold.
+- [ ] **Stage to NVMe for a fold:** `sbatch scripts/stage_frame_cache.sh <fold_id>` is a SLURM job (node `scg020`). It calls `scripts/plan_cache_staging.py` itself for the fold's priority order (train, then val), copies entries with `cp -r` until free space hits a reserve, and reads env `CONFIG` (default `configs/ssl/mae_finetune.yaml`), `CACHE_NFS` and `CACHE_NVME`. Partial staging is expected for fold 1; the rest streams from NFS. `submit_asymmetric_lodo_all.sh` does this per fold.
 - [ ] **What invalidates it:** `verify_cache_or_raise()` compares the manifest with the live config and raises `CacheStaleError` naming the first differing key — hitfinder parameters (`_HITFINDER_KEYS`), GCN/LCN constants, `EDGE_EROSION_PX`, the cache dtype, the hash of every `.geom`/`.json` file in `src/preprocessing/data/`, and `PIPELINE_VERSION`. Not covered: Reborn-bundled geometry changes, and changes to *how* a detector's assembler is chosen — bump `PIPELINE_VERSION` and rebuild.
 - [ ] **Missing entries are not errors.** A `CacheMissError` makes the dataset compute the frame live; a partially staged NVMe tier is therefore slower, not wrong.
 - [ ] **Test:** extend `tests/test_frame_cache.py` (manifest staleness, two-tier resolution, `TestBitExactnessAgainstRealData`, which is skipped when no real cache exists).

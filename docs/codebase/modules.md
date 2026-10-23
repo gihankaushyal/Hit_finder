@@ -57,7 +57,7 @@ class Hitfinder(Protocol):
         """(H, W) float32 raw frame → (N_peaks, 2) [x, y] centroids"""
 ```
 
-**Multiprocessing note:** PF8 and NumPy backends are fork-safe. GPU backend requires `num_workers=0` (CUDA/OpenCL context is not fork-safe; enforced).
+**Multiprocessing note:** PF8 and NumPy backends are fork-safe. GPU backend requires `num_workers=0` (CUDA/OpenCL context is not fork-safe). The guard is an `isinstance(hitfinder, GPUHitfinder)` check in `asymmetric_loader()` and `ssl_crop_loader()`, so a new hitfinder that holds a GPU context is not protected unless it handles this itself.
 
 **Imports from:** `reborn`, `pyFAI`, `pyopencl` (gpu backends only)
 **Imported by:** `src/data/dataset.py`, `src/data/dataloader.py`, `src/training/lodo.py` (`Hitfinder` type), `src/training/train_asymmetric.py`
@@ -77,7 +77,7 @@ PyTorch Dataset and DataLoader wrappers, plus the on-disk frame cache. `Asymmetr
 
 **`AsymmetricCXIDataset.__getitem__` contract:**
 - Returns `(crops, labels)` where `crops` is `(crops_per_frame, 1, 224, 224)` float32 and `labels` is `(crops_per_frame,)` long ∈ {0, 1}; `asymmetric_loader()` flattens these into ordinary batches
-- Returns `None` if `crops_per_frame` crops could not be drawn within `crops_per_frame × CROP_RETRY_FACTOR` (4) attempts; a Path-B draw that finds no clear position (`hard_neg_max_attempts`, default 50) makes that attempt fail
+- Returns `None` if `crops_per_frame` crops could not be drawn within `crops_per_frame × CROP_RETRY_FACTOR` (4) attempts; on a frame with centroids a Path-B draw that finds no clear position (`hard_neg_max_attempts`, default 50) falls back to Path A; an attempt fails (None) only when the frame has no centroids and no clear crop is found
 - Path A / Path B coin toss is controlled by `hit_frac` (default 0.5); the hitfinder only runs when the embedded label is HIT (metadata gating)
 - The GCN'd frame comes from `_load_gcn_frame()`: the `FrameCache` if configured, falling back to `_compute_gcn_frame()` on `CacheMissError`
 
