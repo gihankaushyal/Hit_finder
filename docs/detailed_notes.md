@@ -174,9 +174,23 @@ The fine-tuned ViT-S matches the supervised ResNet18 on mean cross AP but is les
 
 ## Inference Thresholds
 
-Optimal decision thresholds (from val-set F1 maximization) vary across folds — the asymmetric pipeline produces well-calibrated probability scores. The threshold is chosen over the unique frame scores and stored in each fold's `results.json` next to the metrics.
+Each fold's `results.json` holds two different kinds of threshold, and the tables below keep them apart:
 
-**Asymmetric v1:**
+- **`inference_threshold`** (top level) is the F1-maximizing threshold on the **validation set**. It is the only one chosen without looking at the evaluated data, so it is the deployable operating point. It falls back to 0.5 if a checkpoint has none.
+- **`cross.threshold` / `in_domain.threshold`** are the F1-maximizing thresholds on **the evaluated split itself** (for `cross`, the held-out detector's own labels). The reported `f1` in the `cross` and `in_domain` blocks is the F1 *at that threshold*, so it is an optimistic upper bound for the operating point, not a score a deployed threshold would reach. AP and AUC do not depend on any threshold.
+
+The threshold is chosen over the unique frame scores. Values are discrete because the frame score is `hit_count / n_tiles`.
+
+**Asymmetric v2 — validation-set `inference_threshold`:**
+
+| Fold | `inference_threshold` |
+|------|-----------------------|
+| 1 (AGIPD) | 0.0123 |
+| 2 (JUNGFRAU_4M) | 0.0204 |
+| 3 (ePix10k) | 0.0123 |
+| 4 (Eiger4M) | 0.0123 |
+
+**Evaluated-split optimum, asymmetric v1** (recorded in the 2026-08 notes; `cross.threshold` / `in_domain.threshold`):
 
 | Fold | Cross threshold | In-domain threshold |
 |------|----------------|---------------------|
@@ -185,7 +199,7 @@ Optimal decision thresholds (from val-set F1 maximization) vary across folds —
 | 3 (ePix10k) | 0.102 | 0.025 |
 | 4 (Eiger4M) | 0.388 | 0.012 |
 
-**Asymmetric v2:**
+**Evaluated-split optimum, asymmetric v2:**
 
 | Fold | Cross threshold | In-domain threshold |
 |------|----------------|---------------------|
@@ -194,4 +208,4 @@ Optimal decision thresholds (from val-set F1 maximization) vary across folds —
 | 3 (ePix10k) | 0.020 | 0.012 |
 | 4 (Eiger4M) | 0.041 | 0.012 |
 
-Cross-detector thresholds are set without access to the held-out detector during training — they reflect the model's uncertainty when generalizing to unseen detector geometry. Because the frame score is `hit_count / n_tiles`, thresholds take discrete values that depend on how many tiles a detector's frames yield.
+The gap between the two kinds is informative: the validation-set threshold is the same low value (0.012–0.020) on every fold, while the held-out-detector optimum ranges from 0.012 to 0.080 (v2) and up to 0.388 for Eiger4M (v1). A single threshold chosen on training-detector validation data therefore does not transfer to every unseen detector, and the cross F1 figures in this document should be read as best-case.

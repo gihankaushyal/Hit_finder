@@ -145,6 +145,7 @@ Hitfinder-guided cropping (Path A: centroid-centred, label=1 / Path B: hard-nega
 - **AGIPD generalization gap largely closed:** 0.565 → 0.807 (+0.242). Hitfinder-guided crops eliminated the spurious panel-edge signal the model previously relied on.
 - **Variance collapsed ~7×:** ±0.167 → ±0.024 — the pipeline is now consistently effective across all four detector types.
 - All "±" values in this README are the sample standard deviation (n−1) over the four folds, as reported by `scripts/aggregate_lodo_results.py`.
+- **AP is the primary metric.** Cross F1 is the F1 at the best threshold on the held-out detector itself, so it is a best-case operating point; AP and AUC need no threshold. See [docs/eval_protocol.md](docs/eval_protocol.md).
 - Full per-fold in-domain breakdown → [docs/detailed_notes.md](docs/detailed_notes.md)
 
 ### Asymmetric Pipeline v2 — frame-cache-backed training
@@ -180,7 +181,7 @@ MAE pretraining (400 epochs) on pooled unlabeled frames, then either full fine-t
 | 4 | Eiger4M | 0.8402 | 0.7397 |
 
 - **Comparable to Track 1 v1, with higher variance:** the fine-tuned ViT-S matches the supervised ResNet18 on mean cross AP (0.836 vs 0.839) but is less consistent across held-out detectors.
-- **Not yet compared against Track 1 v2 (0.900):** these SSL numbers come from the September 2026 generation (pretrain checkpoints `mae-vits16-fold*`). The SSL rerun under the current run-naming standard (`mae-vits16-v2`, `vits16-mae-finetune-v2`, `vits16-mae-probe-v2`) is still in progress (1 of 4 folds finished), so a like-for-like comparison with v2 is pending.
+- **Not yet compared against Track 1 v2 (0.900):** these SSL numbers come from the September 2026 generation (pretrain checkpoints `mae-vits16-fold*`), run on uncached preprocessing like Track 1 v1, so that pair is like-for-like. The SSL rerun under the current run-naming standard (`mae-vits16-v2`, `vits16-mae-finetune-v2`, `vits16-mae-probe-v2`) is still in progress (1 of 4 folds finished), so a like-for-like comparison with v2 is pending.
 - Per-fold detail and the comparison discussion → [docs/progress_notes.md §15.7](docs/progress_notes.md)
 
 ## Setup
