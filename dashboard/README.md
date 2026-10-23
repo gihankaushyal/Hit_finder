@@ -26,8 +26,6 @@ worker agents; its badge counts approvals waiting for you. The terminal stays in
 The commit pill copies the full hash. The sun/moon button switches between the dark and light themes
 (both are defined in `web/src/tokens.css`; with no saved choice the system setting applies).
 
-Runs filters and sort live in the address as well (`kind`, `archived`, `sort`, `dir`).
-
 ## Run it
 
 Requires Node 24 and an authenticated `gh` (`gh auth status`).

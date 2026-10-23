@@ -78,19 +78,16 @@ function AddTask({ onAdded }: { onAdded: () => void }) {
   );
 }
 
-/** A stable, id-safe name for each card. Issues use their number; local-only tasks (number 0) use their title plus a count for repeats. */
+/** A stable, id-safe name for each card. Issues use their number and local-only tasks (number 0) their title; a repeat of either gets a count, so keys and DOM ids never collide. */
 function rowKeys(tasks: Task[]): Map<Task, string> {
   const seen = new Map<string, number>();
   const keys = new Map<Task, string>();
   for (const t of tasks) {
-    if (t.number > 0) {
-      keys.set(t, String(t.number));
-      continue;
-    }
-    const stem = `local-${t.title.replace(/[^A-Za-z0-9]+/g, "-")}`;
+    const stem = t.number > 0 ? String(t.number) : `local-${t.title.replace(/[^A-Za-z0-9]+/g, "-")}`;
     const n = seen.get(stem) ?? 0;
     seen.set(stem, n + 1);
-    keys.set(t, `${stem}-${n}`);
+    // The first issue keeps its bare number, so ids such as kb-5-check stay as they were.
+    keys.set(t, t.number > 0 && n === 0 ? stem : `${stem}-${n}`);
   }
   return keys;
 }

@@ -23,6 +23,11 @@
   --rule-strong: rgba(255, 255, 255, 0.16);
   --shadow: 0 1px 2px rgba(2, 6, 23, 0.4);
   --terminal: #0a0d13;
+  /* Text on the always-dark terminal surfaces (agent log, chat, approval code); same in both themes. */
+  --on-terminal: #e2e8f0;
+  --on-terminal-dim: #94a3b8;
+  --on-terminal-fail: #f87171;
+  --on-terminal-code: #7dd3fc;
   --font-sans: "Geist Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, monospace;
   /* One radius scale: controls, then panels. Pills use 999px. */
@@ -59,6 +64,11 @@
   --rule-strong: rgba(15, 23, 42, 0.22);
   --shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
   --terminal: #0f172a;
+  /* Text on the always-dark terminal surfaces (agent log, chat, approval code); same in both themes. */
+  --on-terminal: #e2e8f0;
+  --on-terminal-dim: #94a3b8;
+  --on-terminal-fail: #f87171;
+  --on-terminal-code: #7dd3fc;
 }
 
 @media (prefers-color-scheme: light) {
@@ -82,5 +92,10 @@
     --rule-strong: rgba(15, 23, 42, 0.22);
     --shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
     --terminal: #0f172a;
+    /* Text on the always-dark terminal surfaces (agent log, chat, approval code); same in both themes. */
+    --on-terminal: #e2e8f0;
+    --on-terminal-dim: #94a3b8;
+    --on-terminal-fail: #f87171;
+    --on-terminal-code: #7dd3fc;
   }
 }

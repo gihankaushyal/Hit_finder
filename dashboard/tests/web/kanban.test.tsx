@@ -311,4 +311,12 @@ describe("Kanban sync and notices", () => {
     const boxes = await screen.findAllByRole("checkbox", { name: "Mark TODO done" });
     expect(new Set(boxes.map((b) => b.id)).size).toBe(2);
   });
+
+  it("gives a repeated issue number different ids, keeping the first one's plain", async () => {
+    const dup = (status: TaskStatus) => task(5, "Same issue", status);
+    server(boardOf([dup("todo"), dup("todo")]));
+    render(<Kanban />);
+    const boxes = await screen.findAllByRole("checkbox", { name: "Mark Same issue done" });
+    expect(boxes.map((b) => b.id).sort()).toEqual(["kb-5-1-check", "kb-5-check"]);
+  });
 });

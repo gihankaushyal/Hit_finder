@@ -1,4 +1,4 @@
-import { forwardRef, type MouseEvent } from "react";
+import { forwardRef, useLayoutEffect, useRef, type MouseEvent } from "react";
 import { Crosshair, GitBranch, Robot } from "@phosphor-icons/react";
 import { Badge, type BadgeTone } from "./Badge";
 import { CopyButton } from "./CopyButton";
@@ -54,6 +54,20 @@ export const DashboardNav = forwardRef<HTMLButtonElement, NavProps>(function Das
   const ciReading: StatusReading = ci.error ? { kind: "attention", text: "Unknown" } : ciWord(ci.data?.runs);
   const testReading: StatusReading = tests.error ? { kind: "attention", text: "Unknown" } : testWord(tests.data);
   const search = useSearch();
+  const header = useRef<HTMLElement>(null);
+  // The bar wraps on narrow screens, so anchor jumps and the skip link leave room for its real height.
+  useLayoutEffect(() => {
+    const el = header.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const publish = () => document.documentElement.style.setProperty("--nav-offset", `${el.offsetHeight}px`);
+    publish();
+    const watch = new ResizeObserver(publish);
+    watch.observe(el);
+    return () => {
+      watch.disconnect();
+      document.documentElement.style.removeProperty("--nav-offset");
+    };
+  }, []);
   const go = (id: TabId) => (e: MouseEvent<HTMLAnchorElement>) => {
     // Leave Cmd/Ctrl/middle-click alone so a tab can open in a new window.
     if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
@@ -61,7 +75,7 @@ export const DashboardNav = forwardRef<HTMLButtonElement, NavProps>(function Das
     onTab(id);
   };
   return (
-    <header className="nav">
+    <header ref={header} className="nav">
       <div className="nav__bar">
         <h1 className="nav__brand">
           <Crosshair size={18} weight="bold" aria-hidden="true" />

@@ -5,6 +5,7 @@ import { StatusWord } from "../components/StatusWord";
 import { ExternalLink, SectionState, StaleNotice } from "../components/bits";
 import { ApiError, apiSend } from "../lib/api";
 import { ciRunWord, testWord } from "../lib/status";
+import { dropSeen, reconcile, type LogLine } from "../lib/logLines";
 import { subscribe } from "../lib/events";
 import { duration, relTime } from "../lib/time";
 import { CI_REFRESH_MS, useResource } from "../lib/useResource";
@@ -73,42 +74,39 @@ function GithubActions() {
   );
 }
 
-/** A line with a stable id, so the 500-line window can slide without remounting every row. */
-interface LogLine {
-  id: number;
-  text: string;
-}
-
 /** Output lines: what the server already has, plus lines streamed since. */
 function useTestLines(tail: string[] | undefined): LogLine[] {
   const [lines, setLines] = useState<LogLine[]>([]);
   const pending = useRef<LogLine[]>([]);
   const frame = useRef(0);
   const nextId = useRef(0);
-  const stamp = (text: string): LogLine => ({ id: nextId.current++, text });
+  const newId = () => nextId.current++;
   const cancelFrame = () => {
     if (frame.current !== 0) cancelAnimationFrame(frame.current);
     frame.current = 0;
   };
-  useEffect(() => {
+  // Lines can arrive faster than the screen refreshes; one render per frame is enough.
+  const flush = () => {
+    frame.current = 0;
+    const batch = pending.current;
     pending.current = [];
-    cancelFrame();
-    if (tail) setLines(tail.slice(-MAX_LOG_LINES).map(stamp));
+    if (batch.length > 0) setLines((prev) => [...prev, ...batch].slice(-MAX_LOG_LINES));
+  };
+  useEffect(() => {
+    if (!tail) return;
+    // A snapshot can lag a streamed line, so buffered lines stay unless the snapshot already holds them.
+    const snapshot = tail.slice(-MAX_LOG_LINES);
+    pending.current = dropSeen(snapshot, pending.current);
+    setLines((prev) => reconcile(prev, snapshot, newId));
+    if (pending.current.length > 0 && frame.current === 0) frame.current = requestAnimationFrame(flush);
   }, [tail]);
   useEffect(() => {
-    // Lines can arrive faster than the screen refreshes; one render per frame is enough.
     // Hidden tabs do not run animation frames, so the buffer is capped as lines arrive.
-    const flush = () => {
-      frame.current = 0;
-      const batch = pending.current;
-      pending.current = [];
-      if (batch.length > 0) setLines((prev) => [...prev, ...batch].slice(-MAX_LOG_LINES));
-    };
     const stop = subscribe({
       resource: "tests-line",
       reload: () => {},
       onLine: (line) => {
-        pending.current.push(stamp(line));
+        pending.current.push({ id: newId(), text: line });
         if (pending.current.length > MAX_LOG_LINES) pending.current.splice(0, pending.current.length - MAX_LOG_LINES);
         if (frame.current === 0) frame.current = requestAnimationFrame(flush);
       },

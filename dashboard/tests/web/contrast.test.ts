@@ -58,6 +58,11 @@ describe("colour contrast (WCAG AA, at least 4.5:1)", () => {
           }
         }
       });
+      it("text on the always-dark terminal surfaces (agent log, chat, approval code)", () => {
+        for (const fg of ["on-terminal", "on-terminal-dim", "on-terminal-fail", "on-terminal-code"]) {
+          expect(ratio(t[fg], t["terminal"]), `${fg} ${t[fg]} on terminal ${t["terminal"]}`).toBeGreaterThanOrEqual(MIN_RATIO);
+        }
+      });
       it("the primary button text on the accent", () => {
         expect(ratio(t["accent-text"], t["accent"])).toBeGreaterThanOrEqual(MIN_RATIO);
       });

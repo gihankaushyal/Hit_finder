@@ -46,7 +46,7 @@ export function tabHref(search: string, tab: string, defaultTab: string): string
 
 /** One query param as state. The default value is kept out of the URL so addresses stay short. */
 export function useQueryParam(key: string, fallback: string): [string, (value: string, mode?: UpdateMode) => void] {
-  const search = useSyncExternalStore(subscribe, getSearch, getServerSearch);
+  const search = useSearch();
   const value = new URLSearchParams(search).get(key) ?? fallback;
   const set = useCallback(
     (next: string, mode: UpdateMode = "replace") => setQueryParams({ [key]: next === fallback ? null : next }, mode),

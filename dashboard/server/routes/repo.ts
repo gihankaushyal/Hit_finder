@@ -12,9 +12,11 @@ async function git(runner: Runner, repoRoot: string, args: string[]): Promise<st
 export function repoRoutes(api: Hono, d: { runner: Runner; repoRoot: string }): void {
   api.get("/repo", async (c) => {
     try {
-      const branch = await git(d.runner, d.repoRoot, ["rev-parse", "--abbrev-ref", "HEAD"]);
-      const commit = await git(d.runner, d.repoRoot, ["rev-parse", "--short", "HEAD"]);
-      const commitFull = await git(d.runner, d.repoRoot, ["rev-parse", "HEAD"]);
+      const [branch, commit, commitFull] = await Promise.all([
+        git(d.runner, d.repoRoot, ["rev-parse", "--abbrev-ref", "HEAD"]),
+        git(d.runner, d.repoRoot, ["rev-parse", "--short", "HEAD"]),
+        git(d.runner, d.repoRoot, ["rev-parse", "HEAD"]),
+      ]);
       return c.json({ branch, commit, commitFull });
     } catch (err) {
       return respondWithError(c, err);

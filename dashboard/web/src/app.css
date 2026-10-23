@@ -3,7 +3,7 @@
 *, *::before, *::after { box-sizing: border-box; }
 * { scrollbar-width: thin; scrollbar-color: var(--rule-strong) transparent; }
 
-html { font-size: 14px; scroll-padding-top: 104px; }
+html { font-size: 14px; scroll-padding-top: calc(var(--nav-offset, 104px) + var(--s2)); }
 body {
   margin: 0;
   background: var(--bg);
@@ -180,7 +180,7 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .approval { border: 1px solid var(--rule); border-left: 3px solid var(--warn); border-radius: var(--radius); background: var(--surface-2); padding: var(--s3); display: flex; flex-direction: column; gap: var(--s2); min-width: 0; }
 .approval__title { font-size: 0.95rem; font-weight: 600; overflow-wrap: anywhere; }
 .approval__meta { font-size: 0.85rem; }
-.approval__code { margin: 0; padding: var(--s2); background: var(--terminal); color: #e2e8f0; border: 1px solid var(--rule); border-radius: var(--radius); font-size: 0.85rem; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 16em; overflow: auto; }
+.approval__code { margin: 0; padding: var(--s2); background: var(--terminal); color: var(--on-terminal); border: 1px solid var(--rule); border-radius: var(--radius); font-size: 0.85rem; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 16em; overflow: auto; }
 .approval__path { overflow-wrap: anywhere; }
 .approval__error { color: var(--fail); border-left: 2px solid var(--fail); padding-left: var(--s2); }
 
@@ -198,10 +198,10 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .agent__new { display: flex; flex-direction: column; gap: var(--s2); margin: var(--s2) 0 var(--s3); padding: var(--s3); border: 1px solid var(--rule); border-radius: var(--radius); background: var(--surface-2); }
 .field { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--rule-strong); border-radius: var(--radius); padding: var(--s2); min-width: 0; resize: vertical; }
 .field__label { font-size: 0.85rem; color: var(--text-dim); }
-.alog { max-height: 22em; overflow: auto; padding: var(--s2); background: var(--terminal); color: #e2e8f0; border: 1px solid var(--rule); border-radius: var(--radius); font-size: 0.9rem; }
+.alog { max-height: 22em; overflow: auto; padding: var(--s2); background: var(--terminal); color: var(--on-terminal); --text-dim: var(--on-terminal-dim); --fail: var(--on-terminal-fail); --code: var(--on-terminal-code); --surface-2: rgba(255, 255, 255, 0.1); border: 1px solid var(--rule); border-radius: var(--radius); font-size: 0.9rem; }
 .alog__row { margin: 0 0 var(--s1); overflow-wrap: anywhere; white-space: pre-wrap; }
 .alog__who { font-weight: 600; margin-right: var(--s1); }
-.alog__out { margin: 0 0 var(--s1); padding-left: var(--s2); border-left: 2px solid var(--rule-strong); color: #94a3b8; font-size: 0.8rem; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 8em; overflow: auto; }
+.alog__out { margin: 0 0 var(--s1); padding-left: var(--s2); border-left: 2px solid var(--rule-strong); color: var(--on-terminal-dim); font-size: 0.8rem; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 8em; overflow: auto; }
 .alog__out--err { border-left-color: var(--fail); }
 .alog__err { color: var(--fail); }
 
@@ -211,3 +211,6 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .chat__row--user { border-left: 2px solid var(--rule-strong); padding-left: var(--s2); }
 .chat__tool { margin: 0 0 var(--s2); }
 .chat__chip { display: inline-block; padding: 0 var(--s2); border: 1px solid var(--rule); border-radius: 999px; background: var(--surface-2); font-size: 0.8rem; }
+
+/* Panels and the runs table clip their content, so a ring drawn outside the box would be cut off at the edge. */
+.panel :focus-visible, .runs-wrap :focus-visible { outline-offset: -2px; }
