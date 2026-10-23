@@ -19,7 +19,11 @@ export function RightDrawer({ open, onClose }: { open: boolean; onClose: () => v
       if (e.key === "Escape" && !e.defaultPrevented && !(e.target instanceof HTMLSelectElement)) onClose();
       if (e.key !== "Tab" || !panel.current) return;
       // The drawer is modal: Tab wraps inside it instead of reaching the page behind the scrim.
-      const stops = Array.from(panel.current.querySelectorAll<HTMLElement>(FOCUSABLE)).filter((el) => getComputedStyle(el).display !== "none");
+      const stops = Array.from(panel.current.querySelectorAll<HTMLElement>(FOCUSABLE)).filter((el) => {
+        if (el.closest("[inert]")) return false;
+        const style = getComputedStyle(el);
+        return style.display !== "none" && style.visibility !== "hidden";
+      });
       if (stops.length === 0) return;
       const first = stops[0];
       const last = stops[stops.length - 1];

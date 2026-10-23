@@ -176,7 +176,7 @@ test.describe("panels with data", () => {
       await expect(panel(page, "Issues")).toBeVisible();
       expect(await overflow()).toBeLessThanOrEqual(0);
       await page.getByRole("link", { name: "Runs & Checkpoints" }).click();
-      await expect(panel(page, "Active Runs")).toBeVisible();
+      await expect(panel(page, "Runs")).toBeVisible();
       expect(await overflow()).toBeLessThanOrEqual(0);
     });
   }
@@ -189,7 +189,7 @@ test.describe("tabs and address", () => {
     await open(page, dashboard());
     await expect(page.getByRole("link", { name: "Overview" })).toHaveAttribute("aria-current", "page");
     await expect(panel(page, "Latest pull request")).toBeVisible();
-    await expect(panel(page, "Active Runs")).toBeVisible();
+    await expect(panel(page, "Runs")).toBeVisible();
     expect(new URL(page.url()).search).toBe("");
   });
 
@@ -200,7 +200,7 @@ test.describe("tabs and address", () => {
     await expect(panel(page, "Latest pull request")).toHaveCount(0);
     expect(new URL(page.url()).searchParams.get("tab")).toBe("kanban");
     await page.getByRole("link", { name: "Runs & Checkpoints" }).click();
-    await expect(panel(page, "Active Runs")).toBeVisible();
+    await expect(panel(page, "Runs")).toBeVisible();
     await expect(panel(page, "Kanban")).toHaveCount(0);
     expect(new URL(page.url()).searchParams.get("tab")).toBe("runs");
     await page.goBack();
@@ -213,7 +213,7 @@ test.describe("tabs and address", () => {
     const dash = dashboard();
     await open(page, dash);
     await page.goto(`${dash.baseUrl}/?tab=runs`);
-    await expect(panel(page, "Active Runs")).toBeVisible();
+    await expect(panel(page, "Runs")).toBeVisible();
     await page.reload();
     await expect(page.getByRole("link", { name: "Runs & Checkpoints" })).toHaveAttribute("aria-current", "page");
   });
@@ -221,7 +221,7 @@ test.describe("tabs and address", () => {
   test("the Runs filter and sort are kept in the address and restored on reload", async ({ page }) => {
     const dash = dashboard();
     await openTab(page, dash, "Runs & Checkpoints");
-    const runs = panel(page, "Active Runs");
+    const runs = panel(page, "Runs");
     await runs.getByLabel("Kind").selectOption("ssl-pretrain");
     await runs.getByLabel("Show archived and legacy runs").uncheck();
     await runs.getByRole("columnheader", { name: /^Updated/ }).getByRole("button").click();
@@ -239,7 +239,10 @@ test.describe("tabs and address", () => {
     await page.getByRole("button", { name: "Copy commit hash" }).click();
     await expect(page.locator(".nav__commit").getByRole("status")).toHaveText("Copied");
     const hash = await page.locator(".nav__commit .mono").innerText();
-    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(hash);
+    // The pill shows the short hash; the full one is what lands on the clipboard.
+    const copied = await page.evaluate(() => navigator.clipboard.readText());
+    expect(copied).toMatch(/^[0-9a-f]{40}$/);
+    expect(copied.startsWith(hash)).toBe(true);
   });
 });
 
@@ -388,7 +391,7 @@ test.describe("runs panel", () => {
 
   test("lists the fixture runs, flags the provisional one, and skips non-runs and symlinks", async ({ page }) => {
     await open(page, dashboard());
-    const runs = panel(page, "Active Runs");
+    const runs = panel(page, "Runs");
     await expect(runs.getByRole("table", { name: "Training runs" })).toBeVisible();
     await expect(runs.getByRole("row")).toHaveCount(10); // header + 9 runs
     const provisional = runs.getByRole("row").filter({ hasText: PROVISIONAL });
@@ -407,7 +410,7 @@ test.describe("runs panel", () => {
 
   test("the re-evaluation is a second tab and never replaces the fold's result", async ({ page }) => {
     await open(page, dashboard());
-    const runs = panel(page, "Active Runs");
+    const runs = panel(page, "Runs");
     await runs.getByRole("button", { name: new RegExp(PROVISIONAL) }).click();
     await expect(runs.getByText(WARNING)).toBeVisible();
     await runs.getByRole("tab", { name: "Re-evaluation" }).click();
@@ -419,7 +422,7 @@ test.describe("runs panel", () => {
 
   test("sorting by Status puts the provisional fold first and marks the column; Updated sorts newest first", async ({ page }) => {
     await open(page, dashboard());
-    const runs = panel(page, "Active Runs");
+    const runs = panel(page, "Runs");
     const status = runs.getByRole("columnheader", { name: /^Status/ });
     await status.getByRole("button").click();
     await expect(status).toHaveAttribute("aria-sort", "ascending");
@@ -433,7 +436,7 @@ test.describe("runs panel", () => {
 
   test("a corrupt results.json shows a fixed message on its row and nothing else breaks", async ({ page }) => {
     await open(page, dashboard());
-    const runs = panel(page, "Active Runs");
+    const runs = panel(page, "Runs");
     await runs.getByRole("button", { name: /resnet50-asymmetric-v2-fold1-seed42/ }).click();
     await expect(runs.getByRole("alert")).toHaveText("results.json: not valid JSON");
     await expect(runs.getByRole("alert")).not.toContainText("/");
@@ -443,8 +446,8 @@ test.describe("runs panel", () => {
     test(`no horizontal page scroll at ${width}x${height} with a run expanded`, async ({ page }) => {
       await page.setViewportSize({ width, height });
       await open(page, dashboard());
-      await panel(page, "Active Runs").getByRole("button", { name: new RegExp(PROVISIONAL) }).click();
-      await expect(panel(page, "Active Runs").getByRole("tabpanel")).toBeVisible();
+      await panel(page, "Runs").getByRole("button", { name: new RegExp(PROVISIONAL) }).click();
+      await expect(panel(page, "Runs").getByRole("tabpanel")).toBeVisible();
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
     });
   }
@@ -454,7 +457,7 @@ test.describe("runs panel without a checkpoints directory", () => {
   const dashboard = withDashboard({ checkpoints: false });
   test("explains that the panel needs the same filesystem", async ({ page }) => {
     await open(page, dashboard());
-    await expect(panel(page, "Active Runs")).toContainText("No checkpoints directory on this machine");
+    await expect(panel(page, "Runs")).toContainText("No checkpoints directory on this machine");
   });
 });
 

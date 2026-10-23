@@ -73,17 +73,31 @@ function GithubActions() {
   );
 }
 
+/** A line with a stable id, so the 500-line window can slide without remounting every row. */
+interface LogLine {
+  id: number;
+  text: string;
+}
+
 /** Output lines: what the server already has, plus lines streamed since. */
-function useTestLines(tail: string[] | undefined): string[] {
-  const [lines, setLines] = useState<string[]>([]);
-  const pending = useRef<string[]>([]);
+function useTestLines(tail: string[] | undefined): LogLine[] {
+  const [lines, setLines] = useState<LogLine[]>([]);
+  const pending = useRef<LogLine[]>([]);
   const frame = useRef(0);
+  const nextId = useRef(0);
+  const stamp = (text: string): LogLine => ({ id: nextId.current++, text });
+  const cancelFrame = () => {
+    if (frame.current !== 0) cancelAnimationFrame(frame.current);
+    frame.current = 0;
+  };
   useEffect(() => {
     pending.current = [];
-    if (tail) setLines(tail.slice(-MAX_LOG_LINES));
+    cancelFrame();
+    if (tail) setLines(tail.slice(-MAX_LOG_LINES).map(stamp));
   }, [tail]);
   useEffect(() => {
     // Lines can arrive faster than the screen refreshes; one render per frame is enough.
+    // Hidden tabs do not run animation frames, so the buffer is capped as lines arrive.
     const flush = () => {
       frame.current = 0;
       const batch = pending.current;
@@ -94,14 +108,14 @@ function useTestLines(tail: string[] | undefined): string[] {
       resource: "tests-line",
       reload: () => {},
       onLine: (line) => {
-        pending.current.push(line);
+        pending.current.push(stamp(line));
+        if (pending.current.length > MAX_LOG_LINES) pending.current.splice(0, pending.current.length - MAX_LOG_LINES);
         if (frame.current === 0) frame.current = requestAnimationFrame(flush);
       },
     });
     return () => {
       stop();
-      cancelAnimationFrame(frame.current);
-      frame.current = 0;
+      cancelFrame();
     };
   }, []);
   return lines;
@@ -124,7 +138,7 @@ const TermLine = memo(function TermLine({ text }: { text: string }) {
   );
 });
 
-function Log({ lines, live }: { lines: string[]; live: boolean }) {
+function Log({ lines, live }: { lines: LogLine[]; live: boolean }) {
   const ref = useRef<HTMLPreElement>(null);
   const [following, setFollowing] = useState(true);
   const followRef = useRef(true);
@@ -147,8 +161,8 @@ function Log({ lines, live }: { lines: string[]; live: boolean }) {
       {/* Focusable so keyboard users can scroll it. The trailing shell prompt is drawn by CSS, so it is not part of the output text. */}
       <pre ref={ref} className="log__body mono" aria-live="off" aria-label="Test output" tabIndex={0} onScroll={onScroll}>
         {lines.map((line, i) => (
-          <Fragment key={i}>
-            <TermLine text={line} />
+          <Fragment key={line.id}>
+            <TermLine text={line.text} />
             {i < lines.length - 1 ? "\n" : ""}
           </Fragment>
         ))}

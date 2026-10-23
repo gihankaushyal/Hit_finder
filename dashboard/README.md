@@ -12,10 +12,12 @@ Nothing here is imported by `src/`, and the Python test suite does not depend on
 ## Layout
 
 Three tabs, kept in the address (`?tab=kanban`, `?tab=runs`; Overview has no `tab` parameter, so
-every tab can be bookmarked or opened in a new window):
+every tab can be bookmarked or opened in a new window). Runs filters and sort (`kind`, `archived`, `sort`,
+`dir`) live in the same address and carry across tabs, so a filter set on Runs is still applied when you
+return to Overview:
 
 - **Overview**: Latest pull request, Tests (GitHub Actions and the local run) and a compact Kanban across the top,
-  Active Runs full width below.
+  Runs full width below.
 - **Kanban Board**: the board at full width, with the Issues panel beside it.
 - **Runs & Checkpoints**: the runs table at full height.
 

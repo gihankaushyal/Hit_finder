@@ -23,6 +23,8 @@ export const asTab = (v: string): TabId => (TABS.some((t) => t.id === v) ? (v as
 interface RepoInfo {
   branch: string;
   commit: string;
+  /** Older servers may not send it; the short hash is copied then. */
+  commitFull?: string;
 }
 
 const TONE: Record<StatusReading["kind"], BadgeTone> = { ok: "ok", fail: "fail", running: "info", idle: "neutral", attention: "warn" };
@@ -73,7 +75,7 @@ export const DashboardNav = forwardRef<HTMLButtonElement, NavProps>(function Das
         {repo.data?.commit && (
           <span className="nav__commit">
             <span className="mono" translate="no">{repo.data.commit}</span>
-            <CopyButton text={repo.data.commit} label="Copy commit hash" />
+            <CopyButton text={repo.data.commitFull ?? repo.data.commit} label="Copy commit hash" />
           </span>
         )}
         <span className="nav__badges">

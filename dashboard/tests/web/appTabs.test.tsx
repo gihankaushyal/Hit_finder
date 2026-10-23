@@ -36,7 +36,7 @@ describe("App tabs", () => {
     expect(await screen.findByRole("region", { name: "Latest pull request" })).toBeInTheDocument();
     expect(region("Tests")).toBeInTheDocument();
     expect(region("Kanban")).toBeInTheDocument();
-    expect(region("Active Runs")).toBeInTheDocument();
+    expect(region("Runs")).toBeInTheDocument();
     expect(region("Issues")).toBeNull();
   });
 
@@ -46,13 +46,13 @@ describe("App tabs", () => {
     expect(await screen.findByRole("region", { name: "Kanban" })).toBeInTheDocument();
     expect(region("Issues")).toBeInTheDocument();
     expect(region("Latest pull request")).toBeNull();
-    expect(region("Active Runs")).toBeNull();
+    expect(region("Runs")).toBeNull();
   });
 
   it("Runs & Checkpoints shows only the runs table", async () => {
     window.history.replaceState(null, "", "/?tab=runs");
     render(<App />);
-    expect(await screen.findByRole("region", { name: "Active Runs" })).toBeInTheDocument();
+    expect(await screen.findByRole("region", { name: "Runs" })).toBeInTheDocument();
     expect(region("Kanban")).toBeNull();
   });
 
@@ -68,7 +68,7 @@ describe("App tabs", () => {
     render(<App />);
     await screen.findByRole("region", { name: "Latest pull request" });
     await user.click(screen.getByRole("link", { name: "Runs & Checkpoints" }));
-    expect(await screen.findByRole("region", { name: "Active Runs" })).toBeInTheDocument();
+    expect(await screen.findByRole("region", { name: "Runs" })).toBeInTheDocument();
     expect(region("Latest pull request")).toBeNull();
     expect(window.location.search).toBe("?tab=runs");
     await user.click(screen.getByRole("link", { name: "Overview" }));

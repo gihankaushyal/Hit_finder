@@ -4,7 +4,7 @@ import { PanelFrame } from "../components/PanelFrame";
 import { Badge, type BadgeTone } from "../components/Badge";
 import { MetricGauge } from "../components/MetricGauge";
 import { StaleNotice, absoluteTime, panelState } from "../components/bits";
-import { SORT_LABEL, defaultDirection, describeSort, sortRuns, type SortDir, type SortKey } from "../lib/runSort";
+import { SORT_KEYS, SORT_LABEL, defaultDirection, describeSort, sortRuns, type SortDir, type SortKey } from "../lib/runSort";
 import { relTime } from "../lib/time";
 import { setQueryParams, useQueryParam } from "../lib/useQueryState";
 import { RUNS_REFRESH_MS, useResource } from "../lib/useResource";
@@ -32,7 +32,6 @@ const STATUS: Record<RunStatus, { tone: BadgeTone; text: string }> = {
   pretrain: { tone: "neutral", text: "Pretrain checkpoints" },
 };
 const KINDS = Object.keys(KIND_LABEL) as RunKind[];
-const SORT_KEYS = Object.keys(SORT_LABEL) as SortKey[];
 const DEFAULT_SORT: SortKey = "name";
 const DEFAULT_DIR: SortDir = "asc";
 const asKind = (v: string): RunKind | "all" => ((KINDS as string[]).includes(v) ? (v as RunKind) : "all");
@@ -274,7 +273,7 @@ export function RunsTable() {
       </>
     ) : undefined;
   return (
-    <PanelFrame title="Active Runs" count={data ? shown.length : undefined} actions={actions} state={panelState(res)} error={res.error ?? undefined} onRetry={res.reload}>
+    <PanelFrame title="Runs" count={data ? shown.length : undefined} actions={actions} state={panelState(res)} error={res.error ?? undefined} onRetry={res.reload}>
       <StaleNotice res={res} label="runs" />
       <div role="status" className="sr-only">{announcement}</div>
       {data && res.empty && !data.error && (

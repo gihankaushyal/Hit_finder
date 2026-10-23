@@ -224,7 +224,7 @@ describe("Runs", () => {
   it("loading, empty (no directory), empty (no runs) and error states", async () => {
     mockApi({ "GET /api/runs": () => new Promise(() => {}) as never });
     const a = render(<Runs />);
-    expect(screen.getByText("Loading Active Runs")).toBeInTheDocument();
+    expect(screen.getByText("Loading Runs")).toBeInTheDocument();
     a.unmount();
     mockApi({ "GET /api/runs": { body: body([], { checkpointsDirExists: false }) } });
     const b = render(<Runs />);

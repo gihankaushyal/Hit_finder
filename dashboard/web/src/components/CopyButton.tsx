@@ -33,9 +33,19 @@ async function writeClipboard(text: string): Promise<boolean> {
 export function CopyButton({ text, label }: { text: string; label: string }) {
   const [result, setResult] = useState<"copied" | "failed" | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
-  useEffect(() => () => clearTimeout(timer.current), []);
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      clearTimeout(timer.current);
+    };
+  }, []);
   const copy = async () => {
-    setResult((await writeClipboard(text)) ? "copied" : "failed");
+    const ok = await writeClipboard(text);
+    // The write is async; the button may be gone by now.
+    if (!mounted.current) return;
+    setResult(ok ? "copied" : "failed");
     clearTimeout(timer.current);
     timer.current = setTimeout(() => setResult(null), COPIED_MS);
   };

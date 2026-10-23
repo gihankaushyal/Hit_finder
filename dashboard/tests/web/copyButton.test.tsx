@@ -30,6 +30,22 @@ describe("CopyButton", () => {
     vi.unstubAllGlobals();
   });
 
+  it("sets no timer when it unmounts while the copy is still pending", async () => {
+    let finish: () => void = () => {};
+    const writeText = vi.fn().mockReturnValue(new Promise<void>((r) => { finish = r; }));
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+    const timeout = vi.spyOn(globalThis, "setTimeout");
+    const { unmount } = render(<CopyButton text="abc1234" label="Copy commit hash" />);
+    await userEvent.click(screen.getByRole("button", { name: "Copy commit hash" }));
+    const before = timeout.mock.calls.length;
+    unmount();
+    finish();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(timeout.mock.calls.length).toBe(before);
+    vi.unstubAllGlobals();
+  });
+
   it("says Copy failed when nothing can copy", async () => {
     vi.stubGlobal("navigator", { ...navigator, clipboard: undefined });
     Object.defineProperty(document, "execCommand", { value: () => false, configurable: true });
