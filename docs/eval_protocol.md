@@ -1,7 +1,7 @@
 # Cross-Detector Leave-One-Detector-Out Benchmark Protocol
 
 **Version:** 2.0 — Phase 5 update (2026-10-22); originally 1.0, Phase 1 finalization
-**Spec:** `docs/superpowers/specs/2026-05-13-benchmark-protocol-design.md` (original design)
+**Original design:** `docs/superpowers/plans/2026-05-13-benchmark-protocol.md` (the design spec file is no longer in the repo)
 **Implementation:** `src/evaluation/benchmark.py` (splits, patch aggregation, metrics), `src/training/lodo.py` (fold loop, sessions), `src/training/inference_results.py` (result files)
 
 ---

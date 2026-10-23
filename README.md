@@ -180,6 +180,7 @@ MAE pretraining (400 epochs) on pooled unlabeled frames, then either full fine-t
 | 3 | ePix10k | 0.8747 | 0.9062 |
 | 4 | Eiger4M | 0.8402 | 0.7397 |
 
+- **Caveat — mixed encoder generations:** the fold 1 and 2 MAE encoders were written on 2026-09-07, before the crop-diversity fix (PR #34, merged 2026-09-08); the fold 3 and 4 encoders (2026-09-10) include it. Fold 1 (AGIPD) is also the weakest fine-tune fold, so that gap may partly reflect the older encoder (n = 2, not proven).
 - **Comparable to Track 1 v1, with higher variance:** the fine-tuned ViT-S matches the supervised ResNet18 on mean cross AP (0.836 vs 0.839) but is less consistent across held-out detectors.
 - **Not yet compared against Track 1 v2 (0.900):** these SSL numbers come from the September 2026 generation (pretrain checkpoints `mae-vits16-fold*`), run on uncached preprocessing like Track 1 v1, so that pair is like-for-like. The SSL rerun under the current run-naming standard (`mae-vits16-v2`, `vits16-mae-finetune-v2`, `vits16-mae-probe-v2`) is still in progress (1 of 4 folds finished), so a like-for-like comparison with v2 is pending.
 - Per-fold detail and the comparison discussion → [docs/progress_notes.md §15.7](docs/progress_notes.md)

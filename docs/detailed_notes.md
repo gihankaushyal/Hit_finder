@@ -126,6 +126,10 @@ Encoder: `mae_vit_small_patch16` (embed dim 384, depth 12, 6 heads; decoder 256-
 
 These numbers are the **September 2026 generation** (pretrain checkpoints `mae-vits16-fold*`, result directories `vits16-mae-{finetune,probe}-fold*-seed42-v2`), run on uncached preprocessing — so the like-for-like Track 1 comparator is **asymmetric v1** (0.839), not v2. The rerun under the current naming standard (`mae-vits16-v2`, `vits16-mae-{finetune,probe}-v2`) had finished only fold 1 of the fine-tune and probe on 2026-10-22 (fine-tune cross AP 0.7728, probe 0.9425 on AGIPD), so it is excluded here.
 
+**Encoder generations are mixed.** By checkpoint timestamp, the fold 1 and 2 pretrained encoders (`mae-vits16-fold{1,2}-seed42/last.pt`, 2026-09-07) predate the crop-diversity fix (PR #34, merged 2026-09-08), while folds 3 and 4 (2026-09-10) include it. The fine-tune and probe stages themselves were all submitted after the fix and use `AsymmetricCXIDataset`, which PR #34 did not touch. `docs/progress_notes.md` §15.7 describes this table as post-fix; `PLANNING.md` records the split above. The fold-1 fine-tune (AP 0.752, best epoch 1) and fold-2 in-domain AP (0.785) are the weakest figures and are the ones the older encoders could explain (n = 2, not proven).
+
+**Fine-tuning peaks very early.** Full fine-tuning at lr 5e-5 reached its best validation F1 within a few epochs (best epochs: fold 1 → 1, fold 2 → 2, fold 4 → 10, fold 3 → 26) and early stopping (patience 10) then ended the run, whereas the frozen-encoder probes trained productively for 48–77 epochs. The fine-tune arm may therefore be under-trained relative to the probe (risk B4 in `PLANNING.md`).
+
 ### Cross-detector results
 
 | Fold | Held-out | Fine-tune AP | Fine-tune AUC | Fine-tune F1 | Probe AP | Probe AUC | Probe F1 |
