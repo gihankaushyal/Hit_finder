@@ -44,7 +44,8 @@ export function RightDrawer({ open, onClose }: { open: boolean; onClose: () => v
   }, [open, onClose]);
   return (
     <>
-      <button type="button" className="scrim" data-open={open} aria-label="Close agents panel" tabIndex={-1} onClick={onClose} />
+      {/* Mouse-only backdrop: hidden from assistive tech so the modal boundary stays clean; the close button and Escape serve everyone else. */}
+      <button type="button" className="scrim" data-open={open} aria-hidden="true" tabIndex={-1} onClick={onClose} />
       <aside ref={panel} id="agents-drawer" className="side-drawer" data-open={open} role="dialog" aria-modal="true" aria-label="Agents and chief of staff" inert={!open}>
         <header className="side-drawer__head">
           <h2>Agents and chief of staff</h2>

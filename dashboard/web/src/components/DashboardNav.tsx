@@ -1,4 +1,4 @@
-import { forwardRef, useLayoutEffect, useRef, type MouseEvent } from "react";
+import { forwardRef, useEffect, useLayoutEffect, useRef, useState, type MouseEvent } from "react";
 import { Crosshair, GitBranch, Robot } from "@phosphor-icons/react";
 import { Badge, type BadgeTone } from "./Badge";
 import { CopyButton } from "./CopyButton";
@@ -55,6 +55,14 @@ export const DashboardNav = forwardRef<HTMLButtonElement, NavProps>(function Das
   const testReading: StatusReading = tests.error ? { kind: "attention", text: "Unknown" } : testWord(tests.data);
   const search = useSearch();
   const header = useRef<HTMLElement>(null);
+  // The approvals list sits in the closed drawer, where its own live region is hidden, so say it here when the count rises.
+  const [announcement, setAnnouncement] = useState("");
+  const announced = useRef(0);
+  useEffect(() => {
+    if (waiting > announced.current) setAnnouncement(`${waiting} ${waiting === 1 ? "approval" : "approvals"} waiting for you`);
+    else if (waiting === 0) setAnnouncement("");
+    announced.current = waiting;
+  }, [waiting]);
   // The bar wraps on narrow screens, so anchor jumps and the skip link leave room for its real height.
   useLayoutEffect(() => {
     const el = header.current;
@@ -76,6 +84,7 @@ export const DashboardNav = forwardRef<HTMLButtonElement, NavProps>(function Das
   };
   return (
     <header ref={header} className="nav">
+      <div role="status" aria-live="polite" className="sr-only">{announcement}</div>
       <div className="nav__bar">
         <h1 className="nav__brand">
           <Crosshair size={18} weight="bold" aria-hidden="true" />

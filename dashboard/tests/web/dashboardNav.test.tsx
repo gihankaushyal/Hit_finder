@@ -84,6 +84,19 @@ describe("DashboardNav", () => {
     expect(await screen.findByText("CI Failed")).toBeInTheDocument();
   });
 
+  it("announces waiting approvals from the bar, since the list sits in the closed drawer", async () => {
+    mockApi({ ...routes, "GET /api/approvals": { body: { approvals: [{ id: "a" }, { id: "b" }] } } });
+    mount();
+    await waitFor(() => expect(screen.getAllByRole("status").some((s) => s.textContent === "2 approvals waiting for you")).toBe(true));
+  });
+
+  it("says nothing when no approval is waiting", async () => {
+    mockApi(routes);
+    mount();
+    await screen.findByText("CI Passed");
+    expect(screen.queryByText(/waiting for you/)).toBeNull();
+  });
+
   it("names the Agents button even with no approvals waiting (its text is hidden on phones)", () => {
     mount();
     expect(screen.getByRole("button", { name: "Agents" })).toBeInTheDocument();

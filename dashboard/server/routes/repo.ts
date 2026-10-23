@@ -8,16 +8,17 @@ async function git(runner: Runner, repoRoot: string, args: string[]): Promise<st
   return r.stdout.trim();
 }
 
+const SHORT_HASH_LENGTH = 7;
+
 /** GET /repo: the current branch and commit (short for display, full for copying), for the top bar. */
 export function repoRoutes(api: Hono, d: { runner: Runner; repoRoot: string }): void {
   api.get("/repo", async (c) => {
     try {
-      const [branch, commit, commitFull] = await Promise.all([
-        git(d.runner, d.repoRoot, ["rev-parse", "--abbrev-ref", "HEAD"]),
-        git(d.runner, d.repoRoot, ["rev-parse", "--short", "HEAD"]),
-        git(d.runner, d.repoRoot, ["rev-parse", "HEAD"]),
-      ]);
-      return c.json({ branch, commit, commitFull });
+      // One call, so the hash and the branch come from the same HEAD: --abbrev-ref applies to the arguments after it.
+      const out = await git(d.runner, d.repoRoot, ["rev-parse", "HEAD", "--abbrev-ref", "HEAD"]);
+      const [commitFull, branch] = out.split("\n").map((l) => l.trim());
+      if (!commitFull || !branch) throw new Error(`git rev-parse gave unexpected output: ${out.slice(0, 100)}`);
+      return c.json({ branch, commit: commitFull.slice(0, SHORT_HASH_LENGTH), commitFull });
     } catch (err) {
       return respondWithError(c, err);
     }

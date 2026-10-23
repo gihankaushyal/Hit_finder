@@ -78,12 +78,19 @@ function AddTask({ onAdded }: { onAdded: () => void }) {
   );
 }
 
-/** A stable, id-safe name for each card. Issues use their number and local-only tasks (number 0) their title; a repeat of either gets a count, so keys and DOM ids never collide. */
+/** A short id-safe fingerprint of a title (djb2), so titles that are all symbols or non-Latin text still differ. */
+function titleHash(title: string): string {
+  let h = 5381;
+  for (let i = 0; i < title.length; i++) h = ((h << 5) + h + title.charCodeAt(i)) >>> 0;
+  return h.toString(36);
+}
+
+/** A stable, id-safe name for each card. Issues use their number and local-only tasks (number 0) a hash of their title; a repeat of either gets a count, so keys and DOM ids never collide. */
 function rowKeys(tasks: Task[]): Map<Task, string> {
   const seen = new Map<string, number>();
   const keys = new Map<Task, string>();
   for (const t of tasks) {
-    const stem = t.number > 0 ? String(t.number) : `local-${t.title.replace(/[^A-Za-z0-9]+/g, "-")}`;
+    const stem = t.number > 0 ? String(t.number) : `local-${titleHash(t.title)}`;
     const n = seen.get(stem) ?? 0;
     seen.set(stem, n + 1);
     // The first issue keeps its bare number, so ids such as kb-5-check stay as they were.

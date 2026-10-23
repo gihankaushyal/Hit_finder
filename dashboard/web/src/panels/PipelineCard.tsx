@@ -5,7 +5,7 @@ import { StatusWord } from "../components/StatusWord";
 import { ExternalLink, SectionState, StaleNotice } from "../components/bits";
 import { ApiError, apiSend } from "../lib/api";
 import { ciRunWord, testWord } from "../lib/status";
-import { dropSeen, reconcile, type LogLine } from "../lib/logLines";
+import { reconcile, type LogLine } from "../lib/logLines";
 import { subscribe } from "../lib/events";
 import { duration, relTime } from "../lib/time";
 import { CI_REFRESH_MS, useResource } from "../lib/useResource";
@@ -94,9 +94,9 @@ function useTestLines(tail: string[] | undefined): LogLine[] {
   };
   useEffect(() => {
     if (!tail) return;
-    // A snapshot can lag a streamed line, so buffered lines stay unless the snapshot already holds them.
+    // A snapshot can lag the stream, so it never removes lines and the buffered ones stay.
+    // If the snapshot already holds a buffered line, that line shows twice rather than being lost.
     const snapshot = tail.slice(-MAX_LOG_LINES);
-    pending.current = dropSeen(snapshot, pending.current);
     setLines((prev) => reconcile(prev, snapshot, newId));
     if (pending.current.length > 0 && frame.current === 0) frame.current = requestAnimationFrame(flush);
   }, [tail]);
@@ -178,6 +178,12 @@ function LocalRun() {
   const tests = useResource<TestRunState>("tests", "/api/tests", () => false);
   const t = tests.data;
   const lines = useTestLines(t?.tail);
+  // This card only exists on the Overview tab, so coming back to it means lines streamed meanwhile are missing.
+  // Cached data at mount means we are returning (a first load is already being fetched): fetch the full output again.
+  const returning = useRef(tests.data !== null);
+  useEffect(() => {
+    if (returning.current) tests.reload();
+  }, []);
   const [starting, setStarting] = useState(false);
   const [startError, setStartError] = useState<string | null>(null);
   const [announcement, setAnnouncement] = useState("");

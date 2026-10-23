@@ -312,6 +312,15 @@ describe("Kanban sync and notices", () => {
     expect(new Set(boxes.map((b) => b.id)).size).toBe(2);
   });
 
+  it("tells local-only tasks apart even when their titles have no Latin letters", async () => {
+    const local = (title: string) => task(0, title, "todo", { url: null as unknown as string, inFile: true });
+    server(boardOf([local("测试"), local("修复")]));
+    render(<Kanban />);
+    const a = await screen.findByRole("checkbox", { name: "Mark 测试 done" });
+    const b = screen.getByRole("checkbox", { name: "Mark 修复 done" });
+    expect(a.id).not.toBe(b.id);
+  });
+
   it("gives a repeated issue number different ids, keeping the first one's plain", async () => {
     const dup = (status: TaskStatus) => task(5, "Same issue", status);
     server(boardOf([dup("todo"), dup("todo")]));

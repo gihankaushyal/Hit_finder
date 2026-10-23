@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { dropSeen, reconcile, type LogLine } from "../../web/src/lib/logLines";
+import { reconcile, type LogLine } from "../../web/src/lib/logLines";
 
 function counter(start = 100) {
   let n = start;
@@ -28,31 +28,23 @@ describe("reconcile", () => {
     expect(out.map((l) => l.id)).toEqual([0, 100, 101]);
   });
 
-  it("starts over, with new ids, when nothing lines up", () => {
+  it("ignores a snapshot that lags the stream: lines already shown are not removed", () => {
+    const prev = lines("a", "b", "c", "d", "e");
+    expect(reconcile(prev, ["a", "b", "c"], counter())).toBe(prev);
+    expect(reconcile(prev, ["b", "c", "d"], counter())).toBe(prev);
+  });
+
+  it("starts over, with new ids, when nothing lines up (a different run)", () => {
     const out = reconcile(lines("a", "b"), ["x", "y"], counter());
     expect(texts(out)).toEqual(["x", "y"]);
     expect(out.map((l) => l.id)).toEqual([100, 101]);
   });
 
+  it("clears the output for an empty snapshot", () => {
+    expect(reconcile(lines("a", "b"), [], counter())).toEqual([]);
+  });
+
   it("builds a snapshot from nothing", () => {
     expect(texts(reconcile([], ["a", "b"], counter()))).toEqual(["a", "b"]);
-  });
-});
-
-describe("dropSeen", () => {
-  it("keeps buffered lines the snapshot does not hold yet", () => {
-    expect(texts(dropSeen(["a", "b"], lines("c", "d")))).toEqual(["c", "d"]);
-  });
-
-  it("drops buffered lines the snapshot already ends with", () => {
-    expect(texts(dropSeen(["a", "b", "c"], lines("b", "c", "d")))).toEqual(["d"]);
-  });
-
-  it("drops everything when the snapshot has caught up", () => {
-    expect(dropSeen(["a", "b"], lines("a", "b"))).toEqual([]);
-  });
-
-  it("leaves an empty buffer alone", () => {
-    expect(dropSeen(["a"], [])).toEqual([]);
   });
 });

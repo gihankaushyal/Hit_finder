@@ -34,6 +34,12 @@ describe("RightDrawer", () => {
     expect(screen.getAllByRole("button", { name: "Close agents panel" }).find((b) => b === document.activeElement)).toBeTruthy();
   });
 
+  it("keeps the mouse-only backdrop out of the accessibility tree, leaving one close button", () => {
+    render(<RightDrawer open onClose={() => {}} />);
+    expect(document.querySelector(".scrim")).toHaveAttribute("aria-hidden", "true");
+    expect(screen.getAllByRole("button", { name: "Close agents panel" })).toHaveLength(1);
+  });
+
   it("closes on Escape, on the close button and on the backdrop", async () => {
     const onClose = vi.fn();
     render(<RightDrawer open onClose={onClose} />);
