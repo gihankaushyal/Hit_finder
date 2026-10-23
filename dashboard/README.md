@@ -9,6 +9,23 @@ worker agents with approval cards, the chief-of-staff chat and a terminal.
 
 Nothing here is imported by `src/`, and the Python test suite does not depend on it.
 
+## Layout
+
+Three tabs, kept in the address (`?tab=kanban`, `?tab=runs`; Overview has no `tab` parameter, so
+every tab can be bookmarked or opened in a new window). Runs filters and sort (`kind`, `archived`, `sort`,
+`dir`) live in the same address and carry across tabs, so a filter set on Runs is still applied when you
+return to Overview:
+
+- **Overview**: Latest pull request, Tests (GitHub Actions and the local run) and a compact Kanban across the top,
+  Runs full width below.
+- **Kanban Board**: the board at full width, with the Issues panel beside it.
+- **Runs & Checkpoints**: the runs table at full height.
+
+The **Agents** button in the top bar opens a slide-over with approvals, the chief-of-staff chat and the
+worker agents; its badge counts approvals waiting for you. The terminal stays in the strip at the bottom.
+The commit pill copies the full hash. The sun/moon button switches between the dark and light themes
+(both are defined in `web/src/tokens.css`; with no saved choice the system setting applies).
+
 ## Run it
 
 Requires Node 24 and an authenticated `gh` (`gh auth status`).
@@ -142,7 +159,7 @@ browser refreshes it every 60 s and the server caches each scan for 10 s.
 
 ## Agents and approvals
 
-The right-hand rail runs Claude Code worker agents. **New agent** takes a name, a task and an optional issue
+The Agents drawer (top bar, right side) runs Claude Code worker agents. **New agent** takes a name, a task and an optional issue
 number; the agent works alone in its own git worktree at `<agents dir>/<name>` on the branch
 `phase-05-agent-<name>`, cut from `DASH_AGENT_BASE`. You can read its log, send it messages, stop it and resume
 it. The main checkout is never modified: it is read-only to every agent, so queued SLURM jobs that read `src/`
@@ -252,7 +269,7 @@ real repository. If Playwright's bundled browser is missing, set
 `E2E_CHROMIUM_PATH` to a Chromium binary.
 
 Layout: `server/` (Hono API; `lib/kanbanMd.ts` is the byte-preserving markdown
-parser, `lib/kanbanSync.ts` the sync, `lib/runScan.ts` the Runs scanner), `web/src/` (React panels, plain CSS with
-tokens in `tokens.css`), `shared/types.ts` (API types), `tests/`, `e2e/`.
+parser, `lib/kanbanSync.ts` the sync, `lib/runScan.ts` the Runs scanner), `web/src/` (React panels and components, plain CSS: global
+tokens in `tokens.css`, shared base in `app.css`, and one CSS file beside each component; Geist fonts via fontsource), `shared/types.ts` (API types), `tests/`, `e2e/`.
 All subprocesses (`gh`, `git`, `pytest`) are run with argument arrays, never
 through a shell.

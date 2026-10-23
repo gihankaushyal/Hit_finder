@@ -9,6 +9,8 @@ import { useAgentLog } from "../lib/useAgentLog";
 import { AGENTS_REFRESH_MS, useResource } from "../lib/useResource";
 import type { AgentEvent, AgentState, AgentSummary, AgentsResponse } from "../../../shared/types";
 
+const ICON_SIZE = 14;
+
 const NAME_RE = /^[a-z0-9][a-z0-9-]{1,30}$/;
 const NAME_HELP = "Name must be 2 to 31 characters: lowercase letters, digits and hyphens.";
 const TASK_MAX = 8000;
@@ -190,7 +192,7 @@ export function Agents() {
       onRetry={res.reload}
       actions={
         <button ref={addButton} type="button" className="btn" aria-expanded={adding} onClick={() => setAdding((v) => !v)}>
-          <Plus size={14} aria-hidden="true" /> New agent
+          <Plus size={ICON_SIZE} aria-hidden="true" /> New agent
         </button>
       }
     >
@@ -207,7 +209,7 @@ export function Agents() {
               <li key={a.id} className="agent">
                 <div className="agent__head">
                   <button type="button" className="btn btn--bare" aria-expanded={isOpen} onClick={() => setOpen(isOpen ? null : a.id)}>
-                    {isOpen ? <CaretDown size={14} aria-hidden="true" /> : <CaretRight size={14} aria-hidden="true" />}
+                    {isOpen ? <CaretDown size={ICON_SIZE} aria-hidden="true" /> : <CaretRight size={ICON_SIZE} aria-hidden="true" />}
                     <span className="mono">{a.name}</span>
                   </button>
                   <StatusWord kind={w.kind}>{w.text}</StatusWord>

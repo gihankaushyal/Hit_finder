@@ -25,6 +25,19 @@ async function open(page: Page, dash: Dashboard): Promise<void> {
   await expect(page.getByRole("heading", { level: 1, name: "Hit_finder" })).toBeVisible();
 }
 
+/** Opens the dashboard and switches to a tab by clicking its link, as a user would. */
+async function openTab(page: Page, dash: Dashboard, tab: "Kanban Board" | "Runs & Checkpoints"): Promise<void> {
+  await open(page, dash);
+  await page.getByRole("link", { name: tab }).click();
+  await expect(page.getByRole("link", { name: tab })).toHaveAttribute("aria-current", "page");
+}
+
+/** The agents, approvals and chief of staff live in a slide-over; this opens it. */
+async function openDrawer(page: Page): Promise<void> {
+  await page.getByRole("button", { name: /^Agents/ }).click();
+  await expect(page.getByRole("dialog", { name: "Agents and chief of staff" })).toBeVisible();
+}
+
 const panel = (page: Page, title: string) => page.getByRole("region", { name: title, exact: true });
 const column = (page: Page, name: string) => page.getByRole("region", { name: new RegExp(`^${name}`) });
 const createCalls = (dash: Dashboard) => dash.ghCalls().filter((c) => c.args[0] === "issue" && c.args[1] === "create");
@@ -62,7 +75,7 @@ test.describe("panels with data", () => {
 
   test("the top bar shows the branch of the repository", async ({ page }) => {
     await open(page, dashboard());
-    await expect(page.getByLabel("Current branch")).toHaveText("e2e-branch");
+    await expect(page.locator(".nav__branch")).toContainText("e2e-branch");
   });
 
   test("latest pull request shows the summary bullets and the open PR's check state", async ({ page }) => {
@@ -77,16 +90,18 @@ test.describe("panels with data", () => {
     await expect(pr.getByRole("list", { name: "Earlier pull requests" })).toContainText("Add frame cache");
   });
 
-  test("issues lists the ordinary open issue and the CI panel lists the runs", async ({ page }) => {
+  test("the CI panel lists the runs, and the Kanban Board tab lists the ordinary open issue", async ({ page }) => {
     await open(page, dashboard());
-    await expect(panel(page, "Issues").getByRole("list", { name: "Open issues" })).toContainText("Eiger4M geometry looks off");
     await expect(panel(page, "Tests").getByText("GitHub Actions")).toBeVisible();
-    await expect(panel(page, "Tests").getByRole("link", { name: "main" })).toBeVisible();
+    await expect(panel(page, "Tests").getByRole("link", { name: "Push" }).first()).toBeVisible();
+    await expect(panel(page, "Tests").getByText("main").first()).toBeVisible();
+    await page.getByRole("link", { name: "Kanban Board" }).click();
+    await expect(panel(page, "Issues").getByRole("list", { name: "Open issues" })).toContainText("Eiger4M geometry looks off");
   });
 
   test("creating an issue adds it to the list and calls gh issue create", async ({ page }) => {
     const dash = dashboard();
-    await open(page, dash);
+    await openTab(page, dash, "Kanban Board");
     const issues = panel(page, "Issues");
     await issues.getByRole("button", { name: "New issue" }).click();
     await issues.getByLabel("Title").fill("E2E created issue");
@@ -149,16 +164,86 @@ test.describe("panels with data", () => {
     await expect(html).toHaveAttribute("data-theme", "dark");
   });
 
-  for (const size of [{ width: 1440, height: 900 }, { width: 1024, height: 768 }]) {
-    test(`no horizontal page scroll at ${size.width}x${size.height}`, async ({ page }) => {
+  for (const size of [{ width: 1440, height: 900 }, { width: 1024, height: 768 }, { width: 390, height: 844 }]) {
+    test(`no horizontal page scroll on any tab at ${size.width}x${size.height}`, async ({ page }) => {
       await page.setViewportSize(size);
       await open(page, dashboard());
+      const overflow = () => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
       await expect(panel(page, "Kanban")).toBeVisible();
+      await expect(panel(page, "Latest pull request")).toBeVisible();
+      expect(await overflow()).toBeLessThanOrEqual(0);
+      await page.getByRole("link", { name: "Kanban Board" }).click();
       await expect(panel(page, "Issues")).toBeVisible();
-      const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
-      expect(overflow).toBeLessThanOrEqual(0);
+      expect(await overflow()).toBeLessThanOrEqual(0);
+      await page.getByRole("link", { name: "Runs & Checkpoints" }).click();
+      await expect(panel(page, "Runs")).toBeVisible();
+      expect(await overflow()).toBeLessThanOrEqual(0);
     });
   }
+});
+
+test.describe("tabs and address", () => {
+  const dashboard = withDashboard();
+
+  test("opens on Overview and keeps the address clean", async ({ page }) => {
+    await open(page, dashboard());
+    await expect(page.getByRole("link", { name: "Overview" })).toHaveAttribute("aria-current", "page");
+    await expect(panel(page, "Latest pull request")).toBeVisible();
+    await expect(panel(page, "Runs")).toBeVisible();
+    expect(new URL(page.url()).search).toBe("");
+  });
+
+  test("each tab shows its own panels, the address follows, and Back returns", async ({ page }) => {
+    await open(page, dashboard());
+    await page.getByRole("link", { name: "Kanban Board" }).click();
+    await expect(panel(page, "Issues")).toBeVisible();
+    await expect(panel(page, "Latest pull request")).toHaveCount(0);
+    expect(new URL(page.url()).searchParams.get("tab")).toBe("kanban");
+    await page.getByRole("link", { name: "Runs & Checkpoints" }).click();
+    await expect(panel(page, "Runs")).toBeVisible();
+    await expect(panel(page, "Kanban")).toHaveCount(0);
+    expect(new URL(page.url()).searchParams.get("tab")).toBe("runs");
+    await page.goBack();
+    await expect(panel(page, "Issues")).toBeVisible();
+    await page.goBack();
+    await expect(panel(page, "Latest pull request")).toBeVisible();
+  });
+
+  test("a tab address can be opened directly and survives a reload", async ({ page }) => {
+    const dash = dashboard();
+    await open(page, dash);
+    await page.goto(`${dash.baseUrl}/?tab=runs`);
+    await expect(panel(page, "Runs")).toBeVisible();
+    await page.reload();
+    await expect(page.getByRole("link", { name: "Runs & Checkpoints" })).toHaveAttribute("aria-current", "page");
+  });
+
+  test("the Runs filter and sort are kept in the address and restored on reload", async ({ page }) => {
+    const dash = dashboard();
+    await openTab(page, dash, "Runs & Checkpoints");
+    const runs = panel(page, "Runs");
+    await runs.getByLabel("Kind").selectOption("ssl-pretrain");
+    await runs.getByLabel("Show archived and legacy runs").uncheck();
+    await runs.getByRole("columnheader", { name: /^Updated/ }).getByRole("button").click();
+    const q = new URL(page.url()).searchParams;
+    expect([q.get("tab"), q.get("kind"), q.get("archived"), q.get("sort")]).toEqual(["runs", "ssl-pretrain", "0", "updated"]);
+    await page.reload();
+    await expect(runs.getByLabel("Kind")).toHaveValue("ssl-pretrain");
+    await expect(runs.getByLabel("Show archived and legacy runs")).not.toBeChecked();
+    await expect(runs.getByRole("columnheader", { name: /^Updated/ })).toHaveAttribute("aria-sort", /ascending|descending/);
+  });
+
+  test("the commit pill copies the hash", async ({ page, context }) => {
+    await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+    await open(page, dashboard());
+    await page.getByRole("button", { name: "Copy commit hash" }).click();
+    await expect(page.locator(".nav__commit").getByRole("status")).toHaveText("Copied");
+    const hash = await page.locator(".nav__commit .mono").innerText();
+    // The pill shows the short hash; the full one is what lands on the clipboard.
+    const copied = await page.evaluate(() => navigator.clipboard.readText());
+    expect(copied).toMatch(/^[0-9a-f]{40}$/);
+    expect(copied.startsWith(hash)).toBe(true);
+  });
 });
 
 test.describe("empty states", () => {
@@ -167,10 +252,12 @@ test.describe("empty states", () => {
   test("each panel says what would appear", async ({ page }) => {
     await open(page, dashboard());
     await expect(panel(page, "Latest pull request")).toContainText("No merged pull requests yet");
-    await expect(panel(page, "Issues")).toContainText("No open issues");
     await expect(panel(page, "Tests")).toContainText("No CI runs found");
     await expect(panel(page, "Tests")).toContainText("No local run yet");
     await expect(panel(page, "Kanban")).toContainText("No tasks found in the kanban file yet");
+    await expect(column(page, "Blocked")).toContainText("No blocked issues");
+    await page.getByRole("link", { name: "Kanban Board" }).click();
+    await expect(panel(page, "Issues")).toContainText("No open issues");
   });
 });
 
@@ -181,17 +268,20 @@ test.describe("error states", () => {
     const dash = dashboard();
     dash.failGh(["pr list", "issue list", "run list"]);
     await open(page, dash);
-    for (const title of ["Latest pull request", "Issues"]) {
-      const p = panel(page, title);
-      await expect(p.getByRole("alert")).toContainText("GitHub CLI failed");
-      await expect(p.getByRole("button", { name: "Retry" })).toBeVisible();
-    }
+    const pr = panel(page, "Latest pull request");
+    await expect(pr.getByRole("alert")).toContainText("GitHub CLI failed");
+    await expect(pr.getByRole("button", { name: "Retry" })).toBeVisible();
     await expect(panel(page, "Tests").getByRole("alert").first()).toContainText("GitHub CLI failed");
+    await page.getByRole("link", { name: "Kanban Board" }).click();
+    const issues = panel(page, "Issues");
+    await expect(issues.getByRole("alert")).toContainText("GitHub CLI failed");
+    await expect(issues.getByRole("button", { name: "Retry" })).toBeVisible();
     dash.clearGhFailures();
-    await panel(page, "Issues").getByRole("button", { name: "Retry" }).click();
-    await expect(panel(page, "Issues").getByRole("list", { name: "Open issues" })).toContainText("Eiger4M geometry looks off");
-    await panel(page, "Latest pull request").getByRole("button", { name: "Retry" }).click();
-    await expect(panel(page, "Latest pull request").getByRole("link", { name: "Add the status dashboard" })).toBeVisible();
+    await issues.getByRole("button", { name: "Retry" }).click();
+    await expect(issues.getByRole("list", { name: "Open issues" })).toContainText("Eiger4M geometry looks off");
+    // Coming back to Overview refetches, so the panel that failed earlier recovers without a click.
+    await page.getByRole("link", { name: "Overview" }).click();
+    await expect(pr.getByRole("link", { name: "Add the status dashboard" })).toBeVisible();
   });
 });
 
@@ -211,7 +301,7 @@ test.describe("kanban after the import", () => {
     expect(real.code).toBe(0);
     expect(createCalls(dash)).toHaveLength(2);
     expect(dash.kanbanText()).toMatch(/Tune the vote threshold <!-- gh:#\d+ -->/);
-    await open(page, dash);
+    await openTab(page, dash, "Kanban Board");
     await expect(column(page, "In progress")).toContainText("Tune the vote threshold");
     await expect(column(page, "Done")).toContainText("Pick the detector split");
     await expect(panel(page, "Kanban").getByRole("button", { name: "Add task" })).toBeVisible();
@@ -219,7 +309,7 @@ test.describe("kanban after the import", () => {
 
   test("adding a task puts it in Todo, in the markdown under the inbox heading, and creates an issue", async ({ page }) => {
     const dash = dashboard();
-    await open(page, dash);
+    await openTab(page, dash, "Kanban Board");
     const before = createCalls(dash).length;
     await panel(page, "Kanban").getByRole("textbox", { name: "Task", exact: true }).fill(NEW_TASK);
     await panel(page, "Kanban").getByRole("button", { name: "Add task" }).click();
@@ -232,7 +322,7 @@ test.describe("kanban after the import", () => {
 
   test("completing a task strikes it through, ticks the markdown and closes the issue; reopening reverses all three", async ({ page }) => {
     const dash = dashboard();
-    await open(page, dash);
+    await openTab(page, dash, "Kanban Board");
     const box = panel(page, "Kanban").getByRole("checkbox", { name: `Mark ${NEW_TASK} done` });
     await box.check();
     await expect(column(page, "Done").locator("s", { hasText: NEW_TASK })).toBeVisible();
@@ -248,7 +338,7 @@ test.describe("kanban after the import", () => {
 
   test("the add-task form and the move control work with the keyboard alone", async ({ page }) => {
     const dash = dashboard();
-    await open(page, dash);
+    await openTab(page, dash, "Kanban Board");
     const title = "Keyboard only task";
     const input = panel(page, "Kanban").getByRole("textbox", { name: "Task", exact: true });
     // Reach the field by tabbing from the top of the page.
@@ -261,12 +351,15 @@ test.describe("kanban after the import", () => {
     await page.keyboard.type(title);
     await page.keyboard.press("Enter");
     await expect(column(page, "Todo")).toContainText(title);
-    // Move it with the select: focus, then arrow down to "In progress".
+    // Move it from the card's actions menu: open it with Enter, then arrow down to "In progress".
+    const actions = panel(page, "Kanban").getByRole("button", { name: `Actions for ${title}` });
+    await actions.focus();
+    await page.keyboard.press("Enter");
     const move = panel(page, "Kanban").getByLabel(`Move ${title}`);
     await move.focus();
     await page.keyboard.press("ArrowDown");
     await expect(column(page, "In progress")).toContainText(title);
-    await expect(move).toBeFocused();
+    await expect(actions).toBeFocused();
     await expect.poll(() => dash.ghIssues().find((i) => i.title === title)?.labels ?? []).toContain("status:in-progress");
   });
 
@@ -275,7 +368,7 @@ test.describe("kanban after the import", () => {
     // as a sync problem on that board rather than as a failed board read.
     const dash = dashboard();
     dash.failGh(["issue list"]);
-    await open(page, dash);
+    await openTab(page, dash, "Kanban Board");
     await panel(page, "Kanban").getByRole("button", { name: "Sync now" }).click();
     await expect(panel(page, "Kanban").getByText("Sync problem")).toBeVisible();
     dash.clearGhFailures();
@@ -388,6 +481,7 @@ test.describe("agents and approvals", () => {
   test("starting an agent shows it working, then idle, with its log", async ({ page }) => {
     const dash = dashboard();
     await open(page, dash);
+    await openDrawer(page);
     await expect(agents(page).getByText(/No agents yet/)).toBeVisible();
     await start(page, "tidy-notes", "tidy the notes");
     await expect(row(page, "tidy-notes").getByText("Idle")).toBeVisible();
@@ -401,15 +495,16 @@ test.describe("agents and approvals", () => {
   test("a gated command waits on a card with the exact command; approving continues the agent", async ({ page }) => {
     const dash = dashboard();
     await open(page, dash);
+    await openDrawer(page);
     await start(page, "pusher-ok", "please push the branch");
     const card = approvals(page).getByRole("article", { name: /pusher-ok/ });
     await expect(card.getByText("git push origin HEAD")).toBeVisible();
     await expect(row(page, "pusher-ok").getByText("Waiting for approval")).toBeVisible();
-    await expect(page.getByRole("link", { name: /1 waiting for approval/ })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Agents, 1 waiting for approval" })).toBeVisible();
     await card.getByRole("button", { name: "Approve" }).click();
     await expect(approvals(page).getByText(/Nothing is waiting/)).toBeVisible();
     await expect(row(page, "pusher-ok").getByText("Idle")).toBeVisible();
-    await expect(page.getByRole("link", { name: /waiting for approval/ })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: /waiting for approval/ })).toHaveCount(0);
     await row(page, "pusher-ok").getByRole("button", { name: /pusher-ok/ }).click();
     await expect(page.getByRole("log", { name: /pusher-ok/ })).toContainText("Approval allowed for Bash");
     await stopAll(page, dash, ["pusher-ok"]);
@@ -418,6 +513,7 @@ test.describe("agents and approvals", () => {
   test("denying tells the agent, which carries on", async ({ page }) => {
     const dash = dashboard();
     await open(page, dash);
+    await openDrawer(page);
     await start(page, "pusher-no", "please push the branch");
     await approvals(page).getByRole("button", { name: "Deny" }).click();
     await expect(row(page, "pusher-no").getByText("Idle")).toBeVisible();
@@ -431,9 +527,11 @@ test.describe("agents and approvals", () => {
   test("a pending approval survives a reload, and stopping the agent removes its card", async ({ page }) => {
     const dash = dashboard();
     await open(page, dash);
+    await openDrawer(page);
     await start(page, "pusher-wait", "please push the branch");
     await expect(approvals(page).getByRole("article")).toHaveCount(1);
     await page.reload();
+    await openDrawer(page);
     await expect(approvals(page).getByRole("article", { name: /pusher-wait/ })).toBeVisible();
     await row(page, "pusher-wait").getByRole("button", { name: /pusher-wait/ }).click();
     await page.getByRole("button", { name: "Stop", exact: true }).click();
@@ -444,6 +542,7 @@ test.describe("agents and approvals", () => {
   test("an approval can be made with the keyboard alone", async ({ page }) => {
     const dash = dashboard();
     await open(page, dash);
+    await openDrawer(page);
     await start(page, "pusher-key", "please push the branch");
     const approve = approvals(page).getByRole("button", { name: "Approve" });
     await approve.focus();
@@ -456,6 +555,7 @@ test.describe("agents and approvals", () => {
   test("the cap is enforced with a plain message", async ({ page }) => {
     const dash = dashboard();
     await open(page, dash);
+    await openDrawer(page);
     for (const n of ["cap-one", "cap-two", "cap-three"]) await start(page, n, "work");
     await agents(page).getByRole("button", { name: "New agent" }).click();
     await page.getByLabel("Name", { exact: true }).fill("cap-four");
@@ -470,6 +570,7 @@ test.describe("agents and approvals", () => {
       const dash = dashboard();
       await page.setViewportSize(size);
       await open(page, dash);
+    await openDrawer(page);
       await start(page, `layout-${size.width}`, "please push the branch");
       await expect(approvals(page).getByRole("article")).toHaveCount(1);
       const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
@@ -492,6 +593,7 @@ test.describe("chief of staff", () => {
   test("a chat instruction becomes a worker only after the card is approved", async ({ page }) => {
     const dash = dashboard();
     await open(page, dash);
+    await openDrawer(page);
     await expect(chief(page).getByText(/Ask the chief of staff/)).toBeVisible();
     await say(page, "please spawn chat-made");
     const card = approvals(page).getByRole("article", { name: /Chief of staff/ });
@@ -512,6 +614,7 @@ test.describe("chief of staff", () => {
   test("denying leaves no worker and the chief carries on", async ({ page }) => {
     const dash = dashboard();
     await open(page, dash);
+    await openDrawer(page);
     await say(page, "please spawn never-made");
     await approvals(page).getByRole("button", { name: "Deny" }).click();
     await expect(chief(page).getByText("Idle")).toBeVisible();
@@ -522,9 +625,11 @@ test.describe("chief of staff", () => {
   test("the conversation survives a reload, and a new conversation clears the session", async ({ page }) => {
     const dash = dashboard();
     await open(page, dash);
+    await openDrawer(page);
     await say(page, "hello chief");
     await expect(chief(page).getByRole("log")).toContainText("Received: hello chief");
     await page.reload();
+    await openDrawer(page);
     await expect(chief(page).getByRole("log")).toContainText("Received: hello chief");
     await chief(page).getByRole("button", { name: "New conversation" }).click();
     await chief(page).getByRole("button", { name: "Yes, start over" }).click();
@@ -534,6 +639,7 @@ test.describe("chief of staff", () => {
   test("stopping cancels the pending card", async ({ page }) => {
     const dash = dashboard();
     await open(page, dash);
+    await openDrawer(page);
     await say(page, "please spawn stopped-chat");
     await expect(approvals(page).getByRole("article")).toHaveCount(1);
     await chief(page).getByRole("button", { name: "Stop", exact: true }).click();
@@ -544,6 +650,7 @@ test.describe("chief of staff", () => {
   test("keyboard only: type, send with Ctrl+Enter, approve with Enter", async ({ page }) => {
     const dash = dashboard();
     await open(page, dash);
+    await openDrawer(page);
     await chief(page).getByLabel("Message to the chief of staff").fill("please spawn key-made");
     await page.keyboard.press("Control+Enter");
     const approve = approvals(page).getByRole("button", { name: "Approve" });
@@ -558,6 +665,7 @@ test.describe("chief of staff", () => {
       const dash = dashboard();
       await page.setViewportSize(size);
       await open(page, dash);
+    await openDrawer(page);
       await say(page, `please spawn lay-${size.width}`);
       await expect(approvals(page).getByRole("article")).toHaveCount(1);
       expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(0);

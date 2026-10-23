@@ -1,0 +1,58 @@
+.kb {
+  display: grid; grid-auto-flow: column; grid-auto-columns: minmax(210px, 1fr); gap: var(--s3);
+  overflow-x: auto; padding-bottom: var(--s1); overscroll-behavior-x: contain;
+}
+.kb-col {
+  min-width: 0; display: flex; flex-direction: column; gap: var(--s2); padding: 10px;
+  background: color-mix(in srgb, var(--surface-2) 55%, transparent); border: 1px solid var(--rule); border-radius: var(--radius-lg);
+}
+.kb-col__head { display: flex; align-items: center; gap: var(--s2); font-size: 0.85rem; font-weight: 600; padding: 2px 2px 4px; }
+.kb-col__count {
+  display: inline-flex; align-items: center; justify-content: center; min-width: 22px; height: 20px; padding: 0 7px;
+  border-radius: 999px; background: var(--surface); border: 1px solid var(--rule); color: var(--text-dim); font-size: 0.78rem; font-weight: 500;
+}
+.kb-col__list { display: flex; flex-direction: column; gap: var(--s2); max-height: var(--kb-list-max, 60vh); overflow: auto; overscroll-behavior: contain; padding: 1px; }
+
+.kb-card {
+  position: relative; display: flex; flex-direction: column; gap: 6px; padding: 10px; min-width: 0;
+  background: var(--surface); border: 1px solid var(--rule); border-radius: var(--radius); box-shadow: var(--shadow);
+  transition: background-color 150ms var(--ease), border-color 150ms var(--ease);
+}
+.kb-card:hover, .kb-card:focus-within { border-color: var(--rule-strong); background: color-mix(in srgb, var(--surface) 90%, var(--text)); }
+.kb-card__main { display: flex; align-items: flex-start; gap: var(--s2); min-width: 0; }
+.kb-card__main input[type="checkbox"] { margin: 3px 0 0; flex: none; }
+.kb-card__title { flex: 1; min-width: 0; overflow-wrap: anywhere; font-weight: 500; line-height: 1.4; }
+.kb-card__meta { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding-left: 24px; }
+.kb-card__note { margin: 0; padding-left: 24px; font-size: 0.85rem; }
+.chip--ref { color: var(--text); text-decoration: none; }
+a.chip--ref:hover { border-color: var(--rule-strong); text-decoration: underline; }
+.chip--kind { color: var(--info); background: color-mix(in srgb, var(--info) 12%, transparent); border-color: color-mix(in srgb, var(--info) 28%, transparent); }
+
+/* The actions button stays in the tab order; it fades in on hover or focus to cut clutter. */
+.kb-card__more {
+  display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; margin: -2px -4px 0 0; padding: 0;
+  background: transparent; border: 0; border-radius: var(--radius); color: var(--text-dim); cursor: pointer;
+  opacity: 0; transition: opacity 150ms var(--ease), background-color 150ms var(--ease);
+}
+.kb-card:hover .kb-card__more, .kb-card:focus-within .kb-card__more, .kb-card__more[aria-expanded="true"] { opacity: 1; }
+.kb-card__more:hover { background: color-mix(in srgb, var(--text) 10%, transparent); color: var(--text); }
+@media (hover: none) { .kb-card__more { opacity: 1; } }
+.kb-card__menu { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s1) var(--s2); margin-left: 24px; padding: 6px var(--s2); background: var(--surface-2); border: 1px solid var(--rule); border-radius: var(--radius); }
+.kb-card__menu label { font-size: 0.85rem; color: var(--text-dim); white-space: nowrap; }
+.kb-card__menu select { min-height: 28px; font-size: 0.85rem; flex: 1 1 13ch; min-width: 0; }
+
+.kb-empty {
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--s1); padding: var(--s4) var(--s3);
+  border: 1px dashed var(--rule-strong); border-radius: var(--radius); color: var(--text-faint); text-align: center; font-size: 0.85rem;
+}
+.kb-empty p { color: var(--text-dim); }
+
+.kb-add { display: flex; flex-direction: column; gap: var(--s1); }
+.kb-add label { font-weight: 500; font-size: 0.85rem; }
+.kb-add__row { display: flex; flex-wrap: wrap; gap: var(--s2); }
+.kb-add__row input { flex: 1 1 10ch; min-width: 0; }
+.kb-note { margin-bottom: var(--s2); }
+.kb-sync { white-space: nowrap; align-self: center; font-size: 0.85rem; }
+
+/* Overview shows the board in a narrow card: two columns per row instead of four cramped ones. */
+.overview__kanban .kb { grid-auto-flow: row; grid-auto-columns: unset; grid-template-columns: repeat(2, minmax(0, 1fr)); overflow-x: visible; }

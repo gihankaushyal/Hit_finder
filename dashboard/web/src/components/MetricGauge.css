@@ -1,0 +1,5 @@
+.gauge { display: inline-flex; align-items: center; justify-content: flex-end; gap: var(--s2); }
+.gauge--na { color: var(--text-faint); }
+.gauge__bar { width: 44px; height: 4px; border-radius: 999px; background: color-mix(in srgb, var(--text) 10%, transparent); overflow: hidden; flex: none; }
+.gauge__fill { display: block; width: 100%; height: 100%; border-radius: inherit; transform-origin: left center; background: var(--ok); }
+.gauge__bar[data-level="low"] .gauge__fill { background: var(--warn); }

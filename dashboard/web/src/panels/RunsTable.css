@@ -1,0 +1,35 @@
+/* Many runs must not stretch the page: the table scrolls inside the panel with its header kept in view. */
+.runs-wrap { overflow: auto; max-height: var(--runs-max, 60vh); margin: calc(var(--s2) * -1) calc(var(--s2) * -1); overscroll-behavior: contain; }
+.runs { width: 100%; border-collapse: collapse; }
+.runs thead th { position: sticky; top: 0; background: var(--surface); z-index: 1; box-shadow: inset 0 -1px 0 var(--rule); }
+.runs th, .runs td { text-align: left; padding: 10px var(--s3); border-bottom: 1px solid var(--rule); vertical-align: middle; }
+.runs th { font-size: 0.78rem; font-weight: 600; color: var(--text-dim); white-space: nowrap; text-transform: uppercase; letter-spacing: 0.05em; }
+.runs th.num, .runs td.num { text-align: right; white-space: nowrap; }
+.runs__name { min-width: 0; overflow-wrap: anywhere; }
+.runs__chips { display: flex; flex-wrap: wrap; gap: var(--s1); margin-top: 6px; padding-left: 22px; }
+.runs-row { transition: background-color 150ms var(--ease); }
+.runs-row:hover, .runs-row[data-open="true"] { background: color-mix(in srgb, var(--surface-2) 70%, transparent); }
+.runs-open { font-size: 0.9rem; }
+.runs-open__caret { flex: none; color: var(--text-dim); transition: color 150ms var(--ease); }
+.runs-open:hover .runs-open__caret { color: var(--text); }
+.runs__detail { background: var(--bg); padding: var(--s4) var(--s5) !important; }
+.runs-filter { display: inline-flex; gap: var(--s2); align-items: center; font-size: 0.85rem; color: var(--text-dim); }
+.runs-filter select { min-height: 28px; font-size: 0.85rem; color: var(--text); }
+.runs-facts { display: grid; grid-template-columns: max-content 1fr; gap: var(--s1) var(--s4); margin: 0 0 var(--s3); }
+.runs-facts dt { color: var(--text-dim); }
+.runs-facts dd { margin: 0; }
+.runs-metric-pair { display: flex; flex-wrap: wrap; gap: var(--s5); }
+.runs-metrics { border-collapse: collapse; }
+.runs-metrics caption { text-align: left; font-weight: 600; padding-bottom: var(--s1); }
+.runs-metrics th, .runs-metrics td { padding: 0 var(--s3) 0 0; border: 0; text-align: left; text-transform: none; letter-spacing: 0; }
+.runs-warnings { margin: var(--s3) 0 0; padding: 0 0 0 var(--s3); border-left: 2px solid var(--warn); list-style: none; }
+.runs-error { border-left: 2px solid var(--fail); padding-left: var(--s3); }
+.tabs { display: flex; gap: var(--s2); margin-bottom: var(--s3); }
+.tabs__tab { background: transparent; border-color: transparent; color: var(--text-dim); }
+.tabs__tab[aria-selected="true"] { color: var(--text); background: var(--surface-2); border-color: var(--rule-strong); font-weight: 600; }
+/* At least 24 px tall, the WCAG 2.2 minimum target size (the bare button has no padding). */
+.runs-sort { font: inherit; font-weight: 600; color: inherit; white-space: nowrap; min-height: 24px; padding: 2px 4px; margin-left: -4px; text-transform: inherit; letter-spacing: inherit; }
+.runs-sort:hover { text-decoration: none; color: var(--text); }
+.runs-sort svg { color: var(--text-faint); flex: none; }
+.runs th[aria-sort="ascending"] .runs-sort svg, .runs th[aria-sort="descending"] .runs-sort svg { color: var(--accent); }
+.runs th.num .runs-sort { margin-right: -4px; margin-left: 0; }

@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { Kanban, DONE_VISIBLE_COUNT } from "../../web/src/panels/Kanban";
+import { KanbanBoard as Kanban, DONE_VISIBLE_COUNT } from "../../web/src/panels/KanbanBoard";
 import { FakeEventSource, deferred, mockApi, stubEventSource, type Handler } from "./helpers";
 import type { Board, Task, TaskStatus } from "../../shared/types";
 
@@ -168,12 +168,14 @@ describe("Kanban changes", () => {
   it("the Move select is the keyboard path and PATCHes the chosen status", async () => {
     const { api } = server(boardOf(standard()));
     render(<Kanban />);
+    await userEvent.click(await screen.findByRole("button", { name: "Actions for Write docs" }));
     const sel = await screen.findByRole("combobox", { name: "Move Write docs" });
     expect(sel).toHaveValue("todo");
     await userEvent.selectOptions(sel, "blocked");
     expect(api.calls.find((c) => c.method === "PATCH")).toMatchObject({ path: "/api/kanban/tasks/1", body: { status: "blocked" } });
     expect(within(column("Blocked")).getByText("Write docs")).toBeInTheDocument();
-    expect(screen.getByRole("combobox", { name: "Move Write docs" })).toHaveFocus();
+    // The menu closes and the card changes column, so focus lands on its actions button.
+    expect(screen.getByRole("button", { name: "Actions for Write docs" })).toHaveFocus();
   });
 
   it("two quick changes to one task, with replies out of order, end in the last chosen column", async () => {
@@ -217,6 +219,7 @@ describe("Kanban changes", () => {
     });
     render(<Kanban />);
     await userEvent.click(await screen.findByRole("checkbox", { name: "Mark Write docs done" }));
+    await userEvent.click(screen.getByRole("button", { name: "Actions for Write docs" }));
     await userEvent.selectOptions(screen.getByRole("combobox", { name: "Move Write docs" }), "blocked");
     await waitFor(() => expect(state.board.columns.blocked.map((t) => t.title)).toContain("Write docs"));
     expect(within(column("Blocked")).getByText("Write docs")).toBeInTheDocument();
@@ -298,5 +301,31 @@ describe("Kanban sync and notices", () => {
     expect(screen.getByRole("button", { name: "Syncing…" })).toBeDisabled();
     gate.resolve();
     expect(await screen.findByRole("button", { name: "Sync now" })).toBeEnabled();
+  });
+
+  it("gives local-only tasks with the same title different ids", async () => {
+    const local = (title: string, status: TaskStatus) => task(0, title, status, { url: null as unknown as string, inFile: true });
+    const a = boardOf([local("TODO", "todo"), local("TODO", "todo")]);
+    server(a);
+    render(<Kanban />);
+    const boxes = await screen.findAllByRole("checkbox", { name: "Mark TODO done" });
+    expect(new Set(boxes.map((b) => b.id)).size).toBe(2);
+  });
+
+  it("tells local-only tasks apart even when their titles have no Latin letters", async () => {
+    const local = (title: string) => task(0, title, "todo", { url: null as unknown as string, inFile: true });
+    server(boardOf([local("测试"), local("修复")]));
+    render(<Kanban />);
+    const a = await screen.findByRole("checkbox", { name: "Mark 测试 done" });
+    const b = screen.getByRole("checkbox", { name: "Mark 修复 done" });
+    expect(a.id).not.toBe(b.id);
+  });
+
+  it("gives a repeated issue number different ids, keeping the first one's plain", async () => {
+    const dup = (status: TaskStatus) => task(5, "Same issue", status);
+    server(boardOf([dup("todo"), dup("todo")]));
+    render(<Kanban />);
+    const boxes = await screen.findAllByRole("checkbox", { name: "Mark Same issue done" });
+    expect(boxes.map((b) => b.id).sort()).toEqual(["kb-5-1-check", "kb-5-check"]);
   });
 });

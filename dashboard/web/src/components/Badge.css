@@ -1,0 +1,25 @@
+.badge {
+  --tone: var(--text-dim);
+  display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 9px;
+  border-radius: 999px; font-size: 0.78rem; font-weight: 500; white-space: nowrap;
+  color: var(--tone);
+  background: color-mix(in srgb, var(--tone) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--tone) 32%, transparent);
+}
+.badge svg { flex: none; }
+.badge[data-tone="ok"], .badge[data-tone="open"] { --tone: var(--ok); }
+.badge[data-tone="fail"] { --tone: var(--fail); }
+.badge[data-tone="warn"] { --tone: var(--warn); }
+.badge[data-tone="info"] { --tone: var(--info); }
+.badge[data-tone="merged"] { --tone: var(--merged); }
+.badge[data-tone="neutral"] { --tone: var(--text-dim); background: var(--surface-2); border-color: var(--rule); }
+
+.diff-chips { display: inline-flex; gap: 6px; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.diff-chip {
+  --tone: var(--ok);
+  display: inline-flex; align-items: center; height: 20px; padding: 0 7px; border-radius: 999px;
+  font-size: 0.78rem; line-height: 1; color: var(--tone);
+  background: color-mix(in srgb, var(--tone) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--tone) 28%, transparent);
+}
+.diff-chip--del { --tone: var(--fail); }

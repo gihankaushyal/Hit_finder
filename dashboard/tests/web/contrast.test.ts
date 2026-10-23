@@ -25,6 +25,13 @@ export function ratio(a: string, b: string): number {
   return (hi + 0.05) / (lo + 0.05);
 }
 
+/** Mirrors `color-mix(in srgb, <tone> 14%, transparent)` drawn over `base` in Badge.css. */
+const BADGE_TINT = 0.14;
+function mix(tone: string, base: string, amount: number): string {
+  const hex = [1, 3, 5].map((i) => Math.round(parseInt(tone.slice(i, i + 2), 16) * amount + parseInt(base.slice(i, i + 2), 16) * (1 - amount)));
+  return `#${hex.map((c) => c.toString(16).padStart(2, "0")).join("")}`;
+}
+
 const THEMES: [string, Record<string, string>][] = [
   ["dark", tokens(":root {")],
   ["light", tokens(':root[data-theme="light"]')],
@@ -50,6 +57,26 @@ describe("colour contrast (WCAG AA, at least 4.5:1)", () => {
       it("text and text-dim on surface-2", () => {
         expect(ratio(t["text"], t["surface-2"])).toBeGreaterThanOrEqual(MIN_RATIO);
         expect(ratio(t["text-dim"], t["surface-2"])).toBeGreaterThanOrEqual(MIN_RATIO);
+      });
+      it("status colours and muted text on every surface", () => {
+        for (const fg of ["warn", "merged", "info", "code", "text-faint"]) {
+          for (const bg of ["bg", "surface", "surface-2"]) {
+            expect(ratio(t[fg], t[bg]), `${fg} ${t[fg]} on ${bg} ${t[bg]}`).toBeGreaterThanOrEqual(MIN_RATIO);
+          }
+        }
+      });
+      it("text on the always-dark terminal surfaces (agent log, chat, approval code)", () => {
+        for (const fg of ["on-terminal", "on-terminal-dim", "on-terminal-fail", "on-terminal-code", "on-terminal-ok", "on-terminal-warn"]) {
+          expect(ratio(t[fg], t["terminal"]), `${fg} ${t[fg]} on terminal ${t["terminal"]}`).toBeGreaterThanOrEqual(MIN_RATIO);
+        }
+      });
+      it("badge and diff-chip text on its own tinted background (14% of the colour over each surface)", () => {
+        for (const fg of ["ok", "fail", "warn", "info", "merged"]) {
+          for (const bg of ["bg", "surface", "surface-2"]) {
+            const tinted = mix(t[fg], t[bg], BADGE_TINT);
+            expect(ratio(t[fg], tinted), `${fg} ${t[fg]} on its tint over ${bg} ${t[bg]}`).toBeGreaterThanOrEqual(MIN_RATIO);
+          }
+        }
       });
       it("the primary button text on the accent", () => {
         expect(ratio(t["accent-text"], t["accent"])).toBeGreaterThanOrEqual(MIN_RATIO);

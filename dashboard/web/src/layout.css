@@ -1,0 +1,29 @@
+.shell { min-height: 100dvh; display: grid; grid-template-rows: auto 1fr auto; }
+.main { padding: var(--s4) var(--s5) var(--s5); min-width: 0; width: 100%; max-width: 1920px; margin: 0 auto; }
+.main:focus { outline: none; }
+
+/* Overview: PR (30%), pipeline (25%), kanban (45%) over a full-width runs table */
+.overview { display: flex; flex-direction: column; gap: var(--s4); min-width: 0; }
+.overview__top {
+  display: grid; grid-template-columns: minmax(0, 30fr) minmax(0, 25fr) minmax(0, 45fr); gap: var(--s4);
+  height: clamp(480px, 66vh, 780px); min-width: 0;
+  --kb-list-max: 36vh;
+}
+.overview__top > .panel, .overview__kanban, .overview__kanban > .panel { min-height: 0; height: 100%; }
+.overview__kanban { min-width: 0; }
+.overview .runs-wrap { --runs-max: 50vh; }
+
+.kanban-tab { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: var(--s4); align-items: start; min-width: 0; --kb-list-max: 68vh; }
+.runs-tab { --runs-max: 78vh; min-width: 0; }
+
+@media (max-width: 1199px) {
+  .overview__top { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); height: auto; }
+  .overview__top > .panel, .overview__kanban, .overview__kanban > .panel { height: auto; }
+  .overview__top > .panel { max-height: 70vh; }
+  .overview__kanban { grid-column: 1 / -1; }
+  .kanban-tab { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 759px) {
+  .main { padding: var(--s3) var(--s4) var(--s4); }
+  .overview__top { grid-template-columns: minmax(0, 1fr); }
+}

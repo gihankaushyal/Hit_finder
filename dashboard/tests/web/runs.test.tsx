@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { Runs } from "../../web/src/panels/Runs";
+import { RunsTable as Runs } from "../../web/src/panels/RunsTable";
 import { FakeEventSource, mockApi, stubEventSource } from "./helpers";
 import type { RunResult, RunRow, RunsResponse } from "../../shared/types";
 

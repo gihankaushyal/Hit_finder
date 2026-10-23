@@ -1,9 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, render, renderHook, screen } from "@testing-library/react";
 import { useResource, CI_REFRESH_MS, PRS_REFRESH_MS, REPO_REFRESH_MS } from "../../web/src/lib/useResource";
-import { TopBar } from "../../web/src/panels/TopBar";
-import { TestStatus } from "../../web/src/panels/TestStatus";
-import { LatestPr } from "../../web/src/panels/LatestPr";
+import { DashboardNav } from "../../web/src/components/DashboardNav";
+
+/** The top bar as the tests use it: nothing opens a drawer or changes tab. */
+const TopBar = () => <DashboardNav tab="overview" onTab={() => {}} agentsOpen={false} onToggleAgents={() => {}} />;
+import { PipelineCard as TestStatus } from "../../web/src/panels/PipelineCard";
+import { PrCard as LatestPr } from "../../web/src/panels/PrCard";
 import { FakeEventSource, mockApi, stubEventSource } from "./helpers";
 
 const res = (status: number, body: unknown) => ({ ok: status >= 200 && status < 300, status, json: async () => body });

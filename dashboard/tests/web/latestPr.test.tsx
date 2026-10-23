@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { LatestPr, FILES_COLLAPSED_COUNT } from "../../web/src/panels/LatestPr";
+import { PrCard as LatestPr, FILES_COLLAPSED_COUNT } from "../../web/src/panels/PrCard";
 import { mockApi, stubEventSource } from "./helpers";
 import type { PrDetail, PrSummary, PrsResponse } from "../../shared/types";
 
@@ -49,7 +49,9 @@ describe("LatestPr", () => {
     const plan = screen.getByRole("list", { name: "Test plan" });
     expect(within(plan).getByText("pytest passes").closest("s")).not.toBeNull();
     expect(within(plan).getByText("smoke on Sol").closest("s")).toBeNull();
-    expect(within(plan).queryByRole("checkbox")).not.toBeInTheDocument();
+    const boxes = within(plan).getAllByRole("checkbox");
+    expect(boxes.map((b) => (b as HTMLInputElement).checked)).toEqual([true, false]);
+    for (const b of boxes) expect(b).toBeDisabled();
     expect(screen.getByRole("heading", { level: 2, name: "Latest pull request" })).toBeInTheDocument();
   });
 
@@ -108,6 +110,13 @@ describe("LatestPr", () => {
     render(<LatestPr />);
     const open = await screen.findByRole("list", { name: "Open pull requests" });
     expect(within(open).getByText(text)).toBeInTheDocument();
+  });
+
+  it("the merged latest PR does not claim a checks status the server never sent", async () => {
+    mockApi({ "GET /api/prs": { body: payload() } });
+    render(<LatestPr />);
+    await screen.findByRole("article");
+    expect(screen.queryByText("No checks reported")).not.toBeInTheDocument();
   });
 
   it("empty: says what would appear", async () => {

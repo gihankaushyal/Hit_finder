@@ -8,6 +8,9 @@ import type { TerminalStatus } from "../../../shared/types";
 
 type Mode = "closed" | "connecting" | "live" | "reconnecting" | "error";
 
+/** Used only if the stylesheet is not there to ask. */
+const FALLBACK_BACKGROUND = "#0a0d13";
+const FALLBACK_FOREGROUND = "#e2e8f0";
 const DEFAULT_BACKOFF_MS = [1000, 2000, 5000, 15000];
 const SCROLLBACK_LINES = 2000;
 const RESIZE_DEBOUNCE_MS = 100;
@@ -25,6 +28,12 @@ const cssVar = (name: string, fallback: string): string => {
   const v = typeof document === "undefined" ? "" : getComputedStyle(document.documentElement).getPropertyValue(name).trim();
   return v || fallback;
 };
+
+/** The terminal frame is dark in both themes, but its shade differs; text and cursor are light in both. Read when asked, so a theme change is picked up. */
+function terminalTheme() {
+  const foreground = cssVar("--on-terminal", FALLBACK_FOREGROUND);
+  return { background: cssVar("--terminal", FALLBACK_BACKGROUND), foreground, cursor: foreground };
+}
 
 async function streamError(res: Response): Promise<ApiError> {
   let message = `The terminal stream failed (HTTP ${res.status}).`;
@@ -114,8 +123,16 @@ export function TerminalDrawer({ backoffMs = DEFAULT_BACKOFF_MS, stableMs = STAB
         cursorBlink: true,
         scrollback: SCROLLBACK_LINES,
         screenReaderMode: true,
-        theme: { background: cssVar("--bg", "#0e1113"), foreground: cssVar("--text", "#e4e7e9"), cursor: cssVar("--accent", "#f0a020") },
+        theme: terminalTheme(),
       });
+      // The theme toggle sets data-theme on <html>; the system setting applies when none is saved.
+      const retheme = () => {
+        term.options.theme = terminalTheme();
+      };
+      const themeWatch = typeof MutationObserver === "undefined" ? null : new MutationObserver(retheme);
+      themeWatch?.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+      const scheme = typeof window.matchMedia === "function" ? window.matchMedia("(prefers-color-scheme: light)") : null;
+      scheme?.addEventListener?.("change", retheme);
       const fit = new FitAddon();
       term.loadAddon(fit);
       term.open(host.current);
@@ -144,6 +161,8 @@ export function TerminalDrawer({ backoffMs = DEFAULT_BACKOFF_MS, stableMs = STAB
       cleanup = () => {
         stopped = true;
         observer?.disconnect();
+        themeWatch?.disconnect();
+        scheme?.removeEventListener?.("change", retheme);
         if (resizeTimer) clearTimeout(resizeTimer);
         conn?.abort();
         // Ends only this browser's stream; the tmux session, and whatever runs in it, keeps going.
@@ -223,7 +242,7 @@ export function TerminalDrawer({ backoffMs = DEFAULT_BACKOFF_MS, stableMs = STAB
         {word && <StatusWord kind={word.kind}>{word.text}</StatusWord>}
         {off && <span className="dim">The terminal is switched off (DASH_TERMINAL=off).</span>}
         {wanted && <span className="dim drawer__hint">Your shell keeps running in tmux when you close this. F6 leaves the terminal.</span>}
-        <span className="topbar__spacer" />
+        <span className="drawer__spacer" />
         {wanted && (
           <>
             <button type="button" className="btn btn--quiet" aria-pressed={tall} onClick={() => setTall((v) => !v)}>

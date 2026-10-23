@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { TestStatus } from "../../web/src/panels/TestStatus";
+import { PipelineCard as TestStatus } from "../../web/src/panels/PipelineCard";
 import { FakeEventSource, mockApi, stubEventSource } from "./helpers";
 import type { CiRun, TestRunState } from "../../shared/types";
 
@@ -27,7 +27,8 @@ describe("TestStatus", () => {
     render(<TestStatus />);
     const gh = await screen.findByRole("region", { name: "GitHub Actions" });
     expect(within(gh).getByText("Passed")).toBeInTheDocument();
-    expect(within(gh).getAllByRole("link", { name: "main" })[0]).toHaveAttribute("href", "https://github.com/o/r/actions/runs/1");
+    expect(within(gh).getAllByRole("link", { name: "Push" })[0]).toHaveAttribute("href", "https://github.com/o/r/actions/runs/1");
+    expect(within(gh).getAllByText("main")[0]).toHaveClass("ci-run__branch");
     expect(within(gh).getAllByText("2 h ago").length).toBeGreaterThan(0);
     const local = screen.getByRole("region", { name: "Local run" });
     expect(await within(local).findByText("17")).toHaveClass("mono");
@@ -44,6 +45,13 @@ describe("TestStatus", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Run tests" }));
     await waitFor(() => expect(api.count("POST", "/api/tests/run")).toBe(1));
     await waitFor(() => expect(api.count("GET", "/api/tests")).toBe(2));
+  });
+
+  it("shows no empty output box before the first local run", async () => {
+    mockApi({ "GET /api/ci": ci, "GET /api/tests": { body: idle } });
+    render(<TestStatus />);
+    await screen.findByText(/No local run yet/);
+    expect(screen.queryByLabelText("Test output")).not.toBeInTheDocument();
   });
 
   it("the button is disabled and reads Running while a run is active", async () => {
@@ -69,15 +77,43 @@ describe("TestStatus", () => {
     Object.defineProperty(log, "clientHeight", { configurable: true, get: () => 100 });
     Object.defineProperty(log, "scrollTop", { configurable: true, get: () => top, set: (v: number) => { top = v; } });
     act(() => FakeEventSource.emit({ type: "tests-line", line: "tests/test_b.py F" }));
-    expect(log).toHaveTextContent("tests/test_b.py F");
+    await waitFor(() => expect(log).toHaveTextContent("tests/test_b.py F")); // lines are batched to one render per frame
     expect(top).toBe(1000); // at the tail: follows
     top = 0;
     fireEvent.scroll(log); // user scrolled up
     act(() => FakeEventSource.emit({ type: "tests-line", line: "tests/test_c.py ." }));
-    expect(log).toHaveTextContent("tests/test_c.py .");
+    await waitFor(() => expect(log).toHaveTextContent("tests/test_c.py ."));
     expect(top).toBe(0); // not yanked back
     await userEvent.click(screen.getByRole("button", { name: "Follow output" }));
     expect(top).toBe(1000);
+  });
+
+  it("a new run replaces the old output even when its opening lines are the same", async () => {
+    const head = ["=== test session starts ===", "collected 3 items"];
+    let state: TestRunState = { ...running, tail: [...head, "old_a PASSED", "old_b PASSED"] };
+    mockApi({ "GET /api/ci": ci, "GET /api/tests": () => ({ body: state }) });
+    render(<TestStatus />);
+    const log = await screen.findByLabelText("Test output");
+    expect(log).toHaveTextContent("old_b PASSED");
+    state = { ...running, startedAt: "2026-10-07T11:00:00Z", tail: head };
+    act(() => FakeEventSource.emit({ type: "invalidate", resource: "tests" }));
+    await waitFor(() => expect(log).not.toHaveTextContent("old_a PASSED"));
+    act(() => FakeEventSource.emit({ type: "tests-line", line: "new_a PASSED" }));
+    await waitFor(() => expect(log).toHaveTextContent("new_a PASSED"));
+    expect(log).not.toHaveTextContent("old_b PASSED");
+  });
+
+  it("a snapshot that lags the stream does not remove lines already shown", async () => {
+    let state: TestRunState = { ...running, tail: ["one", "two"] };
+    mockApi({ "GET /api/ci": ci, "GET /api/tests": () => ({ body: state }) });
+    render(<TestStatus />);
+    const log = await screen.findByLabelText("Test output");
+    act(() => FakeEventSource.emit({ type: "tests-line", line: "three" }));
+    await waitFor(() => expect(log).toHaveTextContent("three"));
+    state = { ...running, tail: ["one", "two"] }; // an older answer arrives late
+    act(() => FakeEventSource.emit({ type: "invalidate", resource: "tests" }));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(log).toHaveTextContent("three");
   });
 
   it("announces the result politely when a run finishes", async () => {
@@ -115,5 +151,20 @@ describe("TestStatus", () => {
     render(<TestStatus />);
     expect(screen.getByText("Loading GitHub Actions")).toBeInTheDocument();
     expect(screen.getByText("Loading Local run")).toBeInTheDocument();
+  });
+});
+
+describe("PipelineCard log prompt", () => {
+  beforeEach(() => stubEventSource());
+  afterEach(() => vi.unstubAllGlobals());
+  it("only trails a live prompt while a run is active", async () => {
+    mockApi({ "GET /api/ci": ci, "GET /api/tests": { body: { ...done, tail: ["17 passed in 252.00s"] } } });
+    const finished = render(<TestStatus />);
+    const log = await screen.findByLabelText("Test output");
+    expect(log.closest(".log")).toHaveAttribute("data-live", "false");
+    finished.unmount();
+    mockApi({ "GET /api/ci": ci, "GET /api/tests": { body: running } });
+    render(<TestStatus />);
+    expect((await screen.findByLabelText("Test output")).closest(".log")).toHaveAttribute("data-live", "true");
   });
 });
