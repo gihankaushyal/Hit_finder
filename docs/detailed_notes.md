@@ -92,7 +92,7 @@ Full 4-fold 100-epoch results. Config: `configs/supervised/resnet18_asymmetric.y
 
 ## Asymmetric Pipeline v2 — frame-cache-backed training
 
-Run `resnet18-asymmetric-v2` (`checkpoints/resnet18-asymmetric-v2-fold*-seed42/results.json`, aggregated 2026-10-22). Same preprocessing as v1; the frame cache is bit-identical through GCN (enforced by the cache's bit-exactness gate), so differences come from cheaper epochs under the same early-stopping budget and run-to-run variation, not from a preprocessing change.
+Run `resnet18-asymmetric-v2` (`checkpoints/resnet18-asymmetric-v2-fold*-seed42/results.json`, aggregated 2026-10-22). Same preprocessing as v1; the frame cache matches the uncached path through GCN (masks and centroids exactly; frames up to float16 storage rounding, max |Δ| < 0.1 and relative < 1e-3 in `TestBitExactnessAgainstRealData`), so differences come from cheaper epochs under the same early-stopping budget and run-to-run variation, not from a preprocessing change.
 
 ### Cross-detector results
 

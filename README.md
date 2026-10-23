@@ -150,7 +150,7 @@ Hitfinder-guided cropping (Path A: centroid-centred, label=1 / Path B: hard-nega
 
 ### Asymmetric Pipeline v2 — frame-cache-backed training
 
-Same preprocessing as the baseline above, now backed by the on-disk frame cache (bit-identical through GCN per the cache's bit-exactness gate) — the gain below comes from cheaper epochs under the same early-stopping budget, not a preprocessing change.
+Same preprocessing as the baseline above, now backed by the on-disk frame cache (matches the uncached path through GCN: masks and centroids exactly, frames up to float16 storage rounding, per the cache's equivalence test) — the gain below comes from cheaper epochs under the same early-stopping budget, not a preprocessing change.
 
 | Fold | Held-out | Cross AP | Cross AUC | Cross F1 | Δ AP vs. v1 |
 |------|----------|----------|-----------|----------|------|
