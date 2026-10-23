@@ -7,6 +7,8 @@ import { relTime } from "../lib/time";
 import { useResource } from "../lib/useResource";
 import type { Issue } from "../../../shared/types";
 
+const ICON_SIZE = 14;
+
 // These mirror the server's limits (server/routes/issues.ts).
 export const TITLE_MAX_CHARS = 200;
 export const BODY_MAX_CHARS = 60_000;
@@ -106,7 +108,7 @@ export function Issues() {
   const actions =
     state === "ready" ? (
       <button type="button" className="btn" ref={newBtn} aria-expanded={open} onClick={() => { setCreated(null); setOpen(!open); }}>
-        <Plus size={14} aria-hidden="true" />
+        <Plus size={ICON_SIZE} aria-hidden="true" />
         <span>New issue</span>
       </button>
     ) : undefined;

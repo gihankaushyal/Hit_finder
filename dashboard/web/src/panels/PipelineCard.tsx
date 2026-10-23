@@ -74,13 +74,23 @@ function GithubActions() {
   );
 }
 
-/** Output lines: what the server already has, plus lines streamed since. */
-function useTestLines(tail: string[] | undefined): LogLine[] {
+/**
+ * Output lines: what the server already has, plus lines streamed since. `run` identifies the run the
+ * snapshot belongs to; when it changes the old output is discarded rather than merged with the new run's.
+ */
+function useTestLines(tail: string[] | undefined, run: string | null | undefined): LogLine[] {
   const [lines, setLines] = useState<LogLine[]>([]);
+  // What is on screen, kept in a ref too so ids are handed out outside React's state updaters.
+  const shown = useRef<LogLine[]>([]);
   const pending = useRef<LogLine[]>([]);
   const frame = useRef(0);
   const nextId = useRef(0);
+  const currentRun = useRef<string | null | undefined>(undefined);
   const newId = () => nextId.current++;
+  const show = (next: LogLine[]) => {
+    shown.current = next;
+    setLines(next);
+  };
   const cancelFrame = () => {
     if (frame.current !== 0) cancelAnimationFrame(frame.current);
     frame.current = 0;
@@ -90,16 +100,22 @@ function useTestLines(tail: string[] | undefined): LogLine[] {
     frame.current = 0;
     const batch = pending.current;
     pending.current = [];
-    if (batch.length > 0) setLines((prev) => [...prev, ...batch].slice(-MAX_LOG_LINES));
+    if (batch.length > 0) show([...shown.current, ...batch].slice(-MAX_LOG_LINES));
   };
   useEffect(() => {
     if (!tail) return;
+    if (currentRun.current !== run) {
+      // A different run: nothing of the old output or its buffered lines belongs here.
+      currentRun.current = run;
+      pending.current = [];
+      cancelFrame();
+      shown.current = [];
+    }
     // A snapshot can lag the stream, so it never removes lines and the buffered ones stay.
     // If the snapshot already holds a buffered line, that line shows twice rather than being lost.
-    const snapshot = tail.slice(-MAX_LOG_LINES);
-    setLines((prev) => reconcile(prev, snapshot, newId));
+    show(reconcile(shown.current, tail.slice(-MAX_LOG_LINES), newId));
     if (pending.current.length > 0 && frame.current === 0) frame.current = requestAnimationFrame(flush);
-  }, [tail]);
+  }, [tail, run]);
   useEffect(() => {
     // Hidden tabs do not run animation frames, so the buffer is capped as lines arrive.
     const stop = subscribe({
@@ -177,13 +193,14 @@ function Log({ lines, live }: { lines: LogLine[]; live: boolean }) {
 function LocalRun() {
   const tests = useResource<TestRunState>("tests", "/api/tests", () => false);
   const t = tests.data;
-  const lines = useTestLines(t?.tail);
+  const lines = useTestLines(t?.tail, t?.startedAt);
   // This card only exists on the Overview tab, so coming back to it means lines streamed meanwhile are missing.
   // Cached data at mount means we are returning (a first load is already being fetched): fetch the full output again.
   const returning = useRef(tests.data !== null);
+  const { reload: reloadTests } = tests;
   useEffect(() => {
-    if (returning.current) tests.reload();
-  }, []);
+    if (returning.current) reloadTests();
+  }, [reloadTests]);
   const [starting, setStarting] = useState(false);
   const [startError, setStartError] = useState<string | null>(null);
   const [announcement, setAnnouncement] = useState("");

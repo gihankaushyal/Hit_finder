@@ -30,16 +30,16 @@
 .log { position: relative; margin-top: var(--s3); }
 .log__body {
   margin: 0; height: 11em; overflow: auto; padding: var(--s3);
-  background: var(--terminal); color: #cbd5e1; border: 1px solid var(--rule-strong); border-radius: var(--radius);
+  background: var(--terminal); color: var(--on-terminal); border: 1px solid var(--rule-strong); border-radius: var(--radius);
   font-size: 0.8rem; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; overscroll-behavior: contain;
 }
 /* While a run is active, a shell prompt and caret trail the output; generated content, so it is not copied or read as output. */
 .log[data-live="true"] .log__body::after {
-  content: "$"; display: block; width: fit-content; padding-right: 0.45ch; color: #34d399;
+  content: "$"; display: block; width: fit-content; padding-right: 0.45ch; color: var(--on-terminal-ok);
   border-right: 0.55em solid transparent; animation: caret 1.1s steps(1) infinite;
 }
-@keyframes caret { 50% { border-right-color: #94a3b8; } }
-.log__body .t-url { color: #67e8f9; }
-.log__body .t-sum { color: #fcd34d; font-weight: 500; }
-.log__body .t-fail { color: #fca5a5; }
+@keyframes caret { 50% { border-right-color: var(--on-terminal-dim); } }
+.log__body .t-url { color: var(--on-terminal-code); }
+.log__body .t-sum { color: var(--on-terminal-warn); font-weight: 500; }
+.log__body .t-fail { color: var(--on-terminal-fail); }
 .log__follow { position: absolute; right: var(--s3); bottom: var(--s3); }

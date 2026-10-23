@@ -10,6 +10,9 @@ import type { ApprovalsResponse, CiRun, TestRunState } from "../../../shared/typ
 import "./DashboardNav.css";
 
 const REPO_NAME = "Hit_finder";
+const BRAND_ICON_SIZE = 18;
+const META_ICON_SIZE = 13;
+const BUTTON_ICON_SIZE = 15;
 
 export type TabId = "overview" | "kanban" | "runs";
 export const DEFAULT_TAB: TabId = "overview";
@@ -87,11 +90,11 @@ export const DashboardNav = forwardRef<HTMLButtonElement, NavProps>(function Das
       <div role="status" aria-live="polite" className="sr-only">{announcement}</div>
       <div className="nav__bar">
         <h1 className="nav__brand">
-          <Crosshair size={18} weight="bold" aria-hidden="true" />
+          <Crosshair size={BRAND_ICON_SIZE} weight="bold" aria-hidden="true" />
           <span translate="no">{REPO_NAME}</span>
         </h1>
         <span className="nav__branch mono" translate="no">
-          <GitBranch size={13} aria-hidden="true" />
+          <GitBranch size={META_ICON_SIZE} aria-hidden="true" />
           <span className="sr-only">Current branch: </span>
           <span>{repo.data?.branch ?? "unknown"}</span>
         </span>
@@ -110,7 +113,7 @@ export const DashboardNav = forwardRef<HTMLButtonElement, NavProps>(function Das
           ref={agentsButton} type="button" className="btn btn--sm nav__agents" aria-haspopup="dialog" aria-expanded={agentsOpen}
           aria-controls="agents-drawer" aria-label={waiting > 0 ? `Agents, ${waiting} waiting for approval` : "Agents"} onClick={onToggleAgents}
         >
-          <Robot size={15} aria-hidden="true" />
+          <Robot size={BUTTON_ICON_SIZE} aria-hidden="true" />
           <span>Agents</span>
           {waiting > 0 && (
             <span className="nav__count" aria-hidden="true">{waiting}</span>

@@ -13,6 +13,7 @@ import "./PrCard.css";
 /** Longer file lists are cut to this many rows until the user asks for all of them. */
 export const FILES_COLLAPSED_COUNT = 8;
 const ICON_SIZE = 13;
+const FILE_ICON_SIZE = 14;
 
 const isEmpty = (d: PrsResponse) => d.latest === null && d.open.length === 0 && d.recent.length === 0;
 
@@ -58,7 +59,7 @@ function Files({ files }: { files: PrDetail["files"] }) {
       <ul className="plain pr-files" aria-label="Touched files">
         {shown.map((f) => (
           <li key={f.path} className="pr-file">
-            <FileText size={14} aria-hidden="true" className="pr-file__icon" />
+            <FileText size={FILE_ICON_SIZE} aria-hidden="true" className="pr-file__icon" />
             <span className="pr-file__path mono" translate="no">{f.path}</span>
             <DiffChips additions={f.additions} deletions={f.deletions} />
           </li>

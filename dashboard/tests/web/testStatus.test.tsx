@@ -88,6 +88,34 @@ describe("TestStatus", () => {
     expect(top).toBe(1000);
   });
 
+  it("a new run replaces the old output even when its opening lines are the same", async () => {
+    const head = ["=== test session starts ===", "collected 3 items"];
+    let state: TestRunState = { ...running, tail: [...head, "old_a PASSED", "old_b PASSED"] };
+    mockApi({ "GET /api/ci": ci, "GET /api/tests": () => ({ body: state }) });
+    render(<TestStatus />);
+    const log = await screen.findByLabelText("Test output");
+    expect(log).toHaveTextContent("old_b PASSED");
+    state = { ...running, startedAt: "2026-10-07T11:00:00Z", tail: head };
+    act(() => FakeEventSource.emit({ type: "invalidate", resource: "tests" }));
+    await waitFor(() => expect(log).not.toHaveTextContent("old_a PASSED"));
+    act(() => FakeEventSource.emit({ type: "tests-line", line: "new_a PASSED" }));
+    await waitFor(() => expect(log).toHaveTextContent("new_a PASSED"));
+    expect(log).not.toHaveTextContent("old_b PASSED");
+  });
+
+  it("a snapshot that lags the stream does not remove lines already shown", async () => {
+    let state: TestRunState = { ...running, tail: ["one", "two"] };
+    mockApi({ "GET /api/ci": ci, "GET /api/tests": () => ({ body: state }) });
+    render(<TestStatus />);
+    const log = await screen.findByLabelText("Test output");
+    act(() => FakeEventSource.emit({ type: "tests-line", line: "three" }));
+    await waitFor(() => expect(log).toHaveTextContent("three"));
+    state = { ...running, tail: ["one", "two"] }; // an older answer arrives late
+    act(() => FakeEventSource.emit({ type: "invalidate", resource: "tests" }));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(log).toHaveTextContent("three");
+  });
+
   it("announces the result politely when a run finishes", async () => {
     let state: TestRunState = running;
     mockApi({ "GET /api/ci": ci, "GET /api/tests": () => ({ body: state }) });

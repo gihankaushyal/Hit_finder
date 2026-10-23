@@ -23,6 +23,8 @@ const COLUMNS: { status: TaskStatus; label: string; empty: string }[] = [
 ];
 const LABELS = Object.fromEntries(COLUMNS.map((c) => [c.status, c.label])) as Record<TaskStatus, string>;
 const ICON_SIZE = 14;
+const MENU_ICON_SIZE = 18;
+const EMPTY_ICON_SIZE = 20;
 
 interface Override {
   status: TaskStatus;
@@ -69,7 +71,7 @@ function AddTask({ onAdded }: { onAdded: () => void }) {
         <input id={id} ref={ref} name="task-title" autoComplete="off" value={title} maxLength={TASK_TITLE_MAX_CHARS} onChange={(e) => setTitle(e.target.value)}
           aria-invalid={error !== null} aria-describedby={error ? errId : undefined} />
         <button type="submit" className="btn btn--sm" disabled={pending}>
-          <Plus size={14} aria-hidden="true" />
+          <Plus size={ICON_SIZE} aria-hidden="true" />
           <span>Add task</span>
         </button>
       </div>
@@ -99,7 +101,7 @@ function rowKeys(tasks: Task[]): Map<Task, string> {
   return keys;
 }
 
-function TaskRow({ task, rowKey: key, editable, error, conflicts, onChange }: { task: Task; rowKey: string; editable: boolean; error?: string; conflicts: string[]; onChange: (t: Task, s: TaskStatus, c: Control) => void }) {
+function TaskRow({ task, rowKey: key, editable, error, conflicts, onChange }: { task: Task; rowKey: string; editable: boolean; error?: string; conflicts: string[]; onChange: (t: Task, s: TaskStatus, c: Control, rowKey: string) => void }) {
   const done = task.status === "done";
   const [menuOpen, setMenuOpen] = useState(false);
   const menuId = useId();
@@ -125,16 +127,16 @@ function TaskRow({ task, rowKey: key, editable, error, conflicts, onChange }: { 
           <input
             type="checkbox" id={`kb-${key}-check`} name={`done-${key}`} checked={done}
             aria-label={`Mark ${task.title} done`}
-            onChange={() => onChange(task, done ? "todo" : "done", "check")}
+            onChange={() => onChange(task, done ? "todo" : "done", "check", key)}
           />
         )}
         <span className="kb-card__title">{title}</span>
         {editable && (
           <button
             ref={moreButton} type="button" id={`kb-${key}-move`} className="kb-card__more" aria-label={`Actions for ${task.title}`}
-            aria-expanded={menuOpen} aria-controls={menuId} onClick={() => setMenuOpen(!menuOpen)}
+            aria-expanded={menuOpen} aria-controls={menuOpen ? menuId : undefined} onClick={() => setMenuOpen(!menuOpen)}
           >
-            <DotsThree size={18} weight="bold" aria-hidden="true" />
+            <DotsThree size={MENU_ICON_SIZE} weight="bold" aria-hidden="true" />
           </button>
         )}
       </div>
@@ -155,7 +157,7 @@ function TaskRow({ task, rowKey: key, editable, error, conflicts, onChange }: { 
           <label htmlFor={`kb-${key}-movesel`}>Move to</label>
           <select
             id={`kb-${key}-movesel`} name={`move-${key}`} autoComplete="off" aria-label={`Move ${task.title}`} value={task.status} autoFocus
-            onChange={(e) => { setMenuOpen(false); onChange(task, e.target.value as TaskStatus, "move"); }}
+            onChange={(e) => { setMenuOpen(false); onChange(task, e.target.value as TaskStatus, "move", key); }}
           >
             {COLUMNS.map((c) => <option key={c.status} value={c.status}>{c.label}</option>)}
           </select>
@@ -207,11 +209,11 @@ export function KanbanBoard() {
   });
 
   const change = useCallback(
-    (task: Task, status: TaskStatus, control: Control) => {
+    (task: Task, status: TaskStatus, control: Control, rowKey: string) => {
       if (status === task.status) return;
       const mine = ++seq.current;
       latestSeq.current.set(task.number, mine);
-      focusAfter.current = { key: keyOf.current.get(task) ?? String(task.number), control };
+      focusAfter.current = { key: rowKey, control };
       setErrors((e) => {
         const { [task.number]: _drop, ...rest } = e;
         return rest;
@@ -259,8 +261,6 @@ export function KanbanBoard() {
     for (const s of ["todo", "in-progress", "blocked"] as const) out[s].sort((a, b) => a.number - b.number);
     return { columns: out, keys };
   }, [board, overrides]);
-  const keyOf = useRef(keys);
-  keyOf.current = keys;
 
   const sync = async () => {
     setSyncing(true);
@@ -349,7 +349,7 @@ export function KanbanBoard() {
                 </ul>
                 {tasks.length === 0 && (
                   <div className="kb-empty">
-                    <Tray size={20} aria-hidden="true" />
+                    <Tray size={EMPTY_ICON_SIZE} aria-hidden="true" />
                     <p>{empty}</p>
                   </div>
                 )}

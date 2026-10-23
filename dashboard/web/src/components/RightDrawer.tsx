@@ -5,6 +5,8 @@ import { Approvals } from "../panels/Approvals";
 import { ChiefChat } from "../panels/ChiefChat";
 import "./RightDrawer.css";
 
+const ICON_SIZE = 14;
+
 const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 /** Approvals, chief of staff and agents in a slide-over. It stays mounted while closed so drafts and logs survive. */
@@ -50,7 +52,7 @@ export function RightDrawer({ open, onClose }: { open: boolean; onClose: () => v
         <header className="side-drawer__head">
           <h2>Agents and chief of staff</h2>
           <button ref={closeButton} type="button" className="btn btn--sm btn--icon" onClick={onClose} aria-label="Close agents panel">
-            <X size={14} aria-hidden="true" />
+            <X size={ICON_SIZE} aria-hidden="true" />
           </button>
         </header>
         <div className="side-drawer__body">

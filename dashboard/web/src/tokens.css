@@ -28,6 +28,8 @@
   --on-terminal-dim: #94a3b8;
   --on-terminal-fail: #f87171;
   --on-terminal-code: #7dd3fc;
+  --on-terminal-ok: #34d399;
+  --on-terminal-warn: #fcd34d;
   --font-sans: "Geist Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, monospace;
   /* One radius scale: controls, then panels. Pills use 999px. */
@@ -69,6 +71,8 @@
   --on-terminal-dim: #94a3b8;
   --on-terminal-fail: #f87171;
   --on-terminal-code: #7dd3fc;
+  --on-terminal-ok: #34d399;
+  --on-terminal-warn: #fcd34d;
 }
 
 @media (prefers-color-scheme: light) {
@@ -97,5 +101,7 @@
     --on-terminal-dim: #94a3b8;
     --on-terminal-fail: #f87171;
     --on-terminal-code: #7dd3fc;
+    --on-terminal-ok: #34d399;
+    --on-terminal-warn: #fcd34d;
   }
 }

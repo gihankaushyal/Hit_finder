@@ -450,7 +450,7 @@ describe("buildServer", () => {
     const s = setup();
     const gh = s.gh;
     const tests = { state: () => ({ status: "idle" }) as never, start: () => true, stop: () => Promise.resolve() };
-    const app = buildServer({ config, token: "t".repeat(64), bus: s.bus, gh, tests, kanban: s.service, runner: async () => ({ stdout: "x\n", stderr: "", code: 0 }), runs: NO_RUNS, agents: NO_AGENTS, approvals: NO_APPROVALS, chief: NO_CHIEF, terminal: NO_TERMINAL });
+    const app = buildServer({ config, token: "t".repeat(64), bus: s.bus, gh, tests, kanban: s.service, runner: async () => ({ stdout: "x\nmain\n", stderr: "", code: 0 }), runs: NO_RUNS, agents: NO_AGENTS, approvals: NO_APPROVALS, chief: NO_CHIEF, terminal: NO_TERMINAL });
     return { app, gh };
   }
 
