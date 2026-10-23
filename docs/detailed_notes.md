@@ -116,7 +116,7 @@ Run `resnet18-asymmetric-v2` (`checkpoints/resnet18-asymmetric-v2-fold*-seed42/r
 | 4 | Eiger4M held out | 0.8992 | 1.0000 | 0.8191 |
 | **Mean** | | **0.906 ± 0.013** | | |
 
-Mean cross AP rose 0.839 → 0.900, but fold-to-fold spread rose with it (±0.024 → ±0.090): AGIPD is the only fold that regressed, while ePix10k and Eiger4M improved substantially. The full chronological discussion is in the local, untracked `docs/progress_notes.md` (§21).
+Mean cross AP rose 0.839 → 0.900, but fold-to-fold spread rose with it (±0.024 → ±0.090): AGIPD is the only fold that regressed, while ePix10k and Eiger4M improved substantially. A fuller chronological discussion exists only in a local, untracked project log.
 
 **`crops_per_frame` > 1 has not helped.** An ePix10k cache smoketest (`configs/supervised/resnet18_epix_cache_smoketest{,_crops4,_crops8}.yaml`) found that 4 or 8 crops per frame lowered epoch-3 validation AP/F1 while training loss fell faster, which looks like overfitting to correlated crop-level noise. The default of 1 stays; whether this holds on a full LODO run is open (kanban issue #59).
 
@@ -128,9 +128,9 @@ Encoder: `mae_vit_small_patch16` (embed dim 384, depth 12, 6 heads; decoder 256-
 
 These numbers are the **September 2026 generation** (pretrain checkpoints `mae-vits16-fold*`, result directories `vits16-mae-{finetune,probe}-fold*-seed42-v2`), run on uncached preprocessing — so the like-for-like Track 1 comparator is **asymmetric v1** (0.839), not v2. The rerun under the current naming standard (`mae-vits16-v2`, `vits16-mae-{finetune,probe}-v2`) had finished only fold 1 of the fine-tune and probe on 2026-10-22 (fine-tune cross AP 0.7728, probe 0.9425 on AGIPD), so it is excluded here.
 
-**Encoder generations are mixed.** By checkpoint timestamp, the fold 1 and 2 pretrained encoders (`mae-vits16-fold{1,2}-seed42/last.pt`, 2026-09-07) predate the crop-diversity fix (PR #34, merged 2026-09-08), while folds 3 and 4 (2026-09-10) include it. The fine-tune and probe stages themselves were all submitted after the fix and use `AsymmetricCXIDataset`, which PR #34 did not touch. The local, untracked `docs/progress_notes.md` (§15.7) describes this table as post-fix; the checkpoint timestamps above are the authoritative record. The fold-1 fine-tune (AP 0.752, best epoch 1) and fold-2 in-domain AP (0.785) are the weakest figures and are the ones the older encoders could explain (n = 2, not proven).
+**Encoder generations are mixed.** By checkpoint timestamp, the fold 1 and 2 pretrained encoders (`mae-vits16-fold{1,2}-seed42/last.pt`, 2026-09-07) predate the crop-diversity fix (PR #34, merged 2026-09-08), while folds 3 and 4 (2026-09-10) include it. The fine-tune and probe stages themselves were all submitted after the fix and use `AsymmetricCXIDataset`, which PR #34 did not touch. A local, untracked project log describes this table as post-fix; the checkpoint timestamps above are the authoritative record. The fold-1 fine-tune (AP 0.752, best epoch 1) and fold-2 in-domain AP (0.785) are the weakest figures and are the ones the older encoders could explain (n = 2, not proven).
 
-**Fine-tuning peaks very early.** Full fine-tuning at lr 5e-5 reached its best validation F1 within a few epochs (best epochs: fold 1 → 1, fold 2 → 2, fold 4 → 10, fold 3 → 26) and early stopping (patience 10) then ended the run, whereas the frozen-encoder probes trained productively for 48–77 epochs. The fine-tune arm may therefore be under-trained relative to the probe (risk B4 in `PLANNING.md`).
+**Fine-tuning peaks very early.** Full fine-tuning at lr 5e-5 reached its best validation F1 within a few epochs (best epochs: fold 1 → 1, fold 2 → 2, fold 4 → 10, fold 3 → 26) and early stopping (patience 10) then ended the run, whereas the frozen-encoder probes trained productively for 48–77 epochs. The fine-tune arm may therefore be under-trained relative to the probe.
 
 ### Cross-detector results
 
