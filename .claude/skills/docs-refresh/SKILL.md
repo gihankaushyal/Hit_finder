@@ -74,7 +74,7 @@ Follow `references/known-pitfalls.md` section "Results". In short: keep generati
 python .claude/skills/docs-refresh/scripts/check_docs.py
 ```
 
-It fails if a tracked doc links to a gitignored file (CLAUDE.md, PLANNING.md, MEMORY.md, session-tail.md, docs/progress_notes.md, anything `git check-ignore` reports), if a relative link or backticked repo path does not exist, or if a stale phrase from the pitfalls list reappears. Also grep every new backticked identifier across `src/ scripts/ tests/`. Fix everything it reports.
+It exits 1 if a tracked doc links to a gitignored file (CLAUDE.md, PLANNING.md, MEMORY.md, session-tail.md, docs/progress_notes.md, anything `git check-ignore` reports), or if a relative link or backticked repo path does not exist. A stale phrase from the pitfalls list reappearing only prints `WARN` and does not change the exit code, so read every `WARN` line and check its context. Also grep every new backticked identifier across `src/ scripts/ tests/`. Fix everything it reports.
 
 ### 7. Local-only files
 

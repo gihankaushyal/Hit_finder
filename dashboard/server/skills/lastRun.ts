@@ -57,6 +57,11 @@ function answersPending(line: string, st: FileState): boolean {
   return false;
 }
 
+/** A skill can be named `slurm-job`, `/slurm-job` or `project:slurm-job`; the card name is the bare form. */
+function skillKey(raw: string): string {
+  return raw.trim().replace(/^\//, "").replace(/^[^:\s]+:/, "");
+}
+
 function processLine(line: string, st: FileState): void {
   const wantsResult = answersPending(line, st);
   if (!wantsResult && !SKILL_TOOL_RE.test(line) && !line.includes(COMMAND_MARK)) return;
@@ -80,13 +85,13 @@ function processLine(line: string, st: FileState): void {
   if (typeof at !== "string" || Number.isNaN(Date.parse(at))) return;
   for (const b of blocks) {
     if (b?.type === "tool_use" && b.name === "Skill" && typeof b.id === "string" && typeof b.input?.skill === "string") {
-      st.pending.set(b.id, { name: b.input.skill, at });
+      st.pending.set(b.id, { name: skillKey(b.input.skill), at });
       if (st.pending.size > PENDING_MAX) st.pending.delete(st.pending.keys().next().value as string);
     }
   }
   if (entry.message?.role === "user") {
     const m = COMMAND_RE.exec(firstText(content));
-    if (m) newer(st.runs, m[1], at);
+    if (m) newer(st.runs, skillKey(m[1]), at);
   }
 }
 

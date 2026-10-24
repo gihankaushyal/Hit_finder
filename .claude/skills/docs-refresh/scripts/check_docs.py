@@ -5,6 +5,7 @@ Run from anywhere inside the repo: python .claude/skills/docs-refresh/scripts/ch
 Exit code 1 if any problem is found.
 """
 
+import os
 import re
 import subprocess
 import sys
@@ -18,6 +19,7 @@ STALE_PHRASES = [
     "2167",
     "2160",
     "preprocess_assembled",
+    "32x32",
 ]
 # Phrases that are legitimate where the docs explain the removal or history.
 STALE_ALLOW_FILES = {"docs/codebase/index.md"}
@@ -30,6 +32,21 @@ PATH_RE = re.compile(
 
 def run(*args: str) -> str:
     return subprocess.run(args, capture_output=True, text=True, check=False).stdout
+
+
+def ignored_paths(root: Path, rels: list[str]) -> set[str]:
+    """The paths among `rels` that git ignores, from a single `git check-ignore --stdin` call."""
+    if not rels:
+        return set()
+    out = subprocess.run(
+        ["git", "check-ignore", "--stdin", "-z"],
+        cwd=root,
+        input="\0".join(rels) + "\0",
+        capture_output=True,
+        text=True,
+        check=False,
+    ).stdout
+    return {p for p in out.split("\0") if p}
 
 
 def main() -> int:
@@ -45,6 +62,7 @@ def main() -> int:
         ),
     ]
     problems: list[str] = []
+    existing_links: list[tuple[str, str, str]] = []  # (where, target, repo-relative path)
     warnings: list[str] = (
         []
     )  # advisory: phrases are fine when the doc explains the history
@@ -60,7 +78,8 @@ def main() -> int:
                 if target.startswith(("http://", "https://", "mailto:", "#")):
                     continue
                 file_part = target.split("#", 1)[0]
-                resolved = (path.parent / file_part).resolve()
+                # normpath, not resolve(): a link through a symlinked folder such as data/ stays inside the repo
+                resolved = Path(os.path.normpath(path.parent / file_part))
                 try:
                     repo_rel = str(resolved.relative_to(root))
                 except ValueError:
@@ -68,15 +87,8 @@ def main() -> int:
                     continue
                 if not resolved.exists():
                     problems.append(f"{rel}:{lineno}: broken link: {target}")
-                elif (
-                    subprocess.run(
-                        ["git", "check-ignore", "-q", repo_rel], cwd=root
-                    ).returncode
-                    == 0
-                ):
-                    problems.append(
-                        f"{rel}:{lineno}: links to gitignored file: {target}"
-                    )
+                else:
+                    existing_links.append((f"{rel}:{lineno}", target, repo_rel))
             for repo_path in PATH_RE.findall(line):
                 if any(ch in repo_path for ch in "*<>"):
                     continue
@@ -91,6 +103,12 @@ def main() -> int:
                         warnings.append(
                             f"{rel}:{lineno}: stale phrase '{phrase}' (check context)"
                         )
+
+    # one git call for every link, not one per link
+    ignored = ignored_paths(root, [repo_rel for _, _, repo_rel in existing_links])
+    for where, target, repo_rel in existing_links:
+        if repo_rel in ignored:
+            problems.append(f"{where}: links to gitignored file: {target}")
 
     for w in warnings:
         print("WARN", w)

@@ -35,6 +35,16 @@ describe("Skills", () => {
     expect(await screen.findByRole("status")).toHaveTextContent("sk-pipeline-check-ab12");
   });
 
+  it("reloads the list after a run so the card shows the new launch", async () => {
+    render(<Skills />);
+    await userEvent.click(await screen.findByRole("button", { name: /pipeline-check/ }));
+    const loads = () => api.calls.filter((c) => c.method === "GET" && c.path === "/api/skills").length;
+    const before = loads();
+    await userEvent.click(screen.getByRole("button", { name: "Run" }));
+    await screen.findByRole("status");
+    await vi.waitFor(() => expect(loads()).toBeGreaterThan(before));
+  });
+
   it("asks for confirmation before a skill with side effects", async () => {
     render(<Skills />);
     await userEvent.click(await screen.findByRole("button", { name: /slurm-job/ }));

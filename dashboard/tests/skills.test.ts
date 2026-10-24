@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
 import { scanLastRuns, withWorktreeDirs } from "../server/skills/lastRun";
 import { makeAgentRig, AUTH, type AgentRig } from "./helpers/agentRig";
 import type { AgentSummary, AgentsResponse, SkillsResponse } from "../shared/types";
@@ -68,6 +69,18 @@ describe("scanLastRuns", () => {
   });
 });
 
+describe("skill names in transcripts", () => {
+  it("counts /name and prefix:name calls under the bare skill name", async () => {
+    const dir = tmp();
+    const call = (id: string, skill: string, at: string) => JSON.stringify({ type: "assistant", timestamp: at, message: { role: "assistant", content: [{ type: "tool_use", id, name: "Skill", input: { skill } }] } }) + "\n";
+    const ok = (id: string, at: string) => JSON.stringify({ type: "user", timestamp: at, message: { role: "user", content: [{ type: "tool_result", tool_use_id: id }] } }) + "\n";
+    fs.writeFileSync(path.join(dir, "a.jsonl"), call("t1", "/slurm-job", "2026-10-01T00:00:00Z") + ok("t1", "2026-10-01T00:00:01Z") + call("t2", "project:docs-refresh", "2026-10-02T00:00:00Z") + ok("t2", "2026-10-02T00:00:01Z"));
+    const runs = await scanLastRuns([dir]);
+    expect(runs.get("slurm-job")).toBe("2026-10-01T00:00:00Z");
+    expect(runs.get("docs-refresh")).toBe("2026-10-02T00:00:00Z");
+  });
+});
+
 describe("withWorktreeDirs", () => {
   it("adds the transcript folders of the repo's worktrees and nothing else", async () => {
     const parent = tmp();
@@ -82,8 +95,13 @@ describe("withWorktreeDirs", () => {
 
 describe("skills routes", () => {
   let rig: AgentRig;
+  const git = (...a: string[]) => execFileSync("git", ["-C", rig.repo, ...a], { encoding: "utf8" });
+  /** The skills live in the rig's repo and are committed on its base branch, as a merged skill would be. */
   const setup = async () => {
-    rig = await makeAgentRig({ DASH_SKILLS_DIR: path.join(FIX, "skills"), DASH_TRANSCRIPTS_DIR: TRANSCRIPTS });
+    rig = await makeAgentRig({ DASH_TRANSCRIPTS_DIR: TRANSCRIPTS });
+    fs.cpSync(path.join(FIX, "skills"), rig.cfg.skillsDir, { recursive: true });
+    git("add", ".claude/skills");
+    git("commit", "-q", "-m", "skills");
   };
   afterEach(async () => rig?.cleanup());
   const post = (name: string, body: unknown) => rig.app.request(`/api/skills/${encodeURIComponent(name)}/run`, { method: "POST", headers: AUTH, body: JSON.stringify(body) });
@@ -124,6 +142,20 @@ describe("skills routes", () => {
     expect(slurm.task).not.toContain("Arguments:");
     const long = (await (await post("A_Very_Long_Skill_Name_Indeed", { confirmed: true })).json()) as AgentSummary;
     expect(long.name).toMatch(/^sk-a-very-long-sk-[0-9a-f]{4}$/);
+  });
+
+  it("refuses to run a skill that the agent base does not have, or has in a different version", async () => {
+    await setup();
+    fs.appendFileSync(path.join(rig.cfg.skillsDir, "alpha", "SKILL.md"), "\nlocal edit\n");
+    const differs = await post("alpha", {});
+    expect(differs.status).toBe(409);
+    expect(((await differs.json()) as { error: string }).error).toContain("differs");
+    fs.mkdirSync(path.join(rig.cfg.skillsDir, "fresh"));
+    fs.writeFileSync(path.join(rig.cfg.skillsDir, "fresh", "SKILL.md"), "---\nname: fresh\ndashboard-confirm: false\n---\nbody\n");
+    const missing = await post("fresh", {});
+    expect(missing.status).toBe(409);
+    expect(((await missing.json()) as { error: string }).error).toContain("not on");
+    expect(((await (await rig.app.request("/api/agents", { headers: AUTH })).json()) as AgentsResponse).agents).toHaveLength(0);
   });
 
   it("refuses a skill that needs confirmation unless the request says it was confirmed", async () => {

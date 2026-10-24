@@ -15,7 +15,7 @@ const DETAIL_ID = "skill-detail";
 
 
 /** Description, arguments and Run for the open skill. Keyed by skill, so switching cards starts a fresh form. */
-function SkillDetail({ s }: { s: SkillSummary }) {
+function SkillDetail({ s, onStarted }: { s: SkillSummary; onStarted: () => void }) {
   const [args, setArgs] = useState("");
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -30,6 +30,7 @@ function SkillDetail({ s }: { s: SkillSummary }) {
       const agent = await apiSend<AgentSummary>("POST", `/api/skills/${encodeURIComponent(s.name)}/run`, { args, confirmed });
       setStarted(agent.name);
       setConfirming(false);
+      onStarted(); // the card's "ran" label should show this launch now, not at the next poll
     } catch (err) {
       setError(errorMessage(err, "Could not start the agent."));
     } finally {
@@ -83,7 +84,7 @@ export function Skills() {
           </li>
         ))}
       </ul>
-      {current && <SkillDetail key={current.name} s={current} />}
+      {current && <SkillDetail key={current.name} s={current} onStarted={res.reload} />}
     </PanelFrame>
   );
 }

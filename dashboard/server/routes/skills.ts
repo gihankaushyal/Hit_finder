@@ -1,6 +1,8 @@
+import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { promisify } from "node:util";
 import type { Hono } from "hono";
 import type { AgentSummary, SkillSummary, SkillsResponse } from "../../shared/types";
 import { AgentError, type Supervisor } from "../agents/supervisor";
@@ -9,6 +11,8 @@ import { badRequest, failAgent, jsonLimit, readObject } from "../lib/http";
 import { parseFrontmatter } from "../skills/frontmatter";
 import { scanLastRuns, withWorktreeDirs } from "../skills/lastRun";
 
+const run = promisify(execFile);
+const GIT_TIMEOUT_MS = 10_000;
 const SKILL_FILE = "SKILL.md";
 /** SKILL.md header keys the dashboard reads: `dashboard-confirm: false` opts out of the second click (every skill asks by default), and which cartoon to show. */
 const CONFIRM_KEY = "dashboard-confirm";
@@ -70,6 +74,23 @@ function slugOf(name: string): string {
   return slug || "skill";
 }
 
+/**
+ * Workers start from the agent base ref, not from this checkout, so they only see a skill that is committed there.
+ * Returns a refusal message when the base has no copy of the skill or an older one, and null when they match.
+ */
+async function baseMismatch(cfg: Config, s: SkillFile): Promise<string | null> {
+  const rel = `.claude/skills/${s.dir}/${SKILL_FILE}`;
+  const env = { ...process.env, GIT_TERMINAL_PROMPT: "0" };
+  const opts = { cwd: cfg.repoRoot, timeout: GIT_TIMEOUT_MS, env };
+  try {
+    const onBase = (await run("git", ["rev-parse", "--verify", "--quiet", `${cfg.agentBase}:${rel}`], opts)).stdout.trim();
+    const here = (await run("git", ["hash-object", path.join(cfg.skillsDir, s.dir, SKILL_FILE)], opts)).stdout.trim();
+    return onBase === here ? null : `${s.name} differs from the copy on ${cfg.agentBase}, so a new agent would follow an older version. Commit and merge it first.`;
+  } catch {
+    return `${s.name} is not on ${cfg.agentBase} yet, so a new agent could not find it. Commit and merge it first.`;
+  }
+}
+
 function taskFor(s: SkillFile, args: string): string {
   const base = `${TASK_PREFIX}${s.name}${TASK_NAME_END} Read .claude/skills/${s.dir}/${SKILL_FILE} in this repository and follow its instructions.`;
   return args ? `${base}\n\nArguments: ${args}` : base;
@@ -106,7 +127,7 @@ export function skillRoutes(api: Hono, d: { config: Config; agents: Supervisor }
     return c.json(body);
   });
 
-  /** Starts a worker that reads the skill's tracked SKILL.md; the server picks the agent name so the form rules never reach the user. */
+  /** Starts a worker that reads the skill's SKILL.md from the agent base (refused if the base lacks it or has a different copy); the server picks the agent name so the form rules never reach the user. */
   api.post("/skills/:name/run", limit, async (c) => {
     const input = await readObject(c);
     if (!input) return badRequest(c, "body must be a JSON object");
@@ -117,6 +138,8 @@ export function skillRoutes(api: Hono, d: { config: Config; agents: Supervisor }
     if (!skill) return c.json({ error: "Skill not found." }, 404);
     // The browser asks first, but the server does not rely on that: a skill that needs confirming is refused without it.
     if (skill.confirmRequired && input.confirmed !== true) return badRequest(c, `${skill.name} needs confirmation: send "confirmed": true.`);
+    const stale = await baseMismatch(d.config, skill);
+    if (stale) return c.json({ error: stale }, 409);
     const task = taskFor(skill, args);
     for (let attempt = 1; ; attempt++) {
       const name = `sk-${slugOf(skill.name)}-${randomBytes(SUFFIX_BYTES).toString("hex")}`;

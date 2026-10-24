@@ -6,7 +6,7 @@ dashboard-confirm: true
 dashboard-art: rocket
 ---
 
-Ask the user for:
+Get these four values. If you were started by the dashboard or another agent, nobody can answer questions: read them from the task's "Arguments:" line (free text, for example `configs/supervised/resnet18_resonet.yaml resnet18-resonet-fold0 04:00:00 128G`; config path first, then job name, then optional time and memory). If the config path or job name is missing, stop and report that instead of guessing, because this submits a real GPU job. Otherwise ask the user for:
 1. Config file path (e.g. configs/supervised/resnet18_resonet.yaml)
 2. Job name (e.g. resnet18-resonet-fold0)
 3. Time limit (default: 02:00:00, the template's value)
@@ -30,6 +30,7 @@ Leave `-p general`, `-q grp_cxfel`, `--gres=gpu:h100:1`, `--nodelist=scg020`, `s
 
 Then run:
 ```bash
+mkdir -p logs
 sbatch scripts/submit_<job_name>.sh
 squeue -u $USER
 ```
