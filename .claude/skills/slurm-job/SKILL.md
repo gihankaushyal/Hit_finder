@@ -1,6 +1,6 @@
 ---
 name: slurm-job
-description: Submit a SLURM training job for sfx-hitfinder using the standard template with wandb env, conda activation, and A100 GPU config
+description: Submit a SLURM training job for sfx-hitfinder by copying the canonical template (grp_cxfel QOS, H100 on scg020) with wandb env and source activate
 disable-model-invocation: true
 dashboard-confirm: true
 dashboard-art: rocket
@@ -9,30 +9,24 @@ dashboard-art: rocket
 Ask the user for:
 1. Config file path (e.g. configs/supervised/resnet18_resonet.yaml)
 2. Job name (e.g. resnet18-resonet-fold0)
-3. GPU count (default: 1)
-4. Time limit (default: 12:00:00)
-5. Memory (default: 64G)
+3. Time limit (default: 02:00:00, the template's value)
+4. Memory (default: 128G, the template's value)
 
-Write the job script to `scripts/submit_<job_name>.sh` using this exact template:
+The GPU is fixed by the template (one H100 on scg020 under QOS grp_cxfel), so do not ask for a GPU count.
+
+Copy `scripts/templates/slurm_gpu_job.sh` to `scripts/submit_<job_name>.sh` and change only these lines. Do not edit the template itself.
+
+- `#SBATCH --job-name=sfx-<job_name>`
+- `#SBATCH --time=<time_limit>`
+- `#SBATCH --mem=<memory>`
+- `#SBATCH --output=logs/<job_name>-%j.out` and `#SBATCH --error=logs/<job_name>-%j.err`
+- the last line, replaced by:
 
 ```bash
-#!/bin/bash
-#SBATCH --job-name=<job_name>
-#SBATCH --partition=htc
-#SBATCH --gres=gpu:<gpu_count>
-#SBATCH --cpus-per-task=8
-#SBATCH --mem=<memory>
-#SBATCH --time=<time_limit>
-#SBATCH --output=logs/%j.out
-#SBATCH --error=logs/%j.err
-
-module load mamba/latest
-conda activate sfx-hitfinder
-
-source .secrets/wandb.env
-
-python scripts/train_asymmetric.py --config <config_path>
+python -m src.training.train_asymmetric --config <config_path>
 ```
+
+Leave `-p general`, `-q grp_cxfel`, `--gres=gpu:h100:1`, `--nodelist=scg020`, `source activate sfx-hitfinder` and `source .secrets/wandb.env` exactly as they are. Never put a wandb key in the script.
 
 Then run:
 ```bash
