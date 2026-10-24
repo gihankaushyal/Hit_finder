@@ -37,7 +37,10 @@ data/synthetic/*
 .superpowers/
 
 # Claude Code session data and graph output
-.claude/
+# Local Claude Code state is ignored, but the project-only skills are tracked so
+# dashboard worker worktrees (made from origin/phase-05) contain them.
+.claude/*
+!.claude/skills/
 graphify-out/
 
 # Reflection / scratch notes
