@@ -7,6 +7,7 @@ import { mockApi, stubEventSource } from "./helpers";
 const routes = {
   "GET /api/approvals": { body: { approvals: [] } },
   "GET /api/agents": { body: { agents: [] } },
+  "GET /api/skills": { body: { skills: [] } },
   "GET /api/chief": { body: { status: "idle", sessionId: null } },
   "GET /api/chief/events": { body: { events: [], next: 0 } },
 };

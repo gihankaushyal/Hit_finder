@@ -3,6 +3,7 @@ import { X } from "@phosphor-icons/react";
 import { Agents } from "../panels/Agents";
 import { Approvals } from "../panels/Approvals";
 import { ChiefChat } from "../panels/ChiefChat";
+import { Skills } from "../panels/Skills";
 import "./RightDrawer.css";
 
 const ICON_SIZE = 14;
@@ -59,6 +60,7 @@ export function RightDrawer({ open, onClose }: { open: boolean; onClose: () => v
           <Approvals />
           <ChiefChat />
           <Agents />
+          <Skills />
         </div>
       </aside>
     </>

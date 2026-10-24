@@ -1,0 +1,4 @@
+{"type":"assistant","timestamp":"2026-10-01T10:00:00.000Z","message":{"content":[{"type":"tool_use","name":"Skill","input":{"skill":"alpha","args":"x"}}]}}
+{"type":"user","timestamp":"2026-10-05T12:00:00.000Z","message":{"role":"user","content":"<command-name>/alpha</command-name>\n<command-args></command-args>"}}
+not json but mentions "name":"Skill"
+{"type":"assistant","timestamp":"2026-10-02T10:00:00.000Z","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"ls"}}]}}
