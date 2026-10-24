@@ -3,7 +3,7 @@ import { CaretDown, CaretRight, Plus } from "@phosphor-icons/react";
 import { PanelFrame } from "../components/PanelFrame";
 import { StatusWord, type StatusKind } from "../components/StatusWord";
 import { panelState } from "../components/bits";
-import { ApiError, apiSend } from "../lib/api";
+import { apiSend, errorMessage } from "../lib/api";
 import { relTime } from "../lib/time";
 import { useAgentLog } from "../lib/useAgentLog";
 import { AGENTS_REFRESH_MS, useResource } from "../lib/useResource";
@@ -29,7 +29,6 @@ const WORDS: Record<AgentState, { kind: StatusKind; text: string }> = {
   stopped: { kind: "idle", text: "Stopped" },
 };
 
-const message = (err: unknown, fallback: string) => (err instanceof ApiError ? err.message : fallback);
 
 function Entry({ e }: { e: AgentEvent }) {
   switch (e.kind) {
@@ -79,7 +78,7 @@ function AgentDetail({ a, onChanged }: { a: AgentSummary; onChanged: () => void 
       onChanged();
       return true;
     } catch (err) {
-      setError(message(err, "The request failed."));
+      setError(errorMessage(err, "The request failed."));
       return false;
     } finally {
       setBusy(false);
@@ -147,7 +146,7 @@ function NewAgent({ onStarted, onCancel }: { onStarted: () => void; onCancel: ()
       await apiSend("POST", "/api/agents", { name: n, task, ...(issue.trim() ? { issue: Number(issue.trim()) } : {}) });
       onStarted();
     } catch (err) {
-      setError(message(err, "Could not start the agent."));
+      setError(errorMessage(err, "Could not start the agent."));
     } finally {
       setBusy(false);
     }

@@ -201,6 +201,22 @@ export interface AgentsResponse {
   driver: "sdk" | "fake";
 }
 
+/** A project skill under .claude/skills, with when it last ran in a Claude Code session. */
+export interface SkillSummary {
+  name: string;
+  description: string;
+  /** ISO time of the newest transcript entry that invoked the skill, or null if it never ran. */
+  lastRun: string | null;
+  /** Skills with side effects (jobs, PRs) ask for a second click before they run. Every skill asks by default; `dashboard-confirm: false` in SKILL.md opts out. */
+  confirmRequired: boolean;
+  /** Which cartoon to show, from `dashboard-art:` in SKILL.md; null gives the generic one. */
+  art: string | null;
+}
+
+export interface SkillsResponse {
+  skills: SkillSummary[];
+}
+
 export interface AgentEventsResponse {
   events: AgentEvent[];
   /** Newest sequence number in the journal, so the browser knows when it has everything. */

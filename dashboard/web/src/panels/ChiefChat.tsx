@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type FormEvent, type Keyb
 import { PanelFrame } from "../components/PanelFrame";
 import { StatusWord, type StatusKind } from "../components/StatusWord";
 import { panelState } from "../components/bits";
-import { ApiError, apiSend } from "../lib/api";
+import { apiSend, errorMessage } from "../lib/api";
 import { useJournal } from "../lib/useAgentLog";
 import { AGENTS_REFRESH_MS, useResource } from "../lib/useResource";
 import type { AgentEvent, AgentState, ChiefSummary } from "../../../shared/types";
@@ -19,7 +19,6 @@ const WORDS: Partial<Record<AgentState, { kind: StatusKind; text: string }>> = {
   stopped: { kind: "idle", text: "Stopped" },
 };
 
-const message = (err: unknown, fallback: string) => (err instanceof ApiError ? err.message : fallback);
 
 function Line({ e }: { e: AgentEvent }) {
   switch (e.kind) {
@@ -81,7 +80,7 @@ export function ChiefChat() {
       res.reload();
       return true;
     } catch (err) {
-      setError(message(err, "The request failed."));
+      setError(errorMessage(err, "The request failed."));
       return false;
     } finally {
       setBusy(false);
