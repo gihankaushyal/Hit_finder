@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { Hono } from "hono";
-import type { SkillSummary, SkillsResponse } from "../../shared/types";
+import type { AgentSummary, SkillSummary, SkillsResponse } from "../../shared/types";
 import { AgentError, type Supervisor } from "../agents/supervisor";
 import type { Config } from "../config";
 import { badRequest, failAgent, jsonLimit, readObject } from "../lib/http";
@@ -10,9 +10,11 @@ import { parseFrontmatter } from "../skills/frontmatter";
 import { scanLastRuns, withWorktreeDirs } from "../skills/lastRun";
 
 const SKILL_FILE = "SKILL.md";
-/** SKILL.md header keys the dashboard reads: a second click before running, and which cartoon to show. */
+/** SKILL.md header keys the dashboard reads: `dashboard-confirm: false` opts out of the second click (every skill asks by default), and which cartoon to show. */
 const CONFIRM_KEY = "dashboard-confirm";
 const ART_KEY = "dashboard-art";
+const TASK_PREFIX = 'Run the project skill "';
+const TASK_NAME_END = '".';
 const ARGS_MAX = 500;
 const SLUG_MAX = 14;
 const NAME_TRIES = 5;
@@ -49,7 +51,7 @@ async function readSkills(skillsDir: string): Promise<SkillFile[]> {
         dir: e.name,
         name: typeof fm.name === "string" && fm.name ? fm.name : e.name,
         description: typeof fm.description === "string" ? fm.description : "",
-        confirmRequired: fm[CONFIRM_KEY] === true,
+        confirmRequired: fm[CONFIRM_KEY] !== false,
         art: typeof fm[ART_KEY] === "string" && fm[ART_KEY] ? fm[ART_KEY] : null,
       });
     } catch {
@@ -57,7 +59,9 @@ async function readSkills(skillsDir: string): Promise<SkillFile[]> {
       skills.push({ dir: e.name, name: e.name, description: "The header of this SKILL.md could not be read.", confirmRequired: true, art: null });
     }
   }
-  return skills.sort((a, b) => a.name.localeCompare(b.name));
+  // Two folders sharing a name would clash on the card list and on Run, so the first one wins.
+  const seen = new Set<string>();
+  return skills.sort((a, b) => a.name.localeCompare(b.name) || a.dir.localeCompare(b.dir)).filter((s) => !seen.has(s.name) && !!seen.add(s.name));
 }
 
 /** Lower-case letters, digits and single hyphens, short enough that `sk-<slug>-<4 hex>` fits the 31-character agent name limit. */
@@ -67,8 +71,22 @@ function slugOf(name: string): string {
 }
 
 function taskFor(s: SkillFile, args: string): string {
-  const base = `Run the project skill "${s.name}". Read .claude/skills/${s.dir}/${SKILL_FILE} in this repository and follow its instructions.`;
+  const base = `${TASK_PREFIX}${s.name}${TASK_NAME_END} Read .claude/skills/${s.dir}/${SKILL_FILE} in this repository and follow its instructions.`;
   return args ? `${base}\n\nArguments: ${args}` : base;
+}
+
+/** When the dashboard last started an agent for each skill (their tasks begin with the Run text), by agent start time. */
+function launchTimes(agents: AgentSummary[]): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const a of agents) {
+    if (a.role !== "worker" || !a.task.startsWith(TASK_PREFIX)) continue;
+    const end = a.task.indexOf(TASK_NAME_END, TASK_PREFIX.length);
+    if (end < 0) continue;
+    const name = a.task.slice(TASK_PREFIX.length, end);
+    const prev = out.get(name);
+    if (!prev || Date.parse(a.createdAt) > Date.parse(prev)) out.set(name, a.createdAt);
+  }
+  return out;
 }
 
 export function skillRoutes(api: Hono, d: { config: Config; agents: Supervisor }): void {
@@ -77,6 +95,11 @@ export function skillRoutes(api: Hono, d: { config: Config; agents: Supervisor }
   api.get("/skills", async (c) => {
     const dirs = d.config.transcriptsIncludeWorktrees ? await withWorktreeDirs(d.config.transcriptsDir) : [d.config.transcriptsDir];
     const [skills, runs] = await Promise.all([readSkills(d.config.skillsDir), scanLastRuns(dirs)]);
+    // A run from the dashboard leaves no skill call in any transcript, so its start time counts too.
+    for (const [name, at] of launchTimes(d.agents.list())) {
+      const seen = runs.get(name);
+      if (!seen || Date.parse(at) > Date.parse(seen)) runs.set(name, at);
+    }
     const body: SkillsResponse = {
       skills: skills.map((s): SkillSummary => ({ name: s.name, description: s.description, lastRun: runs.get(s.name) ?? null, confirmRequired: s.confirmRequired, art: s.art })),
     };
@@ -92,6 +115,8 @@ export function skillRoutes(api: Hono, d: { config: Config; agents: Supervisor }
     if (args.length > ARGS_MAX) return badRequest(c, `args must be at most ${ARGS_MAX} characters`);
     const skill = (await readSkills(d.config.skillsDir)).find((s) => s.name === c.req.param("name"));
     if (!skill) return c.json({ error: "Skill not found." }, 404);
+    // The browser asks first, but the server does not rely on that: a skill that needs confirming is refused without it.
+    if (skill.confirmRequired && input.confirmed !== true) return badRequest(c, `${skill.name} needs confirmation: send "confirmed": true.`);
     const task = taskFor(skill, args);
     for (let attempt = 1; ; attempt++) {
       const name = `sk-${slugOf(skill.name)}-${randomBytes(SUFFIX_BYTES).toString("hex")}`;

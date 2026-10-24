@@ -35,6 +35,8 @@ interface FileState {
 
 const files = new Map<string, FileState>();
 const inflight = new Map<string, Promise<Map<string, string>>>();
+/** Scans run one at a time: two scans over different folder lists could otherwise read the same transcript from the same offset. */
+let queue: Promise<unknown> = Promise.resolve();
 
 function newer(runs: Map<string, string>, name: string, at: string): void {
   const prev = runs.get(name);
@@ -49,8 +51,14 @@ function firstText(content: unknown): string {
 }
 
 /** Reads one transcript line; only skill names and entry times are kept. */
+function answersPending(line: string, st: FileState): boolean {
+  if (st.pending.size === 0 || !line.includes('"tool_result"')) return false;
+  for (const id of st.pending.keys()) if (line.includes(id)) return true;
+  return false;
+}
+
 function processLine(line: string, st: FileState): void {
-  const wantsResult = st.pending.size > 0 && [...st.pending.keys()].some((id) => line.includes(id));
+  const wantsResult = answersPending(line, st);
   if (!wantsResult && !SKILL_TOOL_RE.test(line) && !line.includes(COMMAND_MARK)) return;
   let entry: Entry;
   try {
@@ -149,7 +157,8 @@ export function scanLastRuns(dirs: string | string[]): Promise<Map<string, strin
   const key = list.join("\0");
   const running = inflight.get(key);
   if (running) return running;
-  const p = scan(list).finally(() => inflight.delete(key));
+  const p = queue.then(() => scan(list)).finally(() => inflight.delete(key));
+  queue = p.catch(() => {});
   inflight.set(key, p);
   return p;
 }

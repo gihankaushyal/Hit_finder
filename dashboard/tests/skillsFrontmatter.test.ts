@@ -31,6 +31,14 @@ describe("parseFrontmatter", () => {
   it("throws on a header that is not valid YAML", () => {
     expect(() => parseFrontmatter(wrap("name: [unclosed"))).toThrow();
   });
+  it("reads a header after a byte-order mark, and an empty header", () => {
+    expect(parseFrontmatter("\uFEFF---\nname: ok\n---\n")).toEqual({ name: "ok" });
+    expect(parseFrontmatter("---\n---\nbody")).toEqual({});
+  });
+  it("closes the header only on a line that is exactly ---", () => {
+    expect(parseFrontmatter("---\nname: ok\nnote: a\n  ----\nafter: yes\n---\n")).toMatchObject({ name: "ok" });
+    expect(parseFrontmatter("---\nname: no closing fence\n")).toEqual({});
+  });
   it("keeps a quoted true as text", () => {
     expect(parseFrontmatter(wrap('a: "true"'))).toEqual({ a: "true" });
   });

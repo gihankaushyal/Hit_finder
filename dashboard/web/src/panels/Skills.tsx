@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { PanelFrame } from "../components/PanelFrame";
 import { panelState } from "../components/bits";
-import { ApiError, apiSend } from "../lib/api";
+import { apiSend, errorMessage } from "../lib/api";
 import { relTime } from "../lib/time";
 import { useResource } from "../lib/useResource";
 import type { AgentSummary, SkillSummary, SkillsResponse } from "../../../shared/types";
@@ -13,7 +13,6 @@ const ARGS_MAX = 500;
 const SKILLS_REFRESH_MS = 60_000;
 const DETAIL_ID = "skill-detail";
 
-const message = (err: unknown, fallback: string) => (err instanceof ApiError ? err.message : fallback);
 
 /** Description, arguments and Run for the open skill. Keyed by skill, so switching cards starts a fresh form. */
 function SkillDetail({ s }: { s: SkillSummary }) {
@@ -23,16 +22,16 @@ function SkillDetail({ s }: { s: SkillSummary }) {
   const [error, setError] = useState<string | null>(null);
   const [started, setStarted] = useState<string | null>(null);
 
-  async function launch() {
+  async function launch(confirmed: boolean) {
     if (busy) return;
     setBusy(true);
     setError(null);
     try {
-      const agent = await apiSend<AgentSummary>("POST", `/api/skills/${encodeURIComponent(s.name)}/run`, { args });
+      const agent = await apiSend<AgentSummary>("POST", `/api/skills/${encodeURIComponent(s.name)}/run`, { args, confirmed });
       setStarted(agent.name);
       setConfirming(false);
     } catch (err) {
-      setError(message(err, "Could not start the agent."));
+      setError(errorMessage(err, "Could not start the agent."));
     } finally {
       setBusy(false);
     }
@@ -40,7 +39,7 @@ function SkillDetail({ s }: { s: SkillSummary }) {
 
   const onRun = () => {
     if (s.confirmRequired && !confirming) return setConfirming(true);
-    void launch();
+    void launch(confirming);
   };
 
   return (

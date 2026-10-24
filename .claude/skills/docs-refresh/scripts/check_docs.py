@@ -69,8 +69,7 @@ def main() -> int:
                 if not resolved.exists():
                     problems.append(f"{rel}:{lineno}: broken link: {target}")
                 elif (
-                    run("git", "check-ignore", "-q", repo_rel) == ""
-                    and subprocess.run(
+                    subprocess.run(
                         ["git", "check-ignore", "-q", repo_rel], cwd=root
                     ).returncode
                     == 0

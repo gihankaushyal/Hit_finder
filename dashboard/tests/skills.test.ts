@@ -52,6 +52,16 @@ describe("scanLastRuns", () => {
     expect(runs.has("alpha")).toBe(false);
     expect(runs.get("beta")).toBe("2026-10-03T00:00:00.000Z");
   });
+  it("keeps the same answer when scans over different folder lists overlap", async () => {
+    const a = tmp();
+    const b = tmp();
+    fs.writeFileSync(path.join(a, "s.jsonl"), slash("alpha", "2026-10-01T00:00:00.000Z") + slash("alpha", "2026-10-02T00:00:00.000Z"));
+    fs.writeFileSync(path.join(b, "t.jsonl"), slash("beta", "2026-10-03T00:00:00.000Z"));
+    const [first, second] = await Promise.all([scanLastRuns(a), scanLastRuns([a, b])]);
+    expect(first.get("alpha")).toBe("2026-10-02T00:00:00.000Z");
+    expect(second.get("alpha")).toBe("2026-10-02T00:00:00.000Z");
+    expect(second.get("beta")).toBe("2026-10-03T00:00:00.000Z");
+  });
   it("shares one scan between overlapping requests", () => {
     const dir = tmp();
     expect(scanLastRuns(dir)).toBe(scanLastRuns(dir));
@@ -85,6 +95,7 @@ describe("skills routes", () => {
     const skills = ((await res.json()) as SkillsResponse).skills;
     expect(skills).toHaveLength(4);
     expect(skills.find((s) => s.name === "alpha")).toEqual({ name: "alpha", description: "Alpha does a thing across two lines", lastRun: "2026-10-05T12:00:00.000Z", confirmRequired: false, art: "docs" });
+    expect(skills.find((s) => s.name === "A_Very_Long_Skill_Name_Indeed")?.confirmRequired).toBe(true); // no header key: ask by default
     expect(skills.find((s) => s.name === "slurm-job")).toEqual({ name: "slurm-job", description: "Submit a job: needs a config", lastRun: "2026-09-01T00:00:00.000Z", confirmRequired: true, art: null });
   });
 
@@ -108,11 +119,39 @@ describe("skills routes", () => {
 
   it("points at the skill's folder, and shortens a long skill name to fit the agent name rules", async () => {
     await setup();
-    const slurm = (await (await post("slurm-job", {})).json()) as AgentSummary;
+    const slurm = (await (await post("slurm-job", { confirmed: true })).json()) as AgentSummary;
     expect(slurm.task).toContain(".claude/skills/beta/SKILL.md");
     expect(slurm.task).not.toContain("Arguments:");
-    const long = (await (await post("A_Very_Long_Skill_Name_Indeed", {})).json()) as AgentSummary;
+    const long = (await (await post("A_Very_Long_Skill_Name_Indeed", { confirmed: true })).json()) as AgentSummary;
     expect(long.name).toMatch(/^sk-a-very-long-sk-[0-9a-f]{4}$/);
+  });
+
+  it("refuses a skill that needs confirmation unless the request says it was confirmed", async () => {
+    await setup();
+    for (const body of [{}, { confirmed: false }, { confirmed: "true" }]) expect((await post("slurm-job", body)).status).toBe(400);
+    expect(((await (await rig.app.request("/api/agents", { headers: AUTH })).json()) as AgentsResponse).agents).toHaveLength(0);
+    expect((await post("slurm-job", { confirmed: true })).status).toBe(201);
+    expect((await post("alpha", {})).status).toBe(201); // opted out with dashboard-confirm: false
+  });
+
+  it("counts a run started from the dashboard as the skill's last run", async () => {
+    await setup();
+    const before = Date.now();
+    await post("alpha", {});
+    const skills = ((await (await rig.app.request("/api/skills", { headers: AUTH })).json()) as SkillsResponse).skills;
+    expect(Date.parse(skills.find((s) => s.name === "alpha")!.lastRun!)).toBeGreaterThanOrEqual(before - 1000);
+    expect(skills.find((s) => s.name === "slurm-job")?.lastRun).toBe("2026-09-01T00:00:00.000Z"); // untouched
+  });
+
+  it("lists a skill name once when two folders share it", async () => {
+    const skillsDir = tmp();
+    for (const dir of ["one", "two"]) {
+      fs.mkdirSync(path.join(skillsDir, dir));
+      fs.writeFileSync(path.join(skillsDir, dir, "SKILL.md"), `---\nname: same\ndescription: from ${dir}\n---\n`);
+    }
+    rig = await makeAgentRig({ DASH_SKILLS_DIR: skillsDir, DASH_TRANSCRIPTS_DIR: TRANSCRIPTS });
+    const skills = ((await (await rig.app.request("/api/skills", { headers: AUTH })).json()) as SkillsResponse).skills;
+    expect(skills.map((s) => [s.name, s.description])).toEqual([["same", "from one"]]);
   });
 
   it("rejects an unknown skill and bad arguments", async () => {

@@ -33,5 +33,8 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   return (await res.json()) as T;
 }
 
+/** An API error's own message, or `fallback` for anything else (a network failure, a bug). */
+export const errorMessage = (err: unknown, fallback: string): string => (err instanceof ApiError ? err.message : fallback);
+
 export const apiGet = <T>(path: string): Promise<T> => request<T>("GET", path);
 export const apiSend = <T>(method: string, path: string, body?: unknown): Promise<T> => request<T>(method, path, body);

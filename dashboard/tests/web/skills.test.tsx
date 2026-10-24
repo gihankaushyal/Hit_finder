@@ -31,7 +31,7 @@ describe("Skills", () => {
     expect(screen.getByText("Smoke test")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Run" }));
     const post = api.calls.find((c) => c.method === "POST");
-    expect(post).toMatchObject({ path: "/api/skills/pipeline-check/run", body: { args: "" } });
+    expect(post).toMatchObject({ path: "/api/skills/pipeline-check/run", body: { args: "", confirmed: false } });
     expect(await screen.findByRole("status")).toHaveTextContent("sk-pipeline-check-ab12");
   });
 
@@ -43,7 +43,7 @@ describe("Skills", () => {
     expect(api.calls.some((c) => c.method === "POST")).toBe(false);
     await userEvent.click(screen.getByRole("button", { name: "Yes, run" }));
     const post = api.calls.find((c) => c.method === "POST");
-    expect(post).toMatchObject({ path: "/api/skills/slurm-job/run", body: { args: "configs/x.yaml" } });
+    expect(post).toMatchObject({ path: "/api/skills/slurm-job/run", body: { args: "configs/x.yaml", confirmed: true } });
   });
 
   it("keeps the cards in a real list and shows one detail panel below it", async () => {
