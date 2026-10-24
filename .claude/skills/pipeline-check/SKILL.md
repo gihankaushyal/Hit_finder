@@ -2,6 +2,7 @@
 name: pipeline-check
 description: Run full preprocessing pipeline smoke tests on all four detectors (AGIPD, JUNGFRAU, ePix10k, Eiger4M) to catch regressions after any preprocessing change
 disable-model-invocation: true
+dashboard-art: pipeline
 ---
 
 Run the following commands in sequence and report pass/fail per detector:

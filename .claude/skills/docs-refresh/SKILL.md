@@ -2,6 +2,8 @@
 name: docs-refresh
 description: Refresh the Hit_finder reading materials (README.md, docs/detailed_notes.md, architecture.md, data_spec.md, eval_protocol.md, docs/codebase/*, plus the local CLAUDE.md tree and PLANNING.md notes) so they match the current code, configs and results. Runs a full audit with parallel read-only agents, verifies every claim against source, edits, opens a PR into the phase branch, runs /code-review high, and stops before merge. Use when the user asks to update, refresh, sync or audit the docs, codebase references or reading materials, after a batch of merged PRs, or at a phase boundary.
 disable-model-invocation: true
+dashboard-confirm: true
+dashboard-art: docs
 ---
 
 # docs-refresh

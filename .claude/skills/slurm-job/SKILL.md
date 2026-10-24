@@ -2,6 +2,8 @@
 name: slurm-job
 description: Submit a SLURM training job for sfx-hitfinder using the standard template with wandb env, conda activation, and A100 GPU config
 disable-model-invocation: true
+dashboard-confirm: true
+dashboard-art: rocket
 ---
 
 Ask the user for:

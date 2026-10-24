@@ -11,7 +11,7 @@ function Frame({ children }: { children: ReactElement | ReactElement[] }) {
   );
 }
 
-/** docs-refresh: a stack of pages with a magnifier over it. */
+/** art `docs`: a stack of pages with a magnifier over it. */
 function DocsArt() {
   return (
     <Frame>
@@ -25,7 +25,7 @@ function DocsArt() {
   );
 }
 
-/** pipeline-check: a detector grid with a spark where a Bragg peak lands. */
+/** art `pipeline`: a detector grid with a spark where a Bragg peak lands. */
 function PipelineArt() {
   return (
     <Frame>
@@ -39,7 +39,7 @@ function PipelineArt() {
   );
 }
 
-/** slurm-job: a server rack launching a rocket. */
+/** art `rocket`: a server rack launching a rocket. */
 function SlurmArt() {
   return (
     <Frame>
@@ -56,7 +56,7 @@ function SlurmArt() {
   );
 }
 
-/** A generic flask for any other skill folder that appears later. */
+/** The generic flask, for a skill with no (or an unknown) `dashboard-art`. */
 function GenericArt() {
   return (
     <Frame>
@@ -68,13 +68,14 @@ function GenericArt() {
   );
 }
 
+/** Keyed by the `dashboard-art:` value in a skill's SKILL.md. */
 const ART: Record<string, () => ReactElement> = {
-  "docs-refresh": DocsArt,
-  "pipeline-check": PipelineArt,
-  "slurm-job": SlurmArt,
+  docs: DocsArt,
+  pipeline: PipelineArt,
+  rocket: SlurmArt,
 };
 
-export function SkillArt({ name }: { name: string }) {
-  const Art = ART[name] ?? GenericArt;
+export function SkillArt({ art }: { art: string | null }) {
+  const Art = (art !== null ? ART[art] : undefined) ?? GenericArt;
   return <Art />;
 }

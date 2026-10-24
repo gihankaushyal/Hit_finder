@@ -55,7 +55,7 @@ export function buildServer(d: ServerDeps): Hono {
       runRoutes(api, { scanner: d.runs });
       repoRoutes(api, { runner: d.runner, repoRoot: d.config.repoRoot });
       agentRoutes(api, { agents: d.agents, approvals: d.approvals, config: d.config });
-      skillRoutes(api, { config: d.config });
+      skillRoutes(api, { config: d.config, agents: d.agents });
       chiefRoutes(api, { chief: d.chief });
       terminalRoutes(api, { terminal: d.terminal, config: d.config });
     },

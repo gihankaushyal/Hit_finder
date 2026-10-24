@@ -27,6 +27,7 @@ export interface Config {
   agentBase: string;      // DASH_AGENT_BASE, the ref worker branches start from, default origin/phase-05
   skillsDir: string;      // DASH_SKILLS_DIR, default <repoRoot>/.claude/skills (project-only skills)
   transcriptsDir: string; // DASH_TRANSCRIPTS_DIR, default ~/.claude/projects/<repoRoot with non-alphanumerics as dashes>
+  transcriptsIncludeWorktrees: boolean; // true unless DASH_TRANSCRIPTS_DIR is set: also read the transcript folders of this repo's worktrees
   webDist: string;    // dashboard/dist
 }
 
@@ -115,6 +116,7 @@ export function loadConfig(raw: NodeJS.ProcessEnv): Config {
     terminalTmuxSocket: safeName("DASH_TERMINAL_TMUX_SOCKET", get("DASH_TERMINAL_TMUX_SOCKET"), null),
     skillsDir: path.resolve(get("DASH_SKILLS_DIR") ?? path.join(repoRoot, ".claude", "skills")),
     transcriptsDir: path.resolve(get("DASH_TRANSCRIPTS_DIR") ?? path.join(os.homedir(), ".claude", "projects", repoRoot.replace(/[^A-Za-z0-9]/g, "-"))),
+    transcriptsIncludeWorktrees: get("DASH_TRANSCRIPTS_DIR") === undefined,
     webDist: path.join(DASHBOARD_DIR, "dist"),
   };
 }

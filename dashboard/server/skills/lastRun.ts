@@ -1,93 +1,167 @@
 import fs from "node:fs";
 import path from "node:path";
-import readline from "node:readline";
 
-const SKILL_TOOL_MARK = '"name":"Skill"';
+const SKILL_TOOL_RE = /"name":\s*"Skill"/;
 const COMMAND_MARK = "<command-name>/";
-const COMMAND_RE = /<command-name>\/([A-Za-z0-9:_-]+)<\/command-name>/g;
+/** A slash command message starts with its tags (Claude Code writes `<command-message>` first); text that merely quotes them does not. */
+const COMMAND_RE = /^\s*(?:<command-message>[\s\S]*?<\/command-message>\s*)?<command-name>\/([A-Za-z0-9:_-]+)<\/command-name>/;
+const CHUNK_BYTES = 4 * 1024 * 1024;
+const NEWLINE = 0x0a;
+/** Skill calls still waiting for their result; an unanswered call is dropped once this many are newer. */
+const PENDING_MAX = 50;
+/** Claude Code names a worktree's transcript folder `<repo folder>--claude-worktrees-<name>`. */
+const WORKTREE_INFIX = "--claude-worktrees-";
 
-interface FileRuns {
-  mtimeMs: number;
-  size: number;
-  runs: Map<string, string>;
+interface Block {
+  type?: string;
+  name?: string;
+  id?: string;
+  tool_use_id?: string;
+  is_error?: boolean;
+  text?: string;
+  input?: { skill?: unknown };
+}
+interface Entry {
+  timestamp?: unknown;
+  message?: { role?: unknown; content?: unknown };
 }
 
-/** Per-file results, so only transcripts that changed since the last scan are read again. */
-const cache = new Map<string, FileRuns>();
+/** What has been learned from one transcript so far. Transcripts only grow at the end, so `offset` marks where to resume. */
+interface FileState {
+  offset: number;
+  runs: Map<string, string>;
+  pending: Map<string, { name: string; at: string }>;
+}
+
+const files = new Map<string, FileState>();
+const inflight = new Map<string, Promise<Map<string, string>>>();
 
 function newer(runs: Map<string, string>, name: string, at: string): void {
   const prev = runs.get(name);
   if (!prev || Date.parse(at) > Date.parse(prev)) runs.set(name, at);
 }
 
-function textOf(content: unknown): string {
+function firstText(content: unknown): string {
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return "";
-  return content.map((b) => (b && typeof b === "object" && typeof (b as { text?: unknown }).text === "string" ? (b as { text: string }).text : "")).join("\n");
+  const block = (content as Block[]).find((b) => b?.type === "text" && typeof b.text === "string");
+  return block?.text ?? "";
 }
 
-/** Reads one transcript line; only the skill name and the entry time leave this function. */
-function collect(line: string, runs: Map<string, string>): void {
-  let entry: { timestamp?: unknown; message?: { role?: unknown; content?: unknown } };
+/** Reads one transcript line; only skill names and entry times are kept. */
+function processLine(line: string, st: FileState): void {
+  const wantsResult = st.pending.size > 0 && [...st.pending.keys()].some((id) => line.includes(id));
+  if (!wantsResult && !SKILL_TOOL_RE.test(line) && !line.includes(COMMAND_MARK)) return;
+  let entry: Entry;
   try {
     entry = JSON.parse(line);
   } catch {
     return;
   }
-  const at = entry.timestamp;
-  if (typeof at !== "string" || Number.isNaN(Date.parse(at))) return;
   const content = entry.message?.content;
-  if (Array.isArray(content)) {
-    for (const block of content as Array<{ type?: string; name?: string; input?: { skill?: unknown } }>) {
-      if (block?.type === "tool_use" && block.name === "Skill" && typeof block.input?.skill === "string") newer(runs, block.input.skill, at);
+  const blocks = Array.isArray(content) ? (content as Block[]) : [];
+  for (const b of blocks) {
+    if (b?.type === "tool_result" && typeof b.tool_use_id === "string") {
+      const call = st.pending.get(b.tool_use_id);
+      if (!call) continue;
+      st.pending.delete(b.tool_use_id);
+      if (b.is_error !== true) newer(st.runs, call.name, call.at); // a call that errored did not run the skill
     }
   }
-  const text = textOf(content);
-  if (entry.message?.role === "user" && text.includes(COMMAND_MARK)) for (const m of text.matchAll(COMMAND_RE)) newer(runs, m[1], at);
-}
-
-async function scanFile(file: string): Promise<Map<string, string>> {
-  const runs = new Map<string, string>();
-  const lines = readline.createInterface({ input: fs.createReadStream(file, { encoding: "utf8" }), crlfDelay: Infinity });
-  for await (const line of lines) {
-    if (line.includes(SKILL_TOOL_MARK) || line.includes(COMMAND_MARK)) collect(line, runs);
+  const at = entry.timestamp;
+  if (typeof at !== "string" || Number.isNaN(Date.parse(at))) return;
+  for (const b of blocks) {
+    if (b?.type === "tool_use" && b.name === "Skill" && typeof b.id === "string" && typeof b.input?.skill === "string") {
+      st.pending.set(b.id, { name: b.input.skill, at });
+      if (st.pending.size > PENDING_MAX) st.pending.delete(st.pending.keys().next().value as string);
+    }
   }
-  return runs;
+  if (entry.message?.role === "user") {
+    const m = COMMAND_RE.exec(firstText(content));
+    if (m) newer(st.runs, m[1], at);
+  }
 }
 
-/**
- * Newest time each skill was invoked in the Claude Code transcripts under `dir` (tool calls and /slash commands).
- * Returns skill name to ISO time; a missing directory gives an empty map.
- */
-export async function scanLastRuns(dir: string): Promise<Map<string, string>> {
-  let names: string[];
+/** Reads `st.offset` to `size`, in chunks cut at line ends, and moves the offset past the last complete line. */
+async function readNew(file: string, st: FileState, size: number): Promise<void> {
+  const fh = await fs.promises.open(file, "r");
   try {
-    names = (await fs.promises.readdir(dir)).filter((n) => n.endsWith(".jsonl"));
-  } catch {
-    return new Map();
+    const buf = Buffer.allocUnsafe(Math.min(CHUNK_BYTES, size - st.offset));
+    let pos = st.offset;
+    let carry = Buffer.alloc(0);
+    while (pos < size) {
+      const { bytesRead } = await fh.read(buf, 0, Math.min(buf.length, size - pos), pos);
+      if (bytesRead === 0) break;
+      pos += bytesRead;
+      const chunk = Buffer.concat([carry, buf.subarray(0, bytesRead)]);
+      const nl = chunk.lastIndexOf(NEWLINE);
+      if (nl < 0) {
+        carry = chunk;
+        continue;
+      }
+      for (const line of chunk.subarray(0, nl).toString("utf8").split("\n")) if (line) processLine(line, st);
+      carry = chunk.subarray(nl + 1);
+    }
+    st.offset = pos - carry.length;
+  } finally {
+    await fh.close();
   }
+}
+
+async function scan(dirs: string[]): Promise<Map<string, string>> {
   const seen = new Set<string>();
   const merged = new Map<string, string>();
-  for (const n of names) {
-    const file = path.join(dir, n);
-    seen.add(file);
-    let st: fs.Stats;
+  for (const dir of dirs) {
+    let names: string[];
     try {
-      st = await fs.promises.stat(file);
+      names = (await fs.promises.readdir(dir)).filter((n) => n.endsWith(".jsonl"));
     } catch {
       continue;
     }
-    let hit = cache.get(file);
-    if (!hit || hit.mtimeMs !== st.mtimeMs || hit.size !== st.size) {
+    for (const n of names) {
+      const file = path.join(dir, n);
+      seen.add(file);
       try {
-        hit = { mtimeMs: st.mtimeMs, size: st.size, runs: await scanFile(file) };
+        const { size } = await fs.promises.stat(file);
+        let st = files.get(file);
+        if (!st || size < st.offset) {
+          st = { offset: 0, runs: new Map(), pending: new Map() }; // new file, or one that was rewritten shorter
+          files.set(file, st);
+        }
+        if (size > st.offset) await readNew(file, st, size);
+        for (const [name, at] of st.runs) newer(merged, name, at);
       } catch {
-        continue;
+        // an unreadable transcript is skipped, not fatal
       }
-      cache.set(file, hit);
     }
-    for (const [name, at] of hit.runs) newer(merged, name, at);
   }
-  for (const f of cache.keys()) if (path.dirname(f) === dir && !seen.has(f)) cache.delete(f);
+  for (const f of files.keys()) if (dirs.includes(path.dirname(f)) && !seen.has(f)) files.delete(f);
   return merged;
+}
+
+/**
+ * Newest time each skill was invoked in the Claude Code transcripts under `dirs`: a Skill tool call that got a
+ * successful result, or a /slash command typed by the user. Returns skill name to ISO time. Only the part of a
+ * transcript added since the last scan is read, and requests that overlap share one scan.
+ */
+export function scanLastRuns(dirs: string | string[]): Promise<Map<string, string>> {
+  const list = [...new Set(Array.isArray(dirs) ? dirs : [dirs])];
+  const key = list.join("\0");
+  const running = inflight.get(key);
+  if (running) return running;
+  const p = scan(list).finally(() => inflight.delete(key));
+  inflight.set(key, p);
+  return p;
+}
+
+/** `mainDir` plus the transcript folders of its worktrees, so runs from a feature worktree count too. */
+export async function withWorktreeDirs(mainDir: string): Promise<string[]> {
+  const parent = path.dirname(mainDir);
+  const prefix = path.basename(mainDir) + WORKTREE_INFIX;
+  try {
+    const names = (await fs.promises.readdir(parent)).filter((n) => n.startsWith(prefix)).sort();
+    return [mainDir, ...names.map((n) => path.join(parent, n))];
+  } catch {
+    return [mainDir];
+  }
 }
