@@ -25,6 +25,12 @@ describe("parseFrontmatter", () => {
   it("returns nothing without a header", () => {
     expect(parseFrontmatter("no header here")).toEqual({});
   });
+  it("skips nested keys, lists and numbers", () => {
+    expect(parseFrontmatter(wrap("a: [1, 2]\nb:\n  c: d\nn: 3\nname: ok"))).toEqual({ name: "ok" });
+  });
+  it("throws on a header that is not valid YAML", () => {
+    expect(() => parseFrontmatter(wrap("name: [unclosed"))).toThrow();
+  });
   it("keeps a quoted true as text", () => {
     expect(parseFrontmatter(wrap('a: "true"'))).toEqual({ a: "true" });
   });

@@ -83,9 +83,15 @@ describe("skills routes", () => {
     const res = await rig.app.request("/api/skills", { headers: AUTH });
     expect(res.status).toBe(200);
     const skills = ((await res.json()) as SkillsResponse).skills;
-    expect(skills).toHaveLength(3);
+    expect(skills).toHaveLength(4);
     expect(skills.find((s) => s.name === "alpha")).toEqual({ name: "alpha", description: "Alpha does a thing across two lines", lastRun: "2026-10-05T12:00:00.000Z", confirmRequired: false, art: "docs" });
     expect(skills.find((s) => s.name === "slurm-job")).toEqual({ name: "slurm-job", description: "Submit a job: needs a config", lastRun: "2026-09-01T00:00:00.000Z", confirmRequired: true, art: null });
+  });
+
+  it("lists a skill whose header cannot be read, and makes it ask for confirmation", async () => {
+    await setup();
+    const skills = ((await (await rig.app.request("/api/skills", { headers: AUTH })).json()) as SkillsResponse).skills;
+    expect(skills.find((s) => s.name === "broken")).toMatchObject({ confirmRequired: true, art: null, lastRun: null });
   });
 
   it("starts an agent that reads the skill's SKILL.md, with a server-chosen valid name", async () => {

@@ -37,18 +37,24 @@ async function readSkills(skillsDir: string): Promise<SkillFile[]> {
   const skills: SkillFile[] = [];
   for (const e of entries) {
     if (!e.isDirectory()) continue;
+    let text: string;
     try {
-      const fm = parseFrontmatter(await fs.promises.readFile(path.join(skillsDir, e.name, SKILL_FILE), "utf8"));
-      const name = typeof fm.name === "string" && fm.name ? fm.name : e.name;
+      text = await fs.promises.readFile(path.join(skillsDir, e.name, SKILL_FILE), "utf8");
+    } catch {
+      continue; // a folder without a SKILL.md is not a skill
+    }
+    try {
+      const fm = parseFrontmatter(text);
       skills.push({
         dir: e.name,
-        name,
+        name: typeof fm.name === "string" && fm.name ? fm.name : e.name,
         description: typeof fm.description === "string" ? fm.description : "",
         confirmRequired: fm[CONFIRM_KEY] === true,
         art: typeof fm[ART_KEY] === "string" && fm[ART_KEY] ? fm[ART_KEY] : null,
       });
     } catch {
-      // a folder without a SKILL.md is not a skill
+      // An unreadable header must not hide the skill or quietly drop its confirm step.
+      skills.push({ dir: e.name, name: e.name, description: "The header of this SKILL.md could not be read.", confirmRequired: true, art: null });
     }
   }
   return skills.sort((a, b) => a.name.localeCompare(b.name));
