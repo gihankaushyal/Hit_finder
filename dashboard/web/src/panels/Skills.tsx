@@ -11,8 +11,7 @@ import "./Skills.css";
 const SKILLS_REFRESH_MS = 60_000;
 const DETAIL_ID = "skill-detail";
 
-
-/** Description and where to run the open skill. Skills run from a Claude Code session, not from here. */
+/** The open skill's description and its slash command: skills run from a Claude Code session, not from the dashboard. */
 function SkillDetail({ s }: { s: SkillSummary }) {
   return (
     <div id={DETAIL_ID} className="skill__detail" role="region" aria-label={`${s.name} details`}>
