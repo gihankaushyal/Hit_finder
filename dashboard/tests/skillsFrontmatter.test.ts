@@ -5,10 +5,10 @@ const wrap = (body: string) => `---\n${body}\n---\nbody text\nname: not-this\n`;
 
 describe("parseFrontmatter", () => {
   it("reads plain values, booleans and ignores the body", () => {
-    expect(parseFrontmatter(wrap("name: slurm-job\ndescription: Submit a job\ndashboard-confirm: true\nother: false"))).toEqual({
+    expect(parseFrontmatter(wrap("name: slurm-job\ndescription: Submit a job\ndashboard-flag: true\nother: false"))).toEqual({
       name: "slurm-job",
       description: "Submit a job",
-      "dashboard-confirm": true,
+      "dashboard-flag": true,
       other: false,
     });
   });

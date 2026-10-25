@@ -8,5 +8,4 @@
 .skill__when { font-size: 0.72rem; }
 .skill__detail { margin-top: var(--s3); display: flex; flex-direction: column; gap: var(--s2); padding: var(--s3); border: 1px solid var(--rule); border-radius: var(--radius); background: var(--surface-2); min-width: 0; }
 .skill__desc { margin: 0; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 6; -webkit-box-orient: vertical; overflow: hidden; }
-.skill__warn { color: var(--warn); font-weight: 600; }
 @media (prefers-reduced-motion: reduce) { .skill__card { transition: none; } .skill__card:hover { transform: none; } }

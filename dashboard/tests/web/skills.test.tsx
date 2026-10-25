@@ -6,15 +6,14 @@ import { mockApi, stubEventSource } from "./helpers";
 
 const NOW = Date.now();
 const skills = [
-  { name: "pipeline-check", description: "Smoke test", lastRun: new Date(NOW - 2 * 3600_000).toISOString(), confirmRequired: false, art: "pipeline" },
-  { name: "slurm-job", description: "Submit a job", lastRun: null, confirmRequired: true, art: null },
+  { name: "pipeline-check", description: "Smoke test", lastRun: new Date(NOW - 2 * 3600_000).toISOString(), art: "pipeline" },
+  { name: "slurm-job", description: "Submit a job", lastRun: null, art: null },
 ];
 
 let api: ReturnType<typeof mockApi>;
 beforeEach(() => {
   stubEventSource();
-  api = mockApi({ "GET /api/skills": { body: { skills } }, "POST /api/skills/pipeline-check/run": { status: 201, body: { name: "sk-pipeline-check-ab12" } },
-    "POST /api/skills/slurm-job/run": { status: 201, body: { name: "sk-slurm-job-cd34" } } });
+  api = mockApi({ "GET /api/skills": { body: { skills } } });
 });
 afterEach(() => vi.unstubAllGlobals());
 
@@ -25,35 +24,13 @@ describe("Skills", () => {
     expect(screen.getByRole("button", { name: /slurm-job/ })).toHaveTextContent("never ran");
   });
 
-  it("expands on click and runs a read-only skill in one click", async () => {
+  it("expands on click to the description and how to run it from Claude Code, with no Run button", async () => {
     render(<Skills />);
     await userEvent.click(await screen.findByRole("button", { name: /pipeline-check/ }));
     expect(screen.getByText("Smoke test")).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "Run" }));
-    const post = api.calls.find((c) => c.method === "POST");
-    expect(post).toMatchObject({ path: "/api/skills/pipeline-check/run", body: { args: "", confirmed: false } });
-    expect(await screen.findByRole("status")).toHaveTextContent("sk-pipeline-check-ab12");
-  });
-
-  it("reloads the list after a run so the card shows the new launch", async () => {
-    render(<Skills />);
-    await userEvent.click(await screen.findByRole("button", { name: /pipeline-check/ }));
-    const loads = () => api.calls.filter((c) => c.method === "GET" && c.path === "/api/skills").length;
-    const before = loads();
-    await userEvent.click(screen.getByRole("button", { name: "Run" }));
-    await screen.findByRole("status");
-    await vi.waitFor(() => expect(loads()).toBeGreaterThan(before));
-  });
-
-  it("asks for confirmation before a skill with side effects", async () => {
-    render(<Skills />);
-    await userEvent.click(await screen.findByRole("button", { name: /slurm-job/ }));
-    await userEvent.type(screen.getByLabelText(/Arguments/), "configs/x.yaml");
-    await userEvent.click(screen.getByRole("button", { name: "Run" }));
+    expect(screen.getByText("/pipeline-check")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Run/ })).toBeNull();
     expect(api.calls.some((c) => c.method === "POST")).toBe(false);
-    await userEvent.click(screen.getByRole("button", { name: "Yes, run" }));
-    const post = api.calls.find((c) => c.method === "POST");
-    expect(post).toMatchObject({ path: "/api/skills/slurm-job/run", body: { args: "configs/x.yaml", confirmed: true } });
   });
 
   it("keeps the cards in a real list and shows one detail panel below it", async () => {
