@@ -207,10 +207,10 @@ export interface SkillSummary {
   description: string;
   /** ISO time of the newest transcript entry that invoked the skill, or null if it never ran. */
   lastRun: string | null;
-  /** Skills with side effects (jobs, PRs) ask for a second click before they run. Every skill asks by default; `dashboard-confirm: false` in SKILL.md opts out. */
-  confirmRequired: boolean;
   /** Which cartoon to show, from `dashboard-art:` in SKILL.md; null gives the generic one. */
   art: string | null;
+  /** False when the SKILL.md header could not be parsed; the skill is listed but may not be invocable. */
+  readable: boolean;
 }
 
 export interface SkillsResponse {

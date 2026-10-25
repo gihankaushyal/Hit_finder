@@ -4,12 +4,10 @@ import { parseFrontmatter } from "../server/skills/frontmatter";
 const wrap = (body: string) => `---\n${body}\n---\nbody text\nname: not-this\n`;
 
 describe("parseFrontmatter", () => {
-  it("reads plain values, booleans and ignores the body", () => {
-    expect(parseFrontmatter(wrap("name: slurm-job\ndescription: Submit a job\ndashboard-confirm: true\nother: false"))).toEqual({
+  it("reads plain values and ignores the body", () => {
+    expect(parseFrontmatter(wrap("name: slurm-job\ndescription: Submit a job"))).toEqual({
       name: "slurm-job",
       description: "Submit a job",
-      "dashboard-confirm": true,
-      other: false,
     });
   });
   it("unquotes values and keeps colons and # inside quotes", () => {
@@ -25,8 +23,8 @@ describe("parseFrontmatter", () => {
   it("returns nothing without a header", () => {
     expect(parseFrontmatter("no header here")).toEqual({});
   });
-  it("skips nested keys, lists and numbers", () => {
-    expect(parseFrontmatter(wrap("a: [1, 2]\nb:\n  c: d\nn: 3\nname: ok"))).toEqual({ name: "ok" });
+  it("skips nested keys, lists, numbers and booleans", () => {
+    expect(parseFrontmatter(wrap("a: [1, 2]\nb:\n  c: d\nn: 3\nflag: true\nname: ok"))).toEqual({ name: "ok" });
   });
   it("throws on a header that is not valid YAML", () => {
     expect(() => parseFrontmatter(wrap("name: [unclosed"))).toThrow();
