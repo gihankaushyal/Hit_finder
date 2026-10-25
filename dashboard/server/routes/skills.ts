@@ -11,9 +11,13 @@ const SKILL_FILE = "SKILL.md";
 const ART_KEY = "dashboard-art";
 
 interface SkillFile {
+  /** The folder under .claude/skills; breaks ties between two skills that share a name. */
+  dir: string;
   name: string;
   description: string;
   art: string | null;
+  /** False when the header could not be parsed, so the skill may not be invocable. */
+  readable: boolean;
 }
 
 async function readSkills(skillsDir: string): Promise<SkillFile[]> {
@@ -24,8 +28,7 @@ async function readSkills(skillsDir: string): Promise<SkillFile[]> {
     return [];
   }
   const skills: SkillFile[] = [];
-  // Folder order decides which of two same-named skills wins, so do not leave it to the file system.
-  for (const e of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+  for (const e of entries) {
     if (!e.isDirectory()) continue;
     let text: string;
     try {
@@ -36,18 +39,20 @@ async function readSkills(skillsDir: string): Promise<SkillFile[]> {
     try {
       const fm = parseFrontmatter(text);
       skills.push({
+        dir: e.name,
         name: typeof fm.name === "string" && fm.name ? fm.name : e.name,
         description: typeof fm.description === "string" ? fm.description : "",
         art: typeof fm[ART_KEY] === "string" && fm[ART_KEY] ? fm[ART_KEY] : null,
+        readable: true,
       });
     } catch {
       // An unreadable header must not hide the skill.
-      skills.push({ name: e.name, description: "The header of this SKILL.md could not be read.", art: null });
+      skills.push({ dir: e.name, name: e.name, description: "The header of this SKILL.md could not be read.", art: null, readable: false });
     }
   }
   // Two folders sharing a name would clash on the card list, so the first one wins.
   const seen = new Set<string>();
-  return skills.sort((a, b) => a.name.localeCompare(b.name)).filter((s) => !seen.has(s.name) && !!seen.add(s.name));
+  return skills.sort((a, b) => a.name.localeCompare(b.name) || a.dir.localeCompare(b.dir)).filter((s) => !seen.has(s.name) && !!seen.add(s.name));
 }
 
 export function skillRoutes(api: Hono, d: { config: Config }): void {
@@ -55,7 +60,7 @@ export function skillRoutes(api: Hono, d: { config: Config }): void {
     const dirs = d.config.transcriptsIncludeWorktrees ? await withWorktreeDirs(d.config.transcriptsDir) : [d.config.transcriptsDir];
     const [skills, runs] = await Promise.all([readSkills(d.config.skillsDir), scanLastRuns(dirs)]);
     const body: SkillsResponse = {
-      skills: skills.map((s): SkillSummary => ({ name: s.name, description: s.description, lastRun: runs.get(s.name) ?? null, art: s.art })),
+      skills: skills.map((s): SkillSummary => ({ name: s.name, description: s.description, lastRun: runs.get(s.name) ?? null, art: s.art, readable: s.readable })),
     };
     return c.json(body);
   });

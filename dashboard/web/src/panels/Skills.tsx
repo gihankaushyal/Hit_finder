@@ -16,9 +16,11 @@ function SkillDetail({ s }: { s: SkillSummary }) {
   return (
     <div id={DETAIL_ID} className="skill__detail" role="region" aria-label={`${s.name} details`}>
       <p className="skill__desc">{s.description || "No description."}</p>
-      <p className="dim">
-        Run it from Claude Code: <span className="mono">/{s.name}</span>
-      </p>
+      {s.readable && (
+        <p className="dim">
+          Run it from Claude Code: <span className="mono">/{s.name}</span>
+        </p>
+      )}
     </div>
   );
 }

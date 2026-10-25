@@ -6,8 +6,8 @@ import { mockApi, stubEventSource } from "./helpers";
 
 const NOW = Date.now();
 const skills = [
-  { name: "pipeline-check", description: "Smoke test", lastRun: new Date(NOW - 2 * 3600_000).toISOString(), art: "pipeline" },
-  { name: "slurm-job", description: "Submit a job", lastRun: null, art: null },
+  { name: "pipeline-check", description: "Smoke test", lastRun: new Date(NOW - 2 * 3600_000).toISOString(), art: "pipeline", readable: true },
+  { name: "slurm-job", description: "Submit a job", lastRun: null, art: null, readable: true },
 ];
 
 let api: ReturnType<typeof mockApi>;
@@ -31,6 +31,14 @@ describe("Skills", () => {
     expect(screen.getByText("/pipeline-check")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^Run/ })).toBeNull();
     expect(api.calls.some((c) => c.method === "POST")).toBe(false);
+  });
+
+  it("does not suggest a slash command for a skill whose header could not be read", async () => {
+    mockApi({ "GET /api/skills": { body: { skills: [{ name: "broken", description: "The header of this SKILL.md could not be read.", lastRun: null, art: null, readable: false }] } } });
+    render(<Skills />);
+    await userEvent.click(await screen.findByRole("button", { name: /broken/ }));
+    expect(screen.getByText(/could not be read/)).toBeInTheDocument();
+    expect(screen.queryByText(/Run it from Claude Code/)).toBeNull();
   });
 
   it("keeps the cards in a real list and shows one detail panel below it", async () => {

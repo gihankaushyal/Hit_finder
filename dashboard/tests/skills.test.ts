@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { scanLastRuns, withWorktreeDirs } from "../server/skills/lastRun";
 import { makeAgentRig, AUTH, type AgentRig } from "./helpers/agentRig";
-import type { SkillsResponse } from "../shared/types";
+import type { AgentsResponse, SkillsResponse } from "../shared/types";
 
 const FIX = path.join(__dirname, "fixtures");
 const TRANSCRIPTS = path.join(FIX, "transcripts");
@@ -106,19 +106,20 @@ describe("skills routes", () => {
     expect(res.status).toBe(200);
     const skills = ((await res.json()) as SkillsResponse).skills;
     expect(skills).toHaveLength(4);
-    expect(skills.find((s) => s.name === "alpha")).toEqual({ name: "alpha", description: "Alpha does a thing across two lines", lastRun: "2026-10-05T12:00:00.000Z", art: "docs" });
-    expect(skills.find((s) => s.name === "slurm-job")).toEqual({ name: "slurm-job", description: "Submit a job: needs a config", lastRun: "2026-09-01T00:00:00.000Z", art: null });
+    expect(skills.find((s) => s.name === "alpha")).toEqual({ name: "alpha", description: "Alpha does a thing across two lines", lastRun: "2026-10-05T12:00:00.000Z", art: "docs", readable: true });
+    expect(skills.find((s) => s.name === "slurm-job")).toEqual({ name: "slurm-job", description: "Submit a job: needs a config", lastRun: "2026-09-01T00:00:00.000Z", art: null, readable: true });
   });
 
   it("lists a skill whose header cannot be read", async () => {
     await setup();
-    expect((await list()).find((s) => s.name === "broken")).toMatchObject({ art: null, lastRun: null });
+    expect((await list()).find((s) => s.name === "broken")).toMatchObject({ art: null, lastRun: null, readable: false });
   });
 
   it("has no run endpoint: skills run from Claude Code, not the dashboard", async () => {
     await setup();
     const res = await rig.app.request("/api/skills/alpha/run", { method: "POST", headers: AUTH, body: JSON.stringify({}) });
     expect(res.status).toBe(404);
+    expect(((await (await rig.app.request("/api/agents", { headers: AUTH })).json()) as AgentsResponse).agents).toHaveLength(0); // nothing was started
   });
 
   it("lists a skill name once when two folders share it", async () => {

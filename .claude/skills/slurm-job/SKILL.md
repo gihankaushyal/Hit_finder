@@ -5,7 +5,7 @@ disable-model-invocation: true
 dashboard-art: rocket
 ---
 
-Ask the user for the four values below. If nobody can answer (a headless or agent session), stop and say what is missing instead of guessing, because this submits a real GPU job:
+Get these four values. Use any the invoker already gave in the prompt or task text (free text; for example `configs/supervised/resnet18_resonet.yaml resnet18-resonet-fold0 04:00:00 128G`, in the order config path, job name, time, memory). Ask the user for the rest. If you cannot ask (a headless or agent session) and the config path or job name is still missing, stop and say what is missing instead of guessing, because this submits a real GPU job:
 1. Config file path (e.g. configs/supervised/resnet18_resonet.yaml)
 2. Job name (e.g. resnet18-resonet-fold0)
 3. Time limit (default: 02:00:00, the template's value)

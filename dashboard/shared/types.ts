@@ -209,6 +209,8 @@ export interface SkillSummary {
   lastRun: string | null;
   /** Which cartoon to show, from `dashboard-art:` in SKILL.md; null gives the generic one. */
   art: string | null;
+  /** False when the SKILL.md header could not be parsed; the skill is listed but may not be invocable. */
+  readable: boolean;
 }
 
 export interface SkillsResponse {
