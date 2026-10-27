@@ -45,15 +45,21 @@ describe("reduceAttention", () => {
 
   it("a seed adds running ids but cannot resurrect an agent that already reported", () => {
     let s = run(EMPTY_ATTENTION, "a", "done");
-    s = reduceAttention(s, { kind: "seed", running: ["a", "b"] });
+    s = reduceAttention(s, { kind: "seed", running: ["a", "b"], settled: [] });
     expect([...s.running]).toEqual(["b"]);
   });
 
   it("a later seed replaces earlier seeded ids but keeps event-driven ones", () => {
-    let s = reduceAttention(EMPTY_ATTENTION, { kind: "seed", running: ["x"] });
+    let s = reduceAttention(EMPTY_ATTENTION, { kind: "seed", running: ["x"], settled: [] });
     s = run(s, "y", "running");
-    s = reduceAttention(s, { kind: "seed", running: [] });
+    s = reduceAttention(s, { kind: "seed", running: [], settled: [] });
     expect([...s.running]).toEqual(["y"]);
+  });
+
+  it("a seed that lists an event-driven id as settled clears it (a missed done must not stick the bubble yellow)", () => {
+    let s = run(EMPTY_ATTENTION, "y", "running");
+    s = reduceAttention(s, { kind: "seed", running: [], settled: ["y"] });
+    expect(s.running.size).toBe(0);
   });
 });
 

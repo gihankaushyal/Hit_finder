@@ -86,12 +86,13 @@ export function setTabAttention(count: number, color: BubbleColor | null): void 
     if (baseTitle === null) baseTitle = document.title;
     document.title = count > 0 ? `(${count}) ${baseTitle}` : baseTitle;
     if (count === 0) baseTitle = null;
-    const link = iconLink();
-    if (color && count > 0) {
+    if (color) {
+      const link = iconLink();
       if (baseIcon === null) baseIcon = link.getAttribute("href") ?? "";
       const dot = drawDot(color);
       if (dot) link.href = dot;
     } else if (baseIcon !== null) {
+      const link = iconLink();
       if (baseIcon) link.href = baseIcon;
       else link.remove();
       baseIcon = null;

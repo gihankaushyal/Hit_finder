@@ -22,6 +22,10 @@ describe("setTabAttention", () => {
     setTabAttention(0, null);
     expect(document.title).toBe("Hit_finder");
   });
+  it("leaves the head untouched when there is no dot to draw or restore", () => {
+    setTabAttention(0, null);
+    expect(document.head.querySelector("link[rel~='icon']")).toBeNull();
+  });
   it("does not throw without a canvas (jsdom)", () => {
     expect(() => setTabAttention(1, "red")).not.toThrow();
     setTabAttention(0, null);

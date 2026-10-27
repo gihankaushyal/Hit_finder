@@ -20,7 +20,7 @@ export interface AttentionState {
 }
 
 export type AttentionAction =
-  | { kind: "seed"; running: string[] }
+  | { kind: "seed"; running: string[]; settled: string[] }
   | { kind: "event"; id: string; state: AgentState; open: boolean }
   | { kind: "open" };
 
@@ -40,7 +40,8 @@ export function isUnseenTransition(state: AgentState, open: boolean): boolean {
 export function reduceAttention(s: AttentionState, a: AttentionAction): AttentionState {
   if (a.kind === "open") return { ...s, failed: new Set(), finished: new Set() };
   if (a.kind === "seed") {
-    const kept = [...s.running].filter((id) => s.fromEvent.has(id));
+    // The list is authoritative for an id it reports as no longer running: a missed "done" must not leave the bubble yellow.
+    const kept = [...s.running].filter((id) => s.fromEvent.has(id) && !a.settled.includes(id));
     const seeded = a.running.filter((id) => !s.fromEvent.has(id));
     return { ...s, running: new Set([...kept, ...seeded]) };
   }

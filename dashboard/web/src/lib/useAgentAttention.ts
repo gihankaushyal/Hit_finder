@@ -23,9 +23,13 @@ export function useAgentAttention(agentsOpen: boolean): Bubble {
   open.current = agentsOpen;
 
   useEffect(() => {
-    const running = (agents.data?.agents ?? []).filter((a) => RUNNING.includes(a.state)).map((a) => a.id);
-    if (chief.data && RUNNING.includes(chief.data.state)) running.push(CHIEF_ID);
-    dispatch({ kind: "seed", running });
+    const listed = (agents.data?.agents ?? []).map((a) => ({ id: a.id, state: a.state }));
+    if (chief.data) listed.push({ id: CHIEF_ID, state: chief.data.state });
+    dispatch({
+      kind: "seed",
+      running: listed.filter((a) => RUNNING.includes(a.state)).map((a) => a.id),
+      settled: listed.filter((a) => !RUNNING.includes(a.state)).map((a) => a.id),
+    });
   }, [agents.data, chief.data]);
 
   useEffect(
@@ -35,9 +39,10 @@ export function useAgentAttention(agentsOpen: boolean): Bubble {
         reload: () => undefined, // useResource already refetches on reconnect; the effect above re-seeds
         onAgentState: (ev) => {
           dispatch({ kind: "event", id: ev.id, state: ev.state, open: open.current });
+          // A hidden tab is notified even with the shelf open; the toast is for a visible page with the shelf closed.
+          if (ev.state === "failed" || ev.state === "done" || ev.state === "idle") notifyFinished(ev.name, ev.state);
           if (!isUnseenTransition(ev.state, open.current)) return;
           pushToast(outcomeText(ev.name, ev.state), ev.state === "failed" ? "red" : "green");
-          notifyFinished(ev.name, ev.state);
         },
       }),
     [],
@@ -49,9 +54,9 @@ export function useAgentAttention(agentsOpen: boolean): Bubble {
 
   const waiting = approvals.data?.approvals.length ?? 0;
   const bubble = useMemo(() => deriveBubble(state, waiting, agentsOpen), [state, waiting, agentsOpen]);
-  const unseen = unseenCount(state);
+  const needsYou = unseenCount(state) + waiting; // approvals turn the bubble red, so the tab counts them too
   useEffect(() => {
-    setTabAttention(unseen, bubble.color);
-  }, [unseen, bubble.color]);
+    setTabAttention(needsYou, bubble.color);
+  }, [needsYou, bubble.color]);
   return bubble;
 }
