@@ -10,6 +10,13 @@ import type { AgentEvent, AgentState, ChiefSummary } from "../../../shared/types
 const MESSAGE_MAX = 8000;
 const TAIL_SLACK_PX = 6;
 const TOOL_PREFIX = "mcp__dashboard__";
+const PREVIEW_CHARS = 80;
+
+/** One line of a tool result for its collapsed summary; the full text is one click away. */
+function preview(output: string): string {
+  const first = output.trim().split("\n", 1)[0];
+  return first.length > PREVIEW_CHARS ? `${first.slice(0, PREVIEW_CHARS)}…` : first;
+}
 
 const WORDS: Partial<Record<AgentState, { kind: StatusKind; text: string }>> = {
   running: { kind: "running", text: "Working" },
@@ -34,7 +41,15 @@ function Line({ e }: { e: AgentEvent }) {
         </div>
       );
     case "tool-result":
-      return <p className={`chat__row dim${e.isError ? " alog__err" : ""}`}>{e.output}</p>;
+      // Results are often thousands of characters of raw tool output: collapsed they stay out of the way of the replies; failures start open.
+      return (
+        <details className={`chat__result dim${e.isError ? " alog__err" : ""}`} open={e.isError}>
+          <summary>
+            {e.isError ? "Failed" : "Result"} <span className="mono">{preview(e.output)}</span>
+          </summary>
+          <pre className="mono alog__out">{e.output}</pre>
+        </details>
+      );
     case "approval":
       return e.outcome === "requested" ? null : <p className="chat__row dim">{e.outcome === "allow" ? "You approved it." : e.outcome === "deny" ? "You denied it." : "It was cancelled."}</p>;
     case "error":
@@ -57,10 +72,12 @@ export function ChiefChat() {
   const spoken = useRef(0);
   const s = res.data;
 
+  // The box only exists once the panel has left its loading state, so mounting it counts as a reason to follow the tail too.
+  const ready = panelState(res) === "ready";
   useLayoutEffect(() => {
     const el = box.current;
     if (el && atTail.current) el.scrollTop = el.scrollHeight;
-  }, [log.events.length]);
+  }, [log.events.length, ready]);
 
   // Announce a reply once it is complete (the chief is idle again), never while it is still working.
   useEffect(() => {
