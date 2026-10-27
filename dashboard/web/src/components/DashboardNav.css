@@ -23,8 +23,11 @@
 .nav__agents { gap: 6px; }
 .nav__count {
   display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px;
-  background: var(--warn); color: var(--bg); font-size: 0.72rem; font-weight: 700;
+  color: var(--bg); font-size: 0.72rem; font-weight: 700;
 }
+.nav__count--red { background: var(--fail); }
+.nav__count--yellow { background: var(--warn); }
+.nav__count--green { background: var(--ok); }
 .nav__tabs { padding: 0 var(--s5); }
 .nav__tabs ul { display: flex; gap: var(--s1); margin: 0; padding: 0; list-style: none; overflow-x: auto; }
 .nav__tabs a {

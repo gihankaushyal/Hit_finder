@@ -101,4 +101,46 @@ describe("DashboardNav", () => {
     mount();
     expect(screen.getByRole("button", { name: "Agents" })).toBeInTheDocument();
   });
+
+  it("colours the Agents bubble from the attention prop and keeps the accessible name", async () => {
+    mockApi(routes);
+    mount({ attention: { color: "green", count: 2, label: "Agents, 2 finished" } });
+    const button = await screen.findByRole("button", { name: /^Agents/ });
+    expect(button).toHaveAccessibleName("Agents, 2 finished");
+    const bubble = button.querySelector(".nav__count");
+    expect(bubble).toHaveTextContent("2");
+    expect(bubble).toHaveClass("nav__count--green");
+  });
+
+  it("falls back to the approvals count as a red bubble when no attention prop is given", async () => {
+    mockApi({ ...routes, "GET /api/approvals": { body: { approvals: [{ id: "p1" }] } } });
+    mount();
+    const button = await screen.findByRole("button", { name: "Agents, 1 waiting for approval" });
+    expect(button.querySelector(".nav__count")).toHaveClass("nav__count--red");
+  });
+
+  it("shows no bubble when nothing needs attention", async () => {
+    mockApi(routes);
+    mount({ attention: { color: null, count: 0, label: "Agents" } });
+    const button = await screen.findByRole("button", { name: "Agents" });
+    expect(button.querySelector(".nav__count")).toBeNull();
+  });
+
+  it("offers a bell only while notification permission is undecided", async () => {
+    mockApi(routes);
+    const requestPermission = vi.fn().mockResolvedValue("granted");
+    vi.stubGlobal("Notification", Object.assign(vi.fn(), { permission: "default", requestPermission }));
+    mount();
+    const bell = await screen.findByRole("button", { name: "Enable desktop notifications" });
+    await userEvent.click(bell);
+    expect(requestPermission).toHaveBeenCalled();
+  });
+
+  it("has no bell once permission was decided", async () => {
+    mockApi(routes);
+    vi.stubGlobal("Notification", Object.assign(vi.fn(), { permission: "granted", requestPermission: vi.fn() }));
+    mount();
+    await screen.findByText("CI Passed");
+    expect(screen.queryByRole("button", { name: "Enable desktop notifications" })).toBeNull();
+  });
 });

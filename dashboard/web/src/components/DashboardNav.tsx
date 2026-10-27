@@ -2,7 +2,9 @@ import { forwardRef, useEffect, useLayoutEffect, useRef, useState, type MouseEve
 import { Crosshair, GitBranch, Robot } from "@phosphor-icons/react";
 import { Badge, type BadgeTone } from "./Badge";
 import { CopyButton } from "./CopyButton";
+import { NotifyButton } from "./NotifyButton";
 import { ThemeToggle } from "./ThemeToggle";
+import { EMPTY_ATTENTION, deriveBubble, type Bubble } from "../lib/attention";
 import { ciWord, testWord, type StatusReading } from "../lib/status";
 import { tabHref, useSearch } from "../lib/useQueryState";
 import { AGENTS_REFRESH_MS, CI_REFRESH_MS, REPO_REFRESH_MS, useResource } from "../lib/useResource";
@@ -46,14 +48,17 @@ interface NavProps {
   onTab: (tab: TabId) => void;
   agentsOpen: boolean;
   onToggleAgents: () => void;
+  /** The status bubble; without it the button shows only the pending approvals. */
+  attention?: Bubble;
 }
 
-export const DashboardNav = forwardRef<HTMLButtonElement, NavProps>(function DashboardNav({ tab, onTab, agentsOpen, onToggleAgents }, agentsButton) {
+export const DashboardNav = forwardRef<HTMLButtonElement, NavProps>(function DashboardNav({ tab, onTab, agentsOpen, onToggleAgents, attention }, agentsButton) {
   const repo = useResource<RepoInfo>("repo", "/api/repo", undefined, REPO_REFRESH_MS);
   const ci = useResource<{ runs: CiRun[] }>("ci", "/api/ci", (d) => d.runs.length === 0, CI_REFRESH_MS);
   const tests = useResource<TestRunState>("tests", "/api/tests");
   const approvals = useResource<ApprovalsResponse>("approvals", "/api/approvals", (d) => d.approvals.length === 0, AGENTS_REFRESH_MS);
   const waiting = approvals.data?.approvals.length ?? 0;
+  const bubble = attention ?? deriveBubble(EMPTY_ATTENTION, waiting, agentsOpen);
   const ciReading: StatusReading = ci.error ? { kind: "attention", text: "Unknown" } : ciWord(ci.data?.runs);
   const testReading: StatusReading = tests.error ? { kind: "attention", text: "Unknown" } : testWord(tests.data);
   const search = useSearch();
@@ -111,14 +116,15 @@ export const DashboardNav = forwardRef<HTMLButtonElement, NavProps>(function Das
         <span className="nav__spacer" />
         <button
           ref={agentsButton} type="button" className="btn btn--sm nav__agents" aria-haspopup="dialog" aria-expanded={agentsOpen}
-          aria-controls="agents-drawer" aria-label={waiting > 0 ? `Agents, ${waiting} waiting for approval` : "Agents"} onClick={onToggleAgents}
+          aria-controls="agents-drawer" aria-label={bubble.label} onClick={onToggleAgents}
         >
           <Robot size={BUTTON_ICON_SIZE} aria-hidden="true" />
           <span>Agents</span>
-          {waiting > 0 && (
-            <span className="nav__count" aria-hidden="true">{waiting}</span>
+          {bubble.color && (
+            <span className={`nav__count nav__count--${bubble.color}`} aria-hidden="true">{bubble.count}</span>
           )}
         </button>
+        <NotifyButton />
         <ThemeToggle />
       </div>
       <nav className="nav__tabs" aria-label="Dashboard sections">
