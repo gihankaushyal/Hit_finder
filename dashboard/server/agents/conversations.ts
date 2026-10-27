@@ -4,12 +4,14 @@ import type { AgentEvent, ConversationReadOnly } from "../../shared/types";
 import { readJournalFile } from "./journal";
 
 /** Conversation ids become directory names, so only this shape is accepted from outside. */
-export const CONV_ID = /^c-[a-z0-9-]{1,48}$/;
+const CONV_ID_MAX_LENGTH = 48;
+export const CONV_ID = new RegExp(`^c-[a-z0-9-]{1,${CONV_ID_MAX_LENGTH}}$`);
 export const TITLE_MAX = 60;
 export const TITLE_EDIT_MAX = 120;
 /** The conversation that was live before registries existed keeps this fixed id so an interrupted import can be re-run. */
 export const ACTIVE_LEGACY_ID = "c-migrated-active";
-const RAND_RANGE = 36 ** 4;
+const RAND_DIGITS = 4;
+const RAND_RANGE = 36 ** RAND_DIGITS;
 
 export interface ConvEntry {
   id: string;
@@ -42,7 +44,7 @@ export interface JournalStats {
 }
 
 export const newConvId = (nowMs: number, rand: () => number = Math.random): string =>
-  `c-${nowMs.toString(36)}${Math.floor(rand() * RAND_RANGE).toString(36).padStart(4, "0")}`;
+  `c-${nowMs.toString(36)}${Math.floor(rand() * RAND_RANGE).toString(36).padStart(RAND_DIGITS, "0")}`;
 
 export const blankEntry = (id: string, at: string, seededFrom: string | null = null): ConvEntry => ({
   id, title: null, titleManual: false, createdAt: at, updatedAt: at, turns: 0, costUsd: null, sessionId: null, archived: false, readOnly: null, seededFrom,
@@ -65,11 +67,13 @@ export function statsOf(events: AgentEvent[]): JournalStats {
     if (e.kind === "user" && firstUser === null) firstUser = e.text;
     if (e.kind === "result") {
       turns += 1;
-      if (e.costUsd !== null) costUsd = Math.max(costUsd ?? 0, e.costUsd);
+      if (typeof e.costUsd === "number") costUsd = Math.max(costUsd ?? 0, e.costUsd);
     }
   }
   return { firstUser, turns, costUsd, firstAt: events[0]?.at ?? null, lastAt: events.length > 0 ? events[events.length - 1].at : null };
 }
+
+const READ_ONLY_VALUES: readonly ConversationReadOnly[] = ["expired", "legacy"];
 
 const isEntry = (v: unknown): v is ConvEntry => {
   if (typeof v !== "object" || v === null) return false;
@@ -77,7 +81,10 @@ const isEntry = (v: unknown): v is ConvEntry => {
   return (
     typeof e.id === "string" && typeof e.createdAt === "string" && typeof e.updatedAt === "string" &&
     typeof e.turns === "number" && typeof e.archived === "boolean" && typeof e.titleManual === "boolean" &&
-    (e.title === null || typeof e.title === "string") && (e.sessionId === null || typeof e.sessionId === "string")
+    (e.title === null || typeof e.title === "string") && (e.sessionId === null || typeof e.sessionId === "string") &&
+    (e.costUsd === undefined || e.costUsd === null || typeof e.costUsd === "number") &&
+    (e.readOnly === undefined || e.readOnly === null || READ_ONLY_VALUES.includes(e.readOnly as ConversationReadOnly)) &&
+    (e.seededFrom === undefined || e.seededFrom === null || typeof e.seededFrom === "string")
   );
 };
 
@@ -89,6 +96,7 @@ function parseRegistry(text: string): Registry | null {
     for (const [id, e] of Object.entries(v.convs)) {
       if (CONV_ID.test(id) && isEntry(e) && e.id === id) convs[id] = { ...e, readOnly: e.readOnly ?? null, seededFrom: e.seededFrom ?? null, costUsd: e.costUsd ?? null };
     }
+    if (!CONV_ID.test(v.active) || !(v.active in convs)) return null;
     return { v: 1, active: v.active, convs };
   } catch {
     return null;
@@ -111,11 +119,16 @@ export async function loadRegistry(dir: string): Promise<Registry | null> {
 /** Atomic write; the previous good copy is kept as `index.json.bak` (a corrupt one never replaces it). */
 export async function saveRegistry(dir: string, reg: Registry): Promise<void> {
   const file = path.join(dir, "index.json");
+  let current: string | null = null;
   try {
-    const current = await fs.readFile(file, "utf8");
-    if (parseRegistry(current)) await fs.writeFile(`${file}.bak`, current);
-  } catch {
-    /* first write */
+    current = await fs.readFile(file, "utf8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+  }
+  if (current !== null && parseRegistry(current)) {
+    const bakTmp = `${file}.bak.${process.pid}.tmp`;
+    await fs.writeFile(bakTmp, current);
+    await fs.rename(bakTmp, `${file}.bak`);
   }
   const tmp = `${file}.${process.pid}.tmp`;
   await fs.writeFile(tmp, JSON.stringify(reg, null, 2));

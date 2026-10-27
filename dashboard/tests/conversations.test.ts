@@ -83,6 +83,46 @@ describe("registry file", () => {
     expect(JSON.parse(fs.readFileSync(path.join(dir, "index.json.bak"), "utf8")).convs["c-a"].title).toBe("one");
   });
 
+  it("falls back to the backup when index.json is missing", async () => {
+    await saveRegistry(dir, reg("one"));
+    await saveRegistry(dir, reg("two"));
+    fs.rmSync(path.join(dir, "index.json"));
+    expect((await loadRegistry(dir))?.convs["c-a"].title).toBe("one");
+  });
+
+  it("rejects an index whose active id is unsafe, and uses the backup", async () => {
+    await saveRegistry(dir, reg("one"));
+    await saveRegistry(dir, reg("two"));
+    fs.writeFileSync(path.join(dir, "index.json"), JSON.stringify({ ...reg("bad"), active: "../../x" }));
+    expect((await loadRegistry(dir))?.convs["c-a"].title).toBe("one");
+    fs.rmSync(path.join(dir, "index.json.bak"));
+    expect(await loadRegistry(dir)).toBeNull();
+  });
+
+  it("rejects an index whose active entry was dropped for a bad shape", async () => {
+    await saveRegistry(dir, reg("one"));
+    await saveRegistry(dir, reg("two"));
+    fs.writeFileSync(path.join(dir, "index.json"), JSON.stringify({ v: 1, active: "c-b", convs: { "c-a": reg("x").convs["c-a"], "c-b": { id: "c-b" } } }));
+    expect((await loadRegistry(dir))?.convs["c-a"].title).toBe("one");
+  });
+
+  it("drops entries with a bad costUsd or readOnly", async () => {
+    const good = blankEntry("c-a", "2026-10-20T08:00:00.000Z");
+    fs.writeFileSync(
+      path.join(dir, "index.json"),
+      JSON.stringify({ v: 1, active: "c-a", convs: { "c-a": good, "c-b": { ...good, id: "c-b", costUsd: "1" }, "c-c": { ...good, id: "c-c", readOnly: "nope" } } }),
+    );
+    expect(Object.keys((await loadRegistry(dir))!.convs)).toEqual(["c-a"]);
+  });
+
+  it("does not let an index with a dangling active replace a good backup", async () => {
+    await saveRegistry(dir, reg("one"));
+    await saveRegistry(dir, reg("two"));
+    fs.writeFileSync(path.join(dir, "index.json"), JSON.stringify({ v: 1, active: "c-zz", convs: {} }));
+    await saveRegistry(dir, reg("three"));
+    expect(JSON.parse(fs.readFileSync(path.join(dir, "index.json.bak"), "utf8")).convs["c-a"].title).toBe("one");
+  });
+
   it("drops entries with unsafe ids or the wrong shape", async () => {
     fs.writeFileSync(
       path.join(dir, "index.json"),
