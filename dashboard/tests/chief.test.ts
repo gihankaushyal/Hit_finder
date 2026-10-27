@@ -225,16 +225,15 @@ describe("robustness", () => {
     await expect(early.send("hi")).rejects.toMatchObject({ code: "state" });
   });
 
-  it("new conversation archives the log and starts a fresh one", async () => {
+  it("new conversation parks the old log and starts a fresh one", async () => {
     await chief.send("old topic");
     await waitState("idle");
+    const old = chief.summary().conversationId;
     await chief.reset();
     const fresh = (await chief.events(0, 100)).events;
     expect(fresh.some((e) => e.kind === "user")).toBe(false);
     expect(fresh[0]).toMatchObject({ kind: "state", detail: "New conversation" });
-    const archived = fs.readdirSync(path.join(cfg.stateDir, "chief")).filter((n) => /^journal-.*\.jsonl$/.test(n));
-    expect(archived).toHaveLength(1);
-    expect(fs.readFileSync(path.join(cfg.stateDir, "chief", archived[0]), "utf8")).toContain("old topic");
+    expect(fs.readFileSync(path.join(cfg.stateDir, "chief", "conv", old, "journal.jsonl"), "utf8")).toContain("old topic");
   });
 
   it("a session that finishes after a reset cannot bring the old conversation back", async () => {
@@ -278,5 +277,60 @@ describe("notifications", () => {
 describe("AgentError reuse", () => {
   it("send rejects with the shared error type", async () => {
     await expect(chief.send("")).rejects.toBeInstanceOf(AgentError);
+  });
+});
+
+describe("conversations", () => {
+  it("names a conversation after its first message", async () => {
+    await chief.send("  plan   the\nweek  ");
+    await waitState("idle");
+    expect(chief.summary()).toMatchObject({ title: "plan the week", readOnly: null });
+    expect(chief.summary().conversationId).toMatch(/^c-/);
+  });
+
+  it("keeps a parked conversation on disk with its own journal and session id", async () => {
+    await chief.send("topic one");
+    await waitState("idle");
+    const first = chief.summary();
+    expect(first.sessionId).toBeTruthy();
+    await chief.reset();
+    const second = chief.summary();
+    expect(second).toMatchObject({ turns: 0, sessionId: null, title: null });
+    expect(second.conversationId).not.toBe(first.conversationId);
+    const index = JSON.parse(fs.readFileSync(path.join(cfg.stateDir, "chief", "index.json"), "utf8"));
+    expect(index.active).toBe(second.conversationId);
+    expect(index.convs[first.conversationId]).toMatchObject({ title: "topic one", turns: 1, sessionId: first.sessionId });
+    expect(fs.readFileSync(path.join(cfg.stateDir, "chief", "conv", first.conversationId, "journal.jsonl"), "utf8")).toContain("topic one");
+  });
+
+  it("does not keep an empty conversation around", async () => {
+    const before = chief.summary().conversationId;
+    await chief.reset();
+    await chief.reset();
+    expect(chief.summary().conversationId).not.toBe(before);
+    expect(fs.readdirSync(path.join(cfg.stateDir, "chief", "conv"))).toHaveLength(1);
+  });
+
+  it("comes back with the same active conversation after a restart", async () => {
+    await chief.send("before the restart");
+    await waitState("idle");
+    const saved = chief.summary();
+    const again = build();
+    await again.init();
+    expect(again.summary()).toMatchObject({ conversationId: saved.conversationId, title: "before the restart", turns: 1, sessionId: saved.sessionId, state: "idle" });
+    expect((await again.events(0, 100)).events.some((e) => e.kind === "user" && e.text === "before the restart")).toBe(true);
+  });
+
+  it("starts from a fresh conversation if the active pointer is lost", async () => {
+    await chief.send("keep me");
+    await waitState("idle");
+    const saved = chief.summary();
+    const file = path.join(cfg.stateDir, "chief", "index.json");
+    const index = JSON.parse(fs.readFileSync(file, "utf8"));
+    index.active = "c-gone";
+    fs.writeFileSync(file, JSON.stringify(index));
+    const again = build();
+    await again.init();
+    expect(again.summary().conversationId).toBe(saved.conversationId);
   });
 });

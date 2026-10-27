@@ -1,11 +1,12 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { AgentEvent, AgentEventsResponse, AgentState, ChiefSummary } from "../../shared/types";
+import type { AgentEventsResponse, AgentState, ChiefSummary } from "../../shared/types";
 import type { Config } from "../config";
 import type { EventBus } from "../events";
 import type { Approvals } from "./approvals";
 import type { AgentDriver, Session, SessionStart, ToolDef } from "./driver";
+import { autoTitle, blankEntry, convDir, journalPath, loadRegistry, newConvId, rebuildRegistry, saveRegistry, type ConvEntry, type Registry } from "./conversations";
 import { openJournal, type Journal } from "./journal";
 import { chiefOptions } from "./policy";
 import { chiefPrompt } from "./rolePrompts";
@@ -18,6 +19,7 @@ const NOTIFY_MS = 150;
 const STOP_WAIT_MS = 3000;
 const INTERRUPT_WAIT_MS = 2000;
 const ACTIVE: AgentState[] = ["running", "waiting-approval", "idle"];
+const STARTING_MESSAGE = "The chief of staff is still starting. Try again in a moment.";
 
 interface Meta {
   state: AgentState;
@@ -32,7 +34,7 @@ export interface Chief {
   summary(): ChiefSummary;
   send(text: string): Promise<void>;
   stop(): Promise<void>;
-  /** Forget the conversation; the next message starts a new one. The log is kept. */
+  /** Park the conversation and start a new one. The parked one stays on disk, with its session id. */
   reset(): Promise<void>;
   events(after: number, limit: number): Promise<AgentEventsResponse>;
 }
@@ -60,6 +62,8 @@ export function createChief(deps: ChiefDeps): Chief {
   const notifyMs = deps.notifyMs ?? NOTIFY_MS;
   const interruptWaitMs = deps.interruptWaitMs ?? INTERRUPT_WAIT_MS;
   const meta: Meta = { state: "idle", turns: 0, costUsd: null, sessionId: null, error: null };
+  // `meta` is the live state of the active conversation; `reg` holds every conversation, the active one included.
+  let reg: Registry = { v: 1, active: "", convs: {} };
   let journal: Journal | null = null;
   let session: Session | null = null;
   let loop: Promise<void> | null = null;
@@ -76,14 +80,28 @@ export function createChief(deps: ChiefDeps): Chief {
       bus.emit({ type: "invalidate", resource: "chat" });
     }, notifyMs);
   };
+  const peek = (): ConvEntry | undefined => reg.convs[reg.active];
+  const active = (): ConvEntry => {
+    const e = peek();
+    if (!e) throw new AgentError("state", STARTING_MESSAGE);
+    return e;
+  };
+  /** Copies the live counters into the active conversation's entry. */
+  const syncEntry = (bump: boolean) => {
+    const e = peek();
+    if (!e) return;
+    e.turns = meta.turns;
+    e.costUsd = meta.costUsd;
+    e.sessionId = meta.sessionId;
+    if (bump) e.updatedAt = new Date().toISOString();
+  };
   const persist = (): Promise<void> => {
     writes = writes.then(async () => {
       try {
-        const tmp = path.join(dir, `meta.json.${process.pid}.tmp`);
-        await fs.writeFile(tmp, JSON.stringify(meta, null, 2));
-        await fs.rename(tmp, path.join(dir, "meta.json"));
+        syncEntry(true);
+        await saveRegistry(dir, reg);
       } catch (err) {
-        console.error("chief meta write failed", (err as NodeJS.ErrnoException).code ?? "error");
+        console.error("chief index write failed", (err as NodeJS.ErrnoException).code ?? "error");
       }
     });
     return writes;
@@ -94,7 +112,7 @@ export function createChief(deps: ChiefDeps): Chief {
     notify();
   };
   const j = (): Journal => {
-    if (!journal) throw new AgentError("state", "The chief of staff is still starting. Try again in a moment.");
+    if (!journal) throw new AgentError("state", STARTING_MESSAGE);
     return journal;
   };
   const setState = async (state: AgentState, error: string | null = null, detail?: string) => {
@@ -109,6 +127,35 @@ export function createChief(deps: ChiefDeps): Chief {
     const p = lock.then(f, f);
     lock = p.catch(() => undefined);
     return p;
+  };
+
+  /** Make `id` the active conversation: load its counters into `meta` and open its journal. The caller holds `serial`. */
+  async function activate(id: string): Promise<void> {
+    reg.active = id;
+    const e = active();
+    meta.turns = e.turns;
+    meta.costUsd = e.costUsd;
+    meta.sessionId = e.sessionId;
+    meta.state = "idle";
+    meta.error = null;
+    journal = await openJournal(journalPath(dir, id));
+  }
+
+  /** Stop the session and file the active conversation away; an empty untitled one is dropped instead. The caller holds `serial`. */
+  async function park(): Promise<void> {
+    await stopNow();
+    await writes;
+    syncEntry(false);
+    const e = peek();
+    if (e && e.turns === 0 && e.sessionId === null && e.title === null) {
+      delete reg.convs[e.id];
+      await fs.rm(convDir(dir, e.id), { recursive: true, force: true });
+    }
+  }
+
+  const activeEvents = async (after: number, limit: number): Promise<AgentEventsResponse> => {
+    if (!journal) return { events: [], lastSeq: 0 };
+    return { events: await journal.read(after, limit), lastSeq: journal.lastSeq() };
   };
 
   async function startSession(prompt: string): Promise<void> {
@@ -203,21 +250,24 @@ export function createChief(deps: ChiefDeps): Chief {
   return {
     async init() {
       await fs.mkdir(dir, { recursive: true });
-      journal = await openJournal(path.join(dir, "journal.jsonl"));
-      try {
-        const saved = JSON.parse(await fs.readFile(path.join(dir, "meta.json"), "utf8")) as Partial<Meta>;
-        meta.turns = typeof saved.turns === "number" ? saved.turns : 0;
-        meta.costUsd = typeof saved.costUsd === "number" ? saved.costUsd : null;
-        meta.sessionId = typeof saved.sessionId === "string" ? saved.sessionId : null;
-      } catch {
-        /* first start */
+      reg = (await loadRegistry(dir)) ?? (await rebuildRegistry(dir, new Date().toISOString()));
+      if (!peek()) {
+        // The pointer to the active conversation was lost: take the newest one that can still be continued.
+        const live = Object.values(reg.convs).filter((c) => !c.archived && !c.readOnly).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
+        const id = live?.id ?? newConvId(Date.now());
+        if (!live) reg.convs[id] = blankEntry(id, new Date().toISOString());
+        reg.active = id;
       }
       // No session survives a restart; the conversation is resumed from its id on the next message.
-      meta.state = "idle";
-      meta.error = null;
+      await activate(reg.active);
+      await saveRegistry(dir, reg);
     },
 
-    summary: () => ({ state: meta.state, model: cfg.chiefModel, turns: meta.turns, costUsd: meta.costUsd, sessionId: meta.sessionId, error: meta.error, pendingApprovals: approvals.countFor(CHIEF_ID), lastSeq: journal?.lastSeq() ?? 0 }),
+    summary: () => ({
+      state: meta.state, model: cfg.chiefModel, turns: meta.turns, costUsd: meta.costUsd, sessionId: meta.sessionId, error: meta.error,
+      pendingApprovals: approvals.countFor(CHIEF_ID), lastSeq: journal?.lastSeq() ?? 0,
+      conversationId: reg.active, title: peek()?.title ?? null, readOnly: peek()?.readOnly ?? null,
+    }),
 
     send(text) {
       if (!text.trim()) return Promise.reject(new AgentError("invalid", "The message cannot be empty."));
@@ -225,6 +275,11 @@ export function createChief(deps: ChiefDeps): Chief {
       return serial(async () => {
         const jr = j();
         await jr.append({ kind: "user", text });
+        const conv = active();
+        if (!conv.titleManual && conv.title === null) {
+          conv.title = autoTitle(text);
+          touch();
+        }
         const live = session;
         if (live && ACTIVE.includes(meta.state)) {
           if (meta.state === "idle") await setState("running");
@@ -242,21 +297,15 @@ export function createChief(deps: ChiefDeps): Chief {
 
     reset: () =>
       serial(async () => {
-        await stopNow();
-        touch({ sessionId: null, turns: 0, costUsd: null, error: null, state: "idle" });
-        // Keep the old log on disk, but start a fresh one so the panel shows only the new conversation.
-        const file = path.join(dir, "journal.jsonl");
-        const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-        await fs.rename(file, path.join(dir, `journal-${stamp}.jsonl`)).catch(() => undefined);
-        journal = await openJournal(file);
-        await journal.append({ kind: "state", state: "idle", detail: "New conversation" });
+        await park();
+        const id = newConvId(Date.now());
+        reg.convs[id] = blankEntry(id, new Date().toISOString());
+        await activate(id);
+        await j().append({ kind: "state", state: "idle", detail: "New conversation" });
+        touch();
         await writes;
       }),
 
-    async events(after, limit) {
-      if (!journal) return { events: [], lastSeq: 0 };
-      const events: AgentEvent[] = await journal.read(after, limit);
-      return { events, lastSeq: journal.lastSeq() };
-    },
+    events: activeEvents,
   };
 }
