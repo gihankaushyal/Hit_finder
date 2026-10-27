@@ -89,7 +89,9 @@ export function createChief(deps: ChiefDeps): Chief {
       bus.emit({ type: "invalidate", resource: "chat" });
     }, notifyMs);
   };
-  const peek = (): ConvEntry | undefined => reg.convs[reg.active];
+  /** Own-property lookup: an id such as "constructor" must not match a member of Object.prototype. */
+  const find = (id: string): ConvEntry | undefined => (Object.hasOwn(reg.convs, id) ? reg.convs[id] : undefined);
+  const peek = (): ConvEntry | undefined => find(reg.active);
   const active = (): ConvEntry => {
     const e = peek();
     if (!e) throw new AgentError("state", STARTING_MESSAGE);
@@ -104,10 +106,11 @@ export function createChief(deps: ChiefDeps): Chief {
     e.sessionId = meta.sessionId;
     if (bump) e.updatedAt = new Date().toISOString();
   };
-  const persist = (): Promise<void> => {
+  /** `bump` marks the active conversation as just used; renaming or archiving another one must not. */
+  const persist = (bump = true): Promise<void> => {
     writes = writes.then(async () => {
       try {
-        syncEntry(true);
+        syncEntry(bump);
         await saveRegistry(dir, reg);
       } catch (err) {
         console.error("chief index write failed", (err as NodeJS.ErrnoException).code ?? "error");
@@ -145,6 +148,7 @@ export function createChief(deps: ChiefDeps): Chief {
     meta.turns = e.turns;
     meta.costUsd = e.costUsd;
     meta.sessionId = e.sessionId;
+    // No agent-state event here: the bubble re-seeds from /api/chief, and an "idle" event would raise a "finished" toast.
     meta.state = "idle";
     meta.error = null;
     journal = await openJournal(journalPath(dir, id));
@@ -329,7 +333,7 @@ export function createChief(deps: ChiefDeps): Chief {
 
     resume: (id) =>
       serial(async () => {
-        const target = reg.convs[id];
+        const target = find(id);
         if (!target) throw new AgentError("not-found", NOT_FOUND_MESSAGE);
         if (id === reg.active) return;
         if (target.readOnly) throw new AgentError("state", READONLY_MESSAGE);
@@ -342,7 +346,7 @@ export function createChief(deps: ChiefDeps): Chief {
 
     patch: (id, change) =>
       serial(async () => {
-        const target = reg.convs[id];
+        const target = find(id);
         if (!target) throw new AgentError("not-found", NOT_FOUND_MESSAGE);
         const title = change.title === undefined ? undefined : change.title.trim();
         if (title !== undefined && (title.length === 0 || title.length > TITLE_EDIT_MAX)) {
@@ -354,13 +358,15 @@ export function createChief(deps: ChiefDeps): Chief {
           target.titleManual = true;
         }
         if (change.archived !== undefined) target.archived = change.archived;
-        touch();
+        // Housekeeping, not activity: it must not reorder the list by bumping `updatedAt`.
+        void persist(false);
+        notify();
         await writes;
       }),
 
     async eventsFor(id, after, limit) {
       if (id === reg.active) return activeEvents(after, limit);
-      if (!reg.convs[id]) throw new AgentError("not-found", NOT_FOUND_MESSAGE);
+      if (!find(id)) throw new AgentError("not-found", NOT_FOUND_MESSAGE);
       const all = await readJournalFile(journalPath(dir, id));
       return { events: all.filter((e) => e.seq > after).slice(0, Math.max(0, limit)), lastSeq: all.length > 0 ? all[all.length - 1].seq : 0 };
     },

@@ -98,7 +98,7 @@ function parseRegistry(text: string): Registry | null {
     }
     if (Object.keys(convs).length === 0) return null;
     // An unsafe or dangling pointer must not cost the user their conversations: keep them, with no active one.
-    const active = CONV_ID.test(v.active) && v.active in convs ? v.active : "";
+    const active = CONV_ID.test(v.active) && Object.hasOwn(convs, v.active) ? v.active : "";
     return { v: 1, active, convs };
   } catch {
     return null;

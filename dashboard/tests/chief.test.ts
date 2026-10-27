@@ -441,6 +441,26 @@ describe("conversations", () => {
     expect(await chief.eventsFor(chief.summary().conversationId, 0, 100)).toEqual(await chief.events(0, 100));
   });
 
+  it("renaming or archiving does not count as activity", async () => {
+    await chief.send("alpha");
+    await waitState("idle");
+    const alpha = chief.summary().conversationId;
+    await chief.reset();
+    const before = chief.conversations().map((c) => [c.id, c.updatedAt]);
+    await new Promise((r) => setTimeout(r, 15));
+    await chief.patch(alpha, { title: "Renamed" });
+    await chief.patch(alpha, { archived: true });
+    expect(chief.conversations().map((c) => [c.id, c.updatedAt])).toEqual(before);
+  });
+
+  it("never matches an id against Object.prototype members", async () => {
+    for (const id of ["constructor", "toString", "__proto__"]) {
+      await expect(chief.resume(id)).rejects.toMatchObject({ code: "not-found" });
+      await expect(chief.patch(id, { title: "x" })).rejects.toMatchObject({ code: "not-found" });
+      await expect(chief.eventsFor(id, 0, 10)).rejects.toMatchObject({ code: "not-found" });
+    }
+  });
+
   it("answers an unknown conversation with not-found", async () => {
     await expect(chief.resume("c-nope")).rejects.toMatchObject({ code: "not-found" });
     await expect(chief.patch("c-nope", { title: "x" })).rejects.toMatchObject({ code: "not-found" });
