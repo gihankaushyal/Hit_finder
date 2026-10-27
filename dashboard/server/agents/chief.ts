@@ -98,8 +98,11 @@ export function createChief(deps: ChiefDeps): Chief {
     return journal;
   };
   const setState = async (state: AgentState, error: string | null = null, detail?: string) => {
-    if (meta.state === state && meta.error === error && !detail) return;
+    const changed = meta.state !== state || meta.error !== error;
+    if (!changed && !detail) return;
     touch({ state, error });
+    // A `detail` entry is journalled even when the state is unchanged; the event is only for real changes.
+    if (changed) bus.emit({ type: "agent-state", id: CHIEF_ID, name: CHIEF_NAME, state, ...(error ? { error } : {}) });
     await j().append({ kind: "state", state, ...(detail ? { detail } : {}) });
   };
   const serial = <T>(f: () => Promise<T>): Promise<T> => {

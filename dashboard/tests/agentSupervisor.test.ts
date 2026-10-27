@@ -104,6 +104,10 @@ describe("spawn", () => {
     await expect(sup.spawn({ name: "good-name", task: "t", issue: -1 })).rejects.toMatchObject({ code: "invalid" });
   });
 
+  it("reserves the chief of staff's id so a worker cannot share it", async () => {
+    await expect(sup.spawn({ name: "chief", task: "t" })).rejects.toMatchObject({ code: "invalid" });
+  });
+
   it("refuses a second agent with the same name", async () => {
     await sup.spawn({ name: "same-name", task: "t" });
     await expect(sup.spawn({ name: "same-name", task: "t" })).rejects.toMatchObject({ code: "exists" });
