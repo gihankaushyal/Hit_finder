@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { AgentEventsResponse, AgentState, ChiefSummary, ConversationInfo } from "../../shared/types";
+import type { AgentEvent, AgentEventsResponse, AgentState, ChiefSummary, ConversationInfo } from "../../shared/types";
 import type { Config } from "../config";
 import type { EventBus } from "../events";
 import type { Approvals } from "./approvals";
@@ -81,6 +81,8 @@ export function createChief(deps: ChiefDeps): Chief {
   let timer: NodeJS.Timeout | null = null;
   let writes: Promise<void> = Promise.resolve();
   let lock: Promise<unknown> = Promise.resolve();
+  /** The last parked journal read, reused while the file is unchanged (a panel polls it). */
+  let parked: { id: string; key: string; all: AgentEvent[] } | null = null;
 
   const notify = () => {
     if (timer) return;
@@ -141,31 +143,52 @@ export function createChief(deps: ChiefDeps): Chief {
     return p;
   };
 
-  /** Make `id` the active conversation: load its counters into `meta` and open its journal. The caller holds `serial`. */
+  /**
+   * Make `id` the active conversation: open its journal, then in one step point the registry, the counters and the
+   * journal at it, so a reader never sees a half-switched chief. If the journal cannot be opened nothing is half-done:
+   * there is no active conversation until the next reset or resume. The caller holds `serial`.
+   */
   async function activate(id: string): Promise<void> {
+    const e = find(id);
+    if (!e) throw new AgentError("not-found", NOT_FOUND_MESSAGE);
+    let opened: Journal;
+    try {
+      opened = await openJournal(journalPath(dir, id));
+    } catch (err) {
+      journal = null;
+      reg.active = "";
+      throw err;
+    }
     reg.active = id;
-    const e = active();
     meta.turns = e.turns;
     meta.costUsd = e.costUsd;
     meta.sessionId = e.sessionId;
     // No agent-state event here: the bubble re-seeds from /api/chief, and an "idle" event would raise a "finished" toast.
     meta.state = "idle";
     meta.error = null;
-    journal = await openJournal(journalPath(dir, id));
+    journal = opened;
   }
 
-  /** Stop the session and file the active conversation away; an empty untitled one is dropped instead. The caller holds `serial`. */
-  async function park(): Promise<void> {
+  /**
+   * Stop the session and file the active conversation away. An empty untitled one is dropped from the registry and its
+   * id returned, to be removed from disk with `discard` once the next conversation is active (`active` keeps pointing
+   * at it until then, so readers see one consistent conversation; a crash in between is repaired by `init`).
+   * The caller holds `serial`.
+   */
+  async function park(): Promise<string | null> {
     await stopNow();
     await writes;
     syncEntry(false);
     const e = peek();
     if (e && e.turns === 0 && e.sessionId === null && e.title === null) {
       delete reg.convs[e.id];
-      reg.active = ""; // a persist in this window must not write a pointer to the deleted id
-      await fs.rm(convDir(dir, e.id), { recursive: true, force: true });
+      return e.id;
     }
+    return null;
   }
+  const discard = async (id: string | null): Promise<void> => {
+    if (id) await fs.rm(convDir(dir, id), { recursive: true, force: true });
+  };
 
   const activeEvents = async (after: number, limit: number): Promise<AgentEventsResponse> => {
     if (!journal) return { events: [], lastSeq: 0 };
@@ -222,7 +245,7 @@ export function createChief(deps: ChiefDeps): Chief {
           if (item.body.kind === "result") {
             touch({ turns: meta.turns + 1, costUsd: item.body.costUsd === null ? meta.costUsd : Math.max(meta.costUsd ?? 0, item.body.costUsd) });
             if (!stopping) await setState("idle");
-          } else touch();
+          } else notify(); // a streamed message changes nothing that is saved
         }
         if (!stopping && current()) {
           session = null;
@@ -266,8 +289,8 @@ export function createChief(deps: ChiefDeps): Chief {
     async init() {
       await fs.mkdir(dir, { recursive: true });
       reg = (await loadRegistry(dir)) ?? (await rebuildRegistry(dir, new Date().toISOString()));
-      if (!peek()) {
-        // The pointer to the active conversation was lost: take the newest one that can still be continued.
+      if (!peek() || peek()?.readOnly) {
+        // The pointer to the active conversation was lost, or names one that cannot be continued: take the newest one that can still be continued.
         const live = Object.values(reg.convs).filter((c) => !c.archived && !c.readOnly).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
         const id = live?.id ?? newConvId(Date.now());
         if (!live) reg.convs[id] = blankEntry(id, new Date().toISOString());
@@ -289,12 +312,11 @@ export function createChief(deps: ChiefDeps): Chief {
       if (text.length > MESSAGE_MAX_CHARS) return Promise.reject(new AgentError("invalid", `Messages are limited to ${MESSAGE_MAX_CHARS} characters.`));
       return serial(async () => {
         const jr = j();
-        await jr.append({ kind: "user", text });
         const conv = active();
-        if (!conv.titleManual && conv.title === null) {
-          conv.title = autoTitle(text);
-          touch();
-        }
+        if (conv.readOnly) throw new AgentError("state", READONLY_MESSAGE);
+        await jr.append({ kind: "user", text });
+        if (!conv.titleManual && conv.title === null) conv.title = autoTitle(text);
+        touch(); // a message is activity: it bumps updatedAt
         const live = session;
         if (live && ACTIVE.includes(meta.state)) {
           if (meta.state === "idle") await setState("running");
@@ -312,11 +334,15 @@ export function createChief(deps: ChiefDeps): Chief {
 
     reset: () =>
       serial(async () => {
-        await park();
-        const id = newConvId(Date.now());
-        reg.convs[id] = blankEntry(id, new Date().toISOString());
-        await activate(id);
-        await j().append({ kind: "state", state: "idle", detail: "New conversation" });
+        const dropped = await park();
+        try {
+          const id = newConvId(Date.now());
+          reg.convs[id] = blankEntry(id, new Date().toISOString());
+          await activate(id);
+          await j().append({ kind: "state", state: "idle", detail: "New conversation" });
+        } finally {
+          await discard(dropped);
+        }
         touch();
         await writes;
       }),
@@ -337,9 +363,13 @@ export function createChief(deps: ChiefDeps): Chief {
         if (!target) throw new AgentError("not-found", NOT_FOUND_MESSAGE);
         if (id === reg.active) return;
         if (target.readOnly) throw new AgentError("state", READONLY_MESSAGE);
-        await park();
-        target.archived = false;
-        await activate(id);
+        const dropped = await park();
+        try {
+          await activate(id);
+          target.archived = false; // continuing an archived conversation brings it back; only once it is really active
+        } finally {
+          await discard(dropped);
+        }
         touch();
         await writes;
       }),
@@ -367,7 +397,11 @@ export function createChief(deps: ChiefDeps): Chief {
     async eventsFor(id, after, limit) {
       if (id === reg.active) return activeEvents(after, limit);
       if (!find(id)) throw new AgentError("not-found", NOT_FOUND_MESSAGE);
-      const all = await readJournalFile(journalPath(dir, id));
+      const file = journalPath(dir, id);
+      const st = await fs.stat(file).catch(() => null);
+      const key = st ? `${st.mtimeMs}:${st.size}` : "";
+      if (parked?.id !== id || parked.key !== key) parked = { id, key, all: await readJournalFile(file) };
+      const all = parked.all;
       return { events: all.filter((e) => e.seq > after).slice(0, Math.max(0, limit)), lastSeq: all.length > 0 ? all[all.length - 1].seq : 0 };
     },
 

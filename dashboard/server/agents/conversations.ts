@@ -75,17 +75,22 @@ export function statsOf(events: AgentEvent[]): JournalStats {
 
 const READ_ONLY_VALUES: readonly ConversationReadOnly[] = ["expired", "legacy"];
 
-const isEntry = (v: unknown): v is ConvEntry => {
-  if (typeof v !== "object" || v === null) return false;
+/**
+ * An entry from disk, with odd field values coerced instead of the entry dropped: a conversation lost from the
+ * index is lost for good, while an unknown `readOnly` (a newer build's) is safely treated as "legacy".
+ * Only an entry with no usable structure (id and dates) is refused.
+ */
+const toEntry = (id: string, v: unknown): ConvEntry | null => {
+  if (typeof v !== "object" || v === null) return null;
   const e = v as Record<string, unknown>;
-  return (
-    typeof e.id === "string" && typeof e.createdAt === "string" && typeof e.updatedAt === "string" &&
-    typeof e.turns === "number" && typeof e.archived === "boolean" && typeof e.titleManual === "boolean" &&
-    (e.title === null || typeof e.title === "string") && (e.sessionId === null || typeof e.sessionId === "string") &&
-    (e.costUsd === undefined || e.costUsd === null || typeof e.costUsd === "number") &&
-    (e.readOnly === undefined || e.readOnly === null || READ_ONLY_VALUES.includes(e.readOnly as ConversationReadOnly)) &&
-    (e.seededFrom === undefined || e.seededFrom === null || typeof e.seededFrom === "string")
-  );
+  if (e.id !== id || typeof e.createdAt !== "string" || typeof e.updatedAt !== "string") return null;
+  const text = (x: unknown): string | null => (typeof x === "string" ? x : null);
+  const count = (x: unknown): number | null => (typeof x === "number" && Number.isFinite(x) ? x : null);
+  const readOnly = e.readOnly == null ? null : READ_ONLY_VALUES.includes(e.readOnly as ConversationReadOnly) ? (e.readOnly as ConversationReadOnly) : "legacy";
+  return {
+    id, title: text(e.title), titleManual: e.titleManual === true, createdAt: e.createdAt, updatedAt: e.updatedAt, turns: count(e.turns) ?? 0,
+    costUsd: count(e.costUsd), sessionId: text(e.sessionId), archived: e.archived === true, readOnly, seededFrom: text(e.seededFrom),
+  };
 };
 
 function parseRegistry(text: string): Registry | null {
@@ -94,7 +99,8 @@ function parseRegistry(text: string): Registry | null {
     if (!v || v.v !== 1 || typeof v.active !== "string" || typeof v.convs !== "object" || v.convs === null) return null;
     const convs: Record<string, ConvEntry> = {};
     for (const [id, e] of Object.entries(v.convs)) {
-      if (CONV_ID.test(id) && isEntry(e) && e.id === id) convs[id] = { ...e, readOnly: e.readOnly ?? null, seededFrom: e.seededFrom ?? null, costUsd: e.costUsd ?? null };
+      const entry = CONV_ID.test(id) ? toEntry(id, e) : null;
+      if (entry) convs[id] = entry;
     }
     if (Object.keys(convs).length === 0) return null;
     // An unsafe or dangling pointer must not cost the user their conversations: keep them, with no active one.

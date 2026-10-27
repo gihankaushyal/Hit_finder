@@ -111,13 +111,16 @@ describe("registry file", () => {
     expect(await loadRegistry(dir)).toBeNull();
   });
 
-  it("drops entries with a bad costUsd or readOnly", async () => {
+  it("keeps an entry with odd field values, coerced to safe ones", async () => {
     const good = blankEntry("c-a", "2026-10-20T08:00:00.000Z");
     fs.writeFileSync(
       path.join(dir, "index.json"),
-      JSON.stringify({ v: 1, active: "c-a", convs: { "c-a": good, "c-b": { ...good, id: "c-b", costUsd: "1" }, "c-c": { ...good, id: "c-c", readOnly: "nope" } } }),
+      JSON.stringify({ v: 1, active: "c-a", convs: { "c-a": good, "c-b": { ...good, id: "c-b", costUsd: "1", sessionId: "s-b" }, "c-c": { ...good, id: "c-c", readOnly: "from-a-newer-build" } } }),
     );
-    expect(Object.keys((await loadRegistry(dir))!.convs)).toEqual(["c-a"]);
+    const r = (await loadRegistry(dir))!;
+    expect(Object.keys(r.convs)).toEqual(["c-a", "c-b", "c-c"]);
+    expect(r.convs["c-b"]).toMatchObject({ costUsd: null, sessionId: "s-b" });
+    expect(r.convs["c-c"].readOnly).toBe("legacy");
   });
 
   it("does not let an index with a dangling active replace a good backup", async () => {

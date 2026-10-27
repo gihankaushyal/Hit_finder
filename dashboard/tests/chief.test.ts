@@ -476,4 +476,42 @@ describe("conversations", () => {
     await again.init();
     await expect(again.resume("c-old")).rejects.toMatchObject({ code: "state" });
   });
+
+  it("does not start on a read-only conversation that the index names as active", async () => {
+    const file = path.join(cfg.stateDir, "chief", "index.json");
+    const index = JSON.parse(fs.readFileSync(file, "utf8"));
+    index.convs["c-old"] = { id: "c-old", title: "old", titleManual: false, createdAt: "2026-10-01T00:00:00.000Z", updatedAt: "2026-10-01T00:00:00.000Z", turns: 1, costUsd: null, sessionId: "s", archived: false, readOnly: "expired", seededFrom: null };
+    index.active = "c-old";
+    fs.writeFileSync(file, JSON.stringify(index));
+    const again = build();
+    await again.init();
+    expect(again.summary().conversationId).not.toBe("c-old");
+    expect(again.summary().readOnly).toBeNull();
+    expect(again.conversations().find((c) => c.id === "c-old")).toMatchObject({ readOnly: "expired", active: false });
+  });
+
+  it("leaves no half-switched chief when the next journal cannot be opened", async () => {
+    await chief.send("alpha");
+    await waitState("idle");
+    const alpha = chief.summary().conversationId;
+    await chief.reset();
+    // A plain file where alpha's folder should be makes opening its journal fail.
+    fs.rmSync(path.join(cfg.stateDir, "chief", "conv", alpha), { recursive: true });
+    fs.writeFileSync(path.join(cfg.stateDir, "chief", "conv", alpha), "x");
+    await expect(chief.resume(alpha)).rejects.toThrow();
+    expect(chief.summary().conversationId).toBe("");
+    await expect(chief.send("lost?")).rejects.toMatchObject({ code: "state" });
+    await chief.reset(); // a new conversation recovers
+    expect(chief.summary().conversationId).not.toBe("");
+  });
+
+  it("re-reads a parked journal only when its file changed", async () => {
+    await chief.send("alpha");
+    await waitState("idle");
+    const alpha = chief.summary().conversationId;
+    await chief.reset();
+    const first = await chief.eventsFor(alpha, 0, 100);
+    expect(await chief.eventsFor(alpha, 0, 100)).toEqual(first);
+    expect((await chief.eventsFor(alpha, first.lastSeq, 100)).events).toEqual([]);
+  });
 });
