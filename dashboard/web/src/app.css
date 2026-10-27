@@ -209,6 +209,9 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .chat { max-height: 26em; min-height: 8em; }
 .chat__row { margin: 0 0 var(--s2); overflow-wrap: anywhere; white-space: pre-wrap; }
 .chat__row--user { border-left: 2px solid var(--rule-strong); padding-left: var(--s2); }
+.chat__result { margin: 0 0 var(--s2); }
+.chat__result .alog__out { max-height: none; overflow: visible; } /* the chat log already scrolls; no scroll box inside it */
+.chat__result summary { cursor: pointer; overflow-wrap: anywhere; }
 .chat__tool { margin: 0 0 var(--s2); }
 .chat__chip { display: inline-block; padding: 0 var(--s2); border: 1px solid var(--rule); border-radius: 999px; background: var(--surface-2); font-size: 0.8rem; }
 

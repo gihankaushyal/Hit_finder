@@ -635,6 +635,31 @@ test.describe("chief of staff", () => {
     await page.request.post(`${dash.baseUrl}/api/agents/chat-made/stop`, { data: {} });
   });
 
+  test("a long conversation opens at the final reply and keeps tool results collapsed", async ({ page }) => {
+    const dash = dashboard();
+    const bulk = Array.from({ length: 80 }, (_, i) => `row ${i} of raw tool output`).join("\n");
+    const events: unknown[] = [{ seq: 1, kind: "user", text: "look into it" }];
+    for (let i = 0; i < 12; i++) {
+      events.push({ seq: 2 + i * 2, kind: "tool-use", tool: "Grep", input: {} });
+      events.push({ seq: 3 + i * 2, kind: "tool-result", output: i === 5 ? `FAILED ${bulk}` : `match ${i}\n${bulk}`, isError: i === 5 });
+    }
+    events.push({ seq: 100, kind: "text", text: "FINAL ANSWER at the very end." });
+    await page.route("**/api/chief/events*", (r) => {
+      const after = Number(new URL(r.request().url()).searchParams.get("after") ?? 0);
+      return r.fulfill({ json: { events: events.filter((ev) => (ev as { seq: number }).seq > after), lastSeq: 100 } });
+    });
+    await open(page, dash);
+    await openDrawer(page);
+    const log = chief(page).getByRole("log", { name: "Conversation with the chief of staff" });
+    await expect(log.getByText("FINAL ANSWER at the very end.")).toBeInViewport();
+    expect(await log.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight)).toBeLessThanOrEqual(6);
+    const results = log.locator("details.chat__result");
+    await expect(results).toHaveCount(12);
+    await expect(log.locator("details.chat__result[open]")).toHaveCount(1); // only the failed one starts open
+    await results.first().locator("summary").click();
+    await expect(results.first().locator("pre")).toContainText("row 79 of raw tool output");
+  });
+
   test("denying leaves no worker and the chief carries on", async ({ page }) => {
     const dash = dashboard();
     await open(page, dash);
