@@ -248,6 +248,9 @@ export interface ApprovalsResponse {
 
 // ---- Chief of staff (milestone 2b) ----
 
+/** Why a conversation can be read but no longer continued. */
+export type ConversationReadOnly = "expired" | "legacy";
+
 export interface ChiefSummary {
   /** `idle` also covers "no session yet": the session starts with the first message. */
   state: AgentState;
@@ -258,6 +261,30 @@ export interface ChiefSummary {
   error: string | null;
   pendingApprovals: number;
   lastSeq: number;
+  /** The conversation the panel is talking to. */
+  conversationId: string;
+  title: string | null;
+  /** Set when the saved session is gone: the log can be read, new messages are refused. */
+  readOnly: ConversationReadOnly | null;
+}
+
+export interface ConversationInfo {
+  id: string;
+  title: string | null;
+  createdAt: string;
+  updatedAt: string;
+  turns: number;
+  costUsd: number | null;
+  archived: boolean;
+  readOnly: ConversationReadOnly | null;
+  /** The conversation the chief is currently in. */
+  active: boolean;
+  /** Set when this conversation was started from another one's transcript. */
+  seededFrom: string | null;
+}
+
+export interface ConversationsResponse {
+  conversations: ConversationInfo[];
 }
 
 // ---- Terminal (milestone 3) ----
