@@ -524,6 +524,30 @@ test.describe("agents and approvals", () => {
     await stopAll(page, dash, ["pusher-no"]);
   });
 
+  test("a finished agent turns the Agents bubble green while the shelf is closed, and opening the shelf clears it", async ({ page }) => {
+    const dash = dashboard();
+    await open(page, dash);
+    const spawned = await page.request.post(`${dash.baseUrl}/api/agents`, { data: { name: "quiet-one", task: "tidy the notes" } });
+    expect(spawned.ok()).toBe(true);
+    const button = page.getByRole("button", { name: /^Agents/ });
+    await expect(button).toHaveAccessibleName(/finished/);
+    await expect(button.locator(".nav__count--green")).toBeVisible();
+    await openDrawer(page);
+    await expect(page.locator(".nav__count")).toHaveCount(0);
+    await stopAll(page, dash, ["quiet-one"]);
+  });
+
+  test("a failing agent turns the Agents bubble red while the shelf is closed", async ({ page }) => {
+    const dash = dashboard();
+    await open(page, dash);
+    const spawned = await page.request.post(`${dash.baseUrl}/api/agents`, { data: { name: "broken-one", task: "this will fail" } });
+    expect(spawned.ok()).toBe(true);
+    const button = page.getByRole("button", { name: /^Agents/ });
+    await expect(button).toHaveAccessibleName(/failed/);
+    await expect(button.locator(".nav__count--red")).toBeVisible();
+    await stopAll(page, dash, ["broken-one"]);
+  });
+
   test("a pending approval survives a reload, and stopping the agent removes its card", async ({ page }) => {
     const dash = dashboard();
     await open(page, dash);
