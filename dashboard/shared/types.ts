@@ -54,7 +54,9 @@ export interface Board {
 
 export type DashEvent =
   | { type: "invalidate"; resource: "prs" | "issues" | "ci" | "tests" | "kanban" | "agents" | "approvals" | "chat" }
-  | { type: "tests-line"; line: string };
+  | { type: "tests-line"; line: string }
+  /** One agent (or the chief, id "chief") changed state. Unlike `invalidate` it is never coalesced. */
+  | { type: "agent-state"; id: string; name: string; state: AgentState; error?: string };
 
 export type RunKind = "track1" | "ssl-pretrain" | "ssl-finetune" | "ssl-probe" | "legacy";
 /** pretrain: SSL pretraining directories never write results.json; their progress is the newest epoch snapshot. */

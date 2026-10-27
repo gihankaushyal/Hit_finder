@@ -1,6 +1,8 @@
 import { useCallback, useRef, useState } from "react";
 import { DEFAULT_TAB, DashboardNav, asTab, type TabId } from "./components/DashboardNav";
 import { RightDrawer } from "./components/RightDrawer";
+import { ToastHost } from "./components/ToastHost";
+import { useAgentAttention } from "./lib/useAgentAttention";
 import { useQueryParam } from "./lib/useQueryState";
 import { useResource } from "./lib/useResource";
 import { Issues } from "./panels/Issues";
@@ -48,6 +50,7 @@ export function App() {
   const [tabParam, setTabParam] = useQueryParam("tab", DEFAULT_TAB);
   const tab = asTab(tabParam);
   const [agentsOpen, setAgentsOpen] = useState(false);
+  const attention = useAgentAttention(agentsOpen);
   const agentsButton = useRef<HTMLButtonElement>(null);
   const closeAgents = useCallback(() => {
     setAgentsOpen(false);
@@ -58,13 +61,14 @@ export function App() {
   return (
     <div className="shell">
       <a className="skip-link" href="#main">Skip to status panels</a>
-      <DashboardNav ref={agentsButton} tab={tab} onTab={selectTab} agentsOpen={agentsOpen} onToggleAgents={() => (agentsOpen ? closeAgents() : setAgentsOpen(true))} />
+      <DashboardNav ref={agentsButton} tab={tab} onTab={selectTab} agentsOpen={agentsOpen} attention={attention} onToggleAgents={() => (agentsOpen ? closeAgents() : setAgentsOpen(true))} />
       <main id="main" className="main" tabIndex={-1}>
         {tab === "overview" && <Overview />}
         {tab === "kanban" && <KanbanTab />}
         {tab === "runs" && <div className="runs-tab"><RunsTable /></div>}
       </main>
       <TerminalDrawer />
+      <ToastHost />
       <RightDrawer open={agentsOpen} onClose={closeAgents} />
     </div>
   );

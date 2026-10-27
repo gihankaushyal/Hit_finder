@@ -30,6 +30,8 @@ const STOP_WAIT_MS = 3000;
 /** How long stop waits for a polite interrupt before closing the session regardless. */
 const INTERRUPT_WAIT_MS = 2000;
 export const FAILED_MESSAGE = "The agent session ended with an error.";
+/** The chief of staff's agent-state id (CHIEF_ID in chief.ts, which imports this file, so it is repeated here). */
+const RESERVED_CHIEF_ID = "chief";
 
 const ACTIVE: AgentState[] = ["starting", "running", "waiting-approval", "idle"];
 type Meta = Omit<AgentSummary, "pendingApprovals" | "lastSeq">;
@@ -126,6 +128,8 @@ export function createSupervisor(deps: SupervisorDeps): Supervisor {
   const setState = async (r: Rec, state: AgentState, error: string | null = null) => {
     if (r.meta.state === state && r.meta.error === error) return;
     touch(r, { state, error });
+    // Not through `notify`: its debounce would merge a quick running -> done into one "agents changed".
+    bus.emit({ type: "agent-state", id: r.meta.id, name: r.meta.name, state, ...(error ? { error } : {}) });
     await r.journal.append({ kind: "state", state });
   };
 
@@ -258,6 +262,7 @@ export function createSupervisor(deps: SupervisorDeps): Supervisor {
 
     async spawn({ name, task, issue = null }) {
       if (!validAgentName(name)) throw new AgentError("invalid", "Agent name must be 2 to 31 characters: lowercase letters, digits and hyphens.");
+      if (name === RESERVED_CHIEF_ID) throw new AgentError("invalid", `"${name}" is reserved for the chief of staff.`);
       if (!task.trim()) throw new AgentError("invalid", "The task cannot be empty.");
       if (task.length > TASK_MAX_CHARS) throw new AgentError("invalid", `The task is limited to ${TASK_MAX_CHARS} characters.`);
       if (issue !== null && (!Number.isInteger(issue) || issue < 1)) throw new AgentError("invalid", "Issue must be a positive whole number.");

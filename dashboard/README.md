@@ -22,7 +22,10 @@ return to Overview:
 - **Runs & Checkpoints**: the runs table at full height.
 
 The **Agents** button in the top bar opens a slide-over with approvals, the chief-of-staff chat and the
-worker agents; its badge counts approvals waiting for you. The terminal stays in the strip at the bottom.
+worker agents. Its bubble is red for failed agents and approvals waiting for you, yellow while agents run, and
+green for results you have not looked at yet; opening the slide-over clears them. A finished or failed agent
+also raises a toast, a desktop notification when the tab is hidden (use the bell button to allow it) and a count
+in the tab title. The terminal stays in the strip at the bottom.
 The commit pill copies the full hash. The sun/moon button switches between the dark and light themes
 (both are defined in `web/src/tokens.css`; with no saved choice the system setting applies).
 

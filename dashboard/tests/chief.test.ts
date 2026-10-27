@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { createChief, CHIEF_NAME, type Chief } from "../server/agents/chief";
+import { createChief, CHIEF_ID, CHIEF_NAME, type Chief } from "../server/agents/chief";
 import { AgentError } from "../server/agents/supervisor";
 import { createFakeDriver, type FakeDriverOptions } from "../server/agents/fakeDriver";
 import { createApprovals, type Approvals } from "../server/agents/approvals";
@@ -73,6 +73,18 @@ describe("conversation", () => {
     expect(log[0]).toMatchObject({ kind: "user", text: "what is going on?" });
     expect(log.map((e) => e.kind)).toEqual(expect.arrayContaining(["text", "result"]));
     expect(chief.summary().sessionId).toMatch(/^fake-/);
+  });
+
+  it("emits agent-state for the chief, once per real change", async () => {
+    await chief.send("hello");
+    await until(() => chief.summary().turns === 1 || undefined);
+    await waitState("idle");
+    const mine = events.filter((e) => e.type === "agent-state" && e.id === CHIEF_ID) as Extract<DashEvent, { type: "agent-state" }>[];
+    expect(mine.length).toBeGreaterThan(0);
+    expect(mine[0].name).toBe(CHIEF_NAME);
+    expect(mine.map((e) => e.state)).toContain("running");
+    expect(mine[mine.length - 1].state).toBe("idle");
+    expect(mine.filter((e, i) => i > 0 && e.state === mine[i - 1].state)).toEqual([]);
   });
 
   it("gives the role rules with the first message only, and reuses the same session afterwards", async () => {
