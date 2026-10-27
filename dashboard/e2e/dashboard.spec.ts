@@ -644,7 +644,10 @@ test.describe("chief of staff", () => {
       events.push({ seq: 3 + i * 2, kind: "tool-result", output: i === 5 ? `FAILED ${bulk}` : `match ${i}\n${bulk}`, isError: i === 5 });
     }
     events.push({ seq: 100, kind: "text", text: "FINAL ANSWER at the very end." });
-    await page.route("**/api/chief/events*", (r) => r.fulfill({ json: { events, lastSeq: 100 } }));
+    await page.route("**/api/chief/events*", (r) => {
+      const after = Number(new URL(r.request().url()).searchParams.get("after") ?? 0);
+      return r.fulfill({ json: { events: events.filter((ev) => (ev as { seq: number }).seq > after), lastSeq: 100 } });
+    });
     await open(page, dash);
     await openDrawer(page);
     const log = chief(page).getByRole("log", { name: "Conversation with the chief of staff" });

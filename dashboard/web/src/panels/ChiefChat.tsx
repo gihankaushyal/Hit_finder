@@ -14,7 +14,7 @@ const PREVIEW_CHARS = 80;
 
 /** One line of a tool result for its collapsed summary; the full text is one click away. */
 function preview(output: string): string {
-  const first = output.trim().split("\n", 1)[0];
+  const first = output.trim().split("\n", 1)[0] || "(empty)";
   return first.length > PREVIEW_CHARS ? `${first.slice(0, PREVIEW_CHARS)}…` : first;
 }
 
@@ -47,7 +47,7 @@ function Line({ e }: { e: AgentEvent }) {
           <summary>
             {e.isError ? "Failed" : "Result"} <span className="mono">{preview(e.output)}</span>
           </summary>
-          <pre className="mono alog__out">{e.output}</pre>
+          <pre className={`mono alog__out${e.isError ? " alog__out--err" : ""}`}>{e.output}</pre>
         </details>
       );
     case "approval":
