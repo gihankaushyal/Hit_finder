@@ -126,6 +126,8 @@ export function createSupervisor(deps: SupervisorDeps): Supervisor {
   const setState = async (r: Rec, state: AgentState, error: string | null = null) => {
     if (r.meta.state === state && r.meta.error === error) return;
     touch(r, { state, error });
+    // Not through `notify`: its debounce would merge a quick running -> done into one "agents changed".
+    bus.emit({ type: "agent-state", id: r.meta.id, name: r.meta.name, state, ...(error ? { error } : {}) });
     await r.journal.append({ kind: "state", state });
   };
 

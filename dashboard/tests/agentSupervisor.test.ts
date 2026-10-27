@@ -306,6 +306,22 @@ describe("events and notifications", () => {
     await expect(sup.events("nope-nope", 0, 10)).rejects.toMatchObject({ code: "not-found" });
   });
 
+  it("emits one agent-state event per state transition", async () => {
+    const a = await sup.spawn({ name: "stater", task: "tidy the notes" });
+    await waitState(a.id, "idle");
+    const states = (events.filter((e) => e.type === "agent-state" && e.id === a.id) as Extract<DashEvent, { type: "agent-state" }>[]).map((e) => e.state);
+    expect(states[0]).toBe("running");
+    expect(states[states.length - 1]).toBe("idle");
+    expect(states.filter((s, i) => i > 0 && s === states[i - 1])).toEqual([]); // setState drops unchanged transitions
+  });
+
+  it("emits agent-state failed with the fixed error message", async () => {
+    const a = await sup.spawn({ name: "crashy2", task: "this will fail" });
+    await waitState(a.id, "failed");
+    const last = (events.filter((e) => e.type === "agent-state" && e.id === a.id) as Extract<DashEvent, { type: "agent-state" }>[]).pop();
+    expect(last).toMatchObject({ state: "failed", name: "crashy2", error: "The agent session ended with an error." });
+  });
+
   it("emits coalesced agents invalidations", async () => {
     const a = await sup.spawn({ name: "notify-one", task: "t" });
     await waitState(a.id, "idle");
