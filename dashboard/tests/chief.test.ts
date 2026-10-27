@@ -358,4 +358,102 @@ describe("conversations", () => {
     expect(after.active).toBe(fresh.conversationId);
     expect(after.convs[saved.conversationId]).toEqual(index.convs[saved.conversationId]);
   });
+
+  it("resumes a parked conversation from its saved session", async () => {
+    await chief.send("topic one");
+    await waitState("idle");
+    const first = chief.summary();
+    await chief.reset();
+    await chief.resume(first.conversationId);
+    expect(chief.summary()).toMatchObject({ conversationId: first.conversationId, turns: 1, sessionId: first.sessionId, state: "idle", title: "topic one" });
+    const before = starts.length;
+    await chief.send("topic one, again");
+    await waitState("idle");
+    expect(starts).toHaveLength(before + 1);
+    expect(starts[before].resume).toBe(first.sessionId);
+    const log = (await chief.events(0, 100)).events;
+    expect(log.some((e) => e.kind === "user" && e.text === "topic one")).toBe(true);
+    expect(log.some((e) => e.kind === "user" && e.text === "topic one, again")).toBe(true);
+  });
+
+  it("stops a running turn when another conversation is resumed", async () => {
+    await chief.send("first");
+    await waitState("idle");
+    const first = chief.summary().conversationId;
+    await chief.reset();
+    await chief.send("second");
+    await chief.resume(first);
+    expect(chief.summary()).toMatchObject({ conversationId: first, state: "idle" });
+    expect(chief.conversations().find((c) => c.title === "second")).toMatchObject({ active: false });
+  });
+
+  it("lists conversations newest first and marks the active one", async () => {
+    await chief.send("alpha");
+    await waitState("idle");
+    await chief.reset();
+    await chief.send("beta");
+    await waitState("idle");
+    const rows = chief.conversations();
+    expect(rows.map((r) => r.title)).toEqual(["beta", "alpha"]);
+    expect(rows.map((r) => r.active)).toEqual([true, false]);
+    expect(rows[1]).toMatchObject({ turns: 1, archived: false, readOnly: null, seededFrom: null });
+  });
+
+  it("renames, and a manual title is never replaced by the automatic one", async () => {
+    const id = chief.summary().conversationId;
+    await chief.patch(id, { title: "  Mine  " });
+    await chief.send("something else entirely");
+    await waitState("idle");
+    expect(chief.summary().title).toBe("Mine");
+    await expect(chief.patch(id, { title: "   " })).rejects.toMatchObject({ code: "invalid" });
+    await expect(chief.patch(id, { title: "x".repeat(121) })).rejects.toMatchObject({ code: "invalid" });
+  });
+
+  it("archives a parked conversation, never the active one, and resuming restores it", async () => {
+    await chief.send("alpha");
+    await waitState("idle");
+    const alpha = chief.summary().conversationId;
+    await expect(chief.patch(alpha, { archived: true })).rejects.toMatchObject({ code: "state" });
+    await chief.reset();
+    await chief.patch(alpha, { archived: true });
+    expect(chief.conversations().find((c) => c.id === alpha)).toMatchObject({ archived: true });
+    await chief.resume(alpha);
+    expect(chief.conversations().find((c) => c.id === alpha)).toMatchObject({ archived: false, active: true });
+  });
+
+  it("changes nothing when one part of a patch is invalid", async () => {
+    await chief.send("alpha");
+    await waitState("idle");
+    const id = chief.summary().conversationId;
+    await expect(chief.patch(id, { title: "New name", archived: true })).rejects.toMatchObject({ code: "state" });
+    expect(chief.summary().title).toBe("alpha");
+  });
+
+  it("reads a parked conversation's log without activating it", async () => {
+    await chief.send("parked words");
+    await waitState("idle");
+    const parked = chief.summary().conversationId;
+    await chief.reset();
+    const res = await chief.eventsFor(parked, 0, 100);
+    expect(res.events.some((e) => e.kind === "user" && e.text === "parked words")).toBe(true);
+    expect(res.lastSeq).toBe(res.events[res.events.length - 1].seq);
+    expect(chief.summary().conversationId).not.toBe(parked);
+    expect(await chief.eventsFor(chief.summary().conversationId, 0, 100)).toEqual(await chief.events(0, 100));
+  });
+
+  it("answers an unknown conversation with not-found", async () => {
+    await expect(chief.resume("c-nope")).rejects.toMatchObject({ code: "not-found" });
+    await expect(chief.patch("c-nope", { title: "x" })).rejects.toMatchObject({ code: "not-found" });
+    await expect(chief.eventsFor("c-nope", 0, 10)).rejects.toMatchObject({ code: "not-found" });
+  });
+
+  it("will not resume a read-only conversation", async () => {
+    const file = path.join(cfg.stateDir, "chief", "index.json");
+    const index = JSON.parse(fs.readFileSync(file, "utf8"));
+    index.convs["c-old"] = { id: "c-old", title: "old", titleManual: false, createdAt: "2026-10-01T00:00:00.000Z", updatedAt: "2026-10-01T00:00:00.000Z", turns: 1, costUsd: null, sessionId: null, archived: true, readOnly: "legacy", seededFrom: null };
+    fs.writeFileSync(file, JSON.stringify(index));
+    const again = build();
+    await again.init();
+    await expect(again.resume("c-old")).rejects.toMatchObject({ code: "state" });
+  });
 });

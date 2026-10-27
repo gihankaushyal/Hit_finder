@@ -1,13 +1,13 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { AgentEventsResponse, AgentState, ChiefSummary } from "../../shared/types";
+import type { AgentEventsResponse, AgentState, ChiefSummary, ConversationInfo } from "../../shared/types";
 import type { Config } from "../config";
 import type { EventBus } from "../events";
 import type { Approvals } from "./approvals";
 import type { AgentDriver, Session, SessionStart, ToolDef } from "./driver";
-import { autoTitle, blankEntry, convDir, journalPath, loadRegistry, newConvId, rebuildRegistry, saveRegistry, type ConvEntry, type Registry } from "./conversations";
-import { openJournal, type Journal } from "./journal";
+import { autoTitle, blankEntry, convDir, journalPath, loadRegistry, newConvId, rebuildRegistry, saveRegistry, TITLE_EDIT_MAX, type ConvEntry, type Registry } from "./conversations";
+import { openJournal, readJournalFile, type Journal } from "./journal";
 import { chiefOptions } from "./policy";
 import { chiefPrompt } from "./rolePrompts";
 import { AgentError, MESSAGE_MAX_CHARS } from "./supervisor";
@@ -20,6 +20,8 @@ const STOP_WAIT_MS = 3000;
 const INTERRUPT_WAIT_MS = 2000;
 const ACTIVE: AgentState[] = ["running", "waiting-approval", "idle"];
 const STARTING_MESSAGE = "The chief of staff is still starting. Try again in a moment.";
+const NOT_FOUND_MESSAGE = "That conversation does not exist.";
+export const READONLY_MESSAGE = "This conversation can no longer be continued. Read it, or continue in a new conversation.";
 
 interface Meta {
   state: AgentState;
@@ -37,6 +39,13 @@ export interface Chief {
   /** Park the conversation and start a new one. The parked one stays on disk, with its session id. */
   reset(): Promise<void>;
   events(after: number, limit: number): Promise<AgentEventsResponse>;
+  /** Every conversation, newest first. */
+  conversations(): ConversationInfo[];
+  /** Park the current conversation and make this one active; its session restarts with the next message. */
+  resume(id: string): Promise<void>;
+  patch(id: string, change: { title?: string; archived?: boolean }): Promise<void>;
+  /** A conversation's log, whether or not it is the active one. */
+  eventsFor(id: string, after: number, limit: number): Promise<AgentEventsResponse>;
 }
 
 export interface ChiefDeps {
@@ -307,6 +316,54 @@ export function createChief(deps: ChiefDeps): Chief {
         touch();
         await writes;
       }),
+
+    conversations() {
+      syncEntry(false);
+      return Object.values(reg.convs)
+        .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+        .map((c) => ({
+          id: c.id, title: c.title, createdAt: c.createdAt, updatedAt: c.updatedAt, turns: c.turns, costUsd: c.costUsd,
+          archived: c.archived, readOnly: c.readOnly, active: c.id === reg.active, seededFrom: c.seededFrom,
+        }));
+    },
+
+    resume: (id) =>
+      serial(async () => {
+        const target = reg.convs[id];
+        if (!target) throw new AgentError("not-found", NOT_FOUND_MESSAGE);
+        if (id === reg.active) return;
+        if (target.readOnly) throw new AgentError("state", READONLY_MESSAGE);
+        await park();
+        target.archived = false;
+        await activate(id);
+        touch();
+        await writes;
+      }),
+
+    patch: (id, change) =>
+      serial(async () => {
+        const target = reg.convs[id];
+        if (!target) throw new AgentError("not-found", NOT_FOUND_MESSAGE);
+        const title = change.title === undefined ? undefined : change.title.trim();
+        if (title !== undefined && (title.length === 0 || title.length > TITLE_EDIT_MAX)) {
+          throw new AgentError("invalid", `The title must be 1 to ${TITLE_EDIT_MAX} characters.`);
+        }
+        if (change.archived === true && id === reg.active) throw new AgentError("state", "Start a new conversation before archiving this one.");
+        if (title !== undefined) {
+          target.title = title;
+          target.titleManual = true;
+        }
+        if (change.archived !== undefined) target.archived = change.archived;
+        touch();
+        await writes;
+      }),
+
+    async eventsFor(id, after, limit) {
+      if (id === reg.active) return activeEvents(after, limit);
+      if (!reg.convs[id]) throw new AgentError("not-found", NOT_FOUND_MESSAGE);
+      const all = await readJournalFile(journalPath(dir, id));
+      return { events: all.filter((e) => e.seq > after).slice(0, Math.max(0, limit)), lastSeq: all.length > 0 ? all[all.length - 1].seq : 0 };
+    },
 
     events: activeEvents,
   };
