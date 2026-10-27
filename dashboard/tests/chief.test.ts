@@ -321,7 +321,7 @@ describe("conversations", () => {
     expect((await again.events(0, 100)).events.some((e) => e.kind === "user" && e.text === "before the restart")).toBe(true);
   });
 
-  it("starts from a fresh conversation if the active pointer is lost", async () => {
+  it("keeps the conversation if the active pointer is lost", async () => {
     await chief.send("keep me");
     await waitState("idle");
     const saved = chief.summary();
@@ -329,8 +329,33 @@ describe("conversations", () => {
     const index = JSON.parse(fs.readFileSync(file, "utf8"));
     index.active = "c-gone";
     fs.writeFileSync(file, JSON.stringify(index));
+    fs.rmSync(`${file}.bak`, { force: true });
     const again = build();
     await again.init();
-    expect(again.summary().conversationId).toBe(saved.conversationId);
+    expect(again.summary()).toMatchObject({ conversationId: saved.conversationId, title: "keep me", turns: 1, sessionId: saved.sessionId, readOnly: null });
+    const after = JSON.parse(fs.readFileSync(file, "utf8"));
+    expect(after.active).toBe(saved.conversationId);
+    expect(Object.values(after.convs).some((c: any) => c.archived || c.readOnly)).toBe(false);
+  });
+
+  it("starts a new conversation if the pointer is lost and the only one cannot be continued", async () => {
+    await chief.send("old one");
+    await waitState("idle");
+    const saved = chief.summary();
+    const file = path.join(cfg.stateDir, "chief", "index.json");
+    const index = JSON.parse(fs.readFileSync(file, "utf8"));
+    index.active = "";
+    index.convs[saved.conversationId].archived = true;
+    index.convs[saved.conversationId].readOnly = "legacy";
+    fs.writeFileSync(file, JSON.stringify(index));
+    fs.rmSync(`${file}.bak`, { force: true });
+    const again = build();
+    await again.init();
+    const fresh = again.summary();
+    expect(fresh.conversationId).not.toBe(saved.conversationId);
+    expect(fresh).toMatchObject({ turns: 0, title: null, readOnly: null });
+    const after = JSON.parse(fs.readFileSync(file, "utf8"));
+    expect(after.active).toBe(fresh.conversationId);
+    expect(after.convs[saved.conversationId]).toEqual(index.convs[saved.conversationId]);
   });
 });

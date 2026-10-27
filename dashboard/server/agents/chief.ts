@@ -149,6 +149,7 @@ export function createChief(deps: ChiefDeps): Chief {
     const e = peek();
     if (e && e.turns === 0 && e.sessionId === null && e.title === null) {
       delete reg.convs[e.id];
+      reg.active = ""; // a persist in this window must not write a pointer to the deleted id
       await fs.rm(convDir(dir, e.id), { recursive: true, force: true });
     }
   }
@@ -204,6 +205,7 @@ export function createChief(deps: ChiefDeps): Chief {
             continue;
           }
           await j().append(item.body);
+          if (!current()) continue;
           if (item.body.kind === "result") {
             touch({ turns: meta.turns + 1, costUsd: item.body.costUsd === null ? meta.costUsd : Math.max(meta.costUsd ?? 0, item.body.costUsd) });
             if (!stopping) await setState("idle");

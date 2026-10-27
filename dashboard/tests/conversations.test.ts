@@ -90,20 +90,25 @@ describe("registry file", () => {
     expect((await loadRegistry(dir))?.convs["c-a"].title).toBe("one");
   });
 
-  it("rejects an index whose active id is unsafe, and uses the backup", async () => {
+  it("keeps the conversations of an index whose active id is unsafe, with no active one", async () => {
     await saveRegistry(dir, reg("one"));
     await saveRegistry(dir, reg("two"));
     fs.writeFileSync(path.join(dir, "index.json"), JSON.stringify({ ...reg("bad"), active: "../../x" }));
-    expect((await loadRegistry(dir))?.convs["c-a"].title).toBe("one");
-    fs.rmSync(path.join(dir, "index.json.bak"));
-    expect(await loadRegistry(dir)).toBeNull();
+    const r = (await loadRegistry(dir))!;
+    expect(r.active).toBe("");
+    expect(r.convs["c-a"].title).toBe("bad");
   });
 
-  it("rejects an index whose active entry was dropped for a bad shape", async () => {
-    await saveRegistry(dir, reg("one"));
-    await saveRegistry(dir, reg("two"));
+  it("keeps the conversations of an index whose active entry was dropped for a bad shape", async () => {
     fs.writeFileSync(path.join(dir, "index.json"), JSON.stringify({ v: 1, active: "c-b", convs: { "c-a": reg("x").convs["c-a"], "c-b": { id: "c-b" } } }));
-    expect((await loadRegistry(dir))?.convs["c-a"].title).toBe("one");
+    const r = (await loadRegistry(dir))!;
+    expect(r.active).toBe("");
+    expect(Object.keys(r.convs)).toEqual(["c-a"]);
+  });
+
+  it("rejects an index with no valid entries", async () => {
+    fs.writeFileSync(path.join(dir, "index.json"), JSON.stringify({ v: 1, active: "c-a", convs: { "c-a": { id: "c-a" } } }));
+    expect(await loadRegistry(dir)).toBeNull();
   });
 
   it("drops entries with a bad costUsd or readOnly", async () => {
