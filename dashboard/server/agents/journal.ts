@@ -39,6 +39,14 @@ async function readEntries(file: string): Promise<AgentEvent[]> {
 }
 
 /**
+ * Reads a journal without opening it for writing: a torn last line is skipped and the file is never
+ * modified (unlike `openJournal`, which repairs it). For parked conversations.
+ */
+export async function readJournalFile(file: string): Promise<AgentEvent[]> {
+  return (await readEntries(file)).sort((a, b) => a.seq - b.seq);
+}
+
+/**
  * Append-only JSONL log for one agent. Appends are serialised, so order and sequence numbers
  * match call order. A torn last line (crash mid-write) is ignored on read, and the next append
  * starts on a fresh line.
