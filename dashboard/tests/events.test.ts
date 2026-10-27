@@ -58,6 +58,8 @@ describe("GET /api/events", () => {
     expect(chunk).toContain('data: {"type":"invalidate","resource":"prs"}');
     bus.emit({ type: "tests-line", line: "hello world" });
     expect(await readUntil(reader, "hello world")).toContain('"type":"tests-line"');
+    bus.emit({ type: "agent-state", id: "a", name: "a", state: "running" });
+    expect(await readUntil(reader, '"type":"agent-state"')).toContain('data: {"type":"agent-state","id":"a","name":"a","state":"running"}');
     await reader.cancel();
     await waitFor(() => bus.size === before);
     expect(bus.size).toBe(before);
