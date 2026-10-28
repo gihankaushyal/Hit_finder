@@ -12,7 +12,7 @@ const chief = (over: Partial<ChiefSummary> = {}): { body: ChiefSummary } => ({
   body: { state: "idle", model: "opus", turns: 0, costUsd: null, sessionId: null, error: null, pendingApprovals: 0, lastSeq: 0, conversationId: "c-now", title: null, readOnly: null, ...over },
 });
 const ev = (seq: number, e: AgentEventBody): AgentEvent => ({ ...e, seq, at: "2026-10-20T08:01:00.000Z" });
-const log = (events: AgentEvent[]): { body: AgentEventsResponse } => ({ body: { events, lastSeq: events.length } });
+const log = (events: AgentEvent[]): { body: AgentEventsResponse } => ({ body: { events, lastSeq: events.length, conversationId: "c-now" } });
 const EVENTS = "GET /api/chief/events?after=0&limit=200";
 
 describe("ChiefChat", () => {
@@ -163,6 +163,30 @@ describe("ChiefChat", () => {
     expect(screen.getByLabelText("Message to the chief of staff")).toBeEnabled();
   });
 
+  it("does not announce the old replies of a conversation that has just become the active one", async () => {
+    const a = [ev(1, { kind: "user", text: "hi" }), ev(2, { kind: "text", text: "alpha reply" })];
+    const b = [ev(1, { kind: "user", text: "yo" }), ev(2, { kind: "text", text: "beta old" })];
+    let cur: { conv: string; events: AgentEvent[] } = { conv: "c-a", events: a };
+    const page = (after: number) => ({ body: { events: cur.events.filter((e) => e.seq > after), lastSeq: cur.events[cur.events.length - 1].seq, conversationId: cur.conv } as AgentEventsResponse });
+    mockApi({
+      "GET /api/chief": () => chief({ conversationId: cur.conv, turns: 1 }),
+      "GET /api/chief/events?after=0&limit=200": () => page(0),
+      "GET /api/chief/events?after=2&limit=200": () => page(2),
+      "GET /api/chief/events?after=3&limit=200": () => page(3),
+    });
+    render(<ChiefChat />);
+    const live = await screen.findByRole("status");
+    await waitFor(() => expect(live).toHaveTextContent("Chief of staff: alpha reply"));
+    cur = { conv: "c-b", events: b };
+    act(() => FakeEventSource.emit({ type: "invalidate", resource: "chat" }));
+    await screen.findByText("beta old");
+    await new Promise((r) => setTimeout(r, 30));
+    expect(live).toHaveTextContent("Chief of staff: alpha reply"); // "beta old" is not new
+    cur = { conv: "c-b", events: [...b, ev(3, { kind: "text", text: "beta new" })] };
+    act(() => FakeEventSource.emit({ type: "invalidate", resource: "chat" }));
+    await waitFor(() => expect(live).toHaveTextContent("Chief of staff: beta new"));
+  });
+
   describe("conversations", () => {
     const info = (over: Partial<ConversationInfo>): ConversationInfo => ({
       id: "c-old", title: "Old topic", createdAt: "2026-10-20T08:00:00.000Z", updatedAt: "2026-10-20T09:00:00.000Z", turns: 1, costUsd: null,
@@ -229,6 +253,13 @@ describe("ChiefChat", () => {
       render(<ChiefChat />);
       await userEvent.click(await screen.findByRole("button", { name: "Conversations" }));
       expect(screen.queryByRole("button", { name: "Read Old topic" })).toBeNull(); // the list could not be loaded
+    });
+
+    it("says so when the details of the conversation being read cannot be loaded", async () => {
+      mockApi({ "GET /api/chief": chief({ conversationId: "c-now" }), [EVENTS]: log([]), [OLD_EVENTS]: log([]) });
+      render(<ChiefChat />);
+      await userEvent.click(await screen.findByRole("button", { name: "Conversations" }));
+      expect(screen.queryByRole("button", { name: "Resume this conversation" })).toBeNull();
     });
   });
 });

@@ -75,6 +75,26 @@ describe("ConversationList", () => {
     expect(outer).not.toHaveBeenCalled();
   });
 
+  it("saves a rename when the box loses focus, and not after Escape", async () => {
+    const fns = setup([row({})]);
+    await userEvent.click(screen.getByRole("button", { name: "Rename Alpha" }));
+    await userEvent.type(screen.getByLabelText("Conversation title"), " two");
+    await userEvent.click(document.body);
+    expect(fns.onRename).toHaveBeenCalledTimes(1);
+    expect(fns.onRename).toHaveBeenCalledWith("c-a", "Alpha two");
+    await userEvent.click(screen.getByRole("button", { name: "Rename Alpha" }));
+    await userEvent.type(screen.getByLabelText("Conversation title"), " three{Escape}");
+    await userEvent.click(document.body);
+    expect(fns.onRename).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not print 'Invalid Date' or a zero cost for a cheap conversation", () => {
+    setup([row({ updatedAt: "not a date", costUsd: 0.001 })]);
+    expect(screen.getByText(/unknown time/)).toBeInTheDocument();
+    expect(screen.getByText(/under \$0\.01/)).toBeInTheDocument();
+    expect(screen.queryByText(/Invalid Date/)).toBeNull();
+  });
+
   it("disables Resume while locked", () => {
     setup([row({})], { locked: true });
     expect(screen.getByRole("button", { name: "Resume Alpha" })).toBeDisabled();

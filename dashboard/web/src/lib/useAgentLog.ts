@@ -11,6 +11,8 @@ export interface AgentLog {
   events: AgentEvent[];
   error: string | null;
   loaded: boolean;
+  /** Which conversation the entries belong to, when the server says (the chief of staff's log does). */
+  conversationId?: string;
 }
 
 /**
@@ -60,9 +62,9 @@ export function useJournal(basePath: string, resource: string, enabled: boolean)
         }
         if (res.events.length > 0) {
           cursor.current = res.events[res.events.length - 1].seq;
-          setState((s) => ({ events: [...s.events, ...res.events].slice(-MAX_KEPT), error: null, loaded: true }));
+          setState((s) => ({ events: [...s.events, ...res.events].slice(-MAX_KEPT), error: null, loaded: true, conversationId: res.conversationId }));
         } else {
-          setState((s) => (s.loaded && !s.error ? s : { ...s, error: null, loaded: true }));
+          setState((s) => (s.loaded && !s.error && s.conversationId === res.conversationId ? s : { ...s, error: null, loaded: true, conversationId: res.conversationId }));
         }
         if (res.events.length < PAGE && !again.current) return;
       }

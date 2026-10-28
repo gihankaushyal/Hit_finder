@@ -60,12 +60,19 @@ function Line({ e }: { e: AgentEvent }) {
   }
 }
 
+/** What the conversations list says, as far as the panel needs it. */
+interface Details {
+  rows: ConversationInfo[] | null;
+  failed: boolean;
+}
+const NO_DETAILS: Details = { rows: null, failed: false };
+
 interface PaneProps {
   open: boolean;
   viewing: string | null;
   busy: boolean;
   working: boolean;
-  onRows: (rows: ConversationInfo[] | null) => void;
+  onInfo: (info: Details) => void;
   onView: (id: string) => void;
   onResume: (id: string) => void;
   onRename: (id: string, title: string) => void;
@@ -73,19 +80,22 @@ interface PaneProps {
 }
 
 /** Loads the conversations only while they are needed: the list is open, or one is being read (to know whether it can be resumed). */
-function ConversationsPane({ open, onRows, ...list }: PaneProps) {
+function ConversationsPane({ open, onInfo, ...list }: PaneProps) {
   const convs = useResource<ConversationsResponse>("chat", "/api/chief/conversations", () => false, AGENTS_REFRESH_MS);
   const rows = convs.data?.conversations ?? null;
+  const failed = convs.error !== null;
   useEffect(() => {
-    onRows(rows);
-  }, [rows, onRows]);
+    onInfo({ rows, failed });
+  }, [rows, failed, onInfo]);
+  useEffect(() => () => onInfo(NO_DETAILS), [onInfo]); // a closed pane leaves no snapshot behind to be mistaken for current
   return open ? <ConversationList rows={rows ?? []} viewingId={list.viewing} busy={list.busy} locked={list.working} onView={list.onView} onResume={list.onResume} onRename={list.onRename} onArchive={list.onArchive} /> : null;
 }
 
 export function ChiefChat() {
   const res = useResource<ChiefSummary>("chat", "/api/chief", () => false, AGENTS_REFRESH_MS);
   const s = res.data;
-  const [rows, setRows] = useState<ConversationInfo[] | null>(null);
+  const [details, setDetails] = useState<Details>(NO_DETAILS);
+  const rows = details.rows;
   const [listOpen, setListOpen] = useState(false);
   const [viewId, setViewId] = useState<string | null>(null);
   // A parked conversation open for reading; the live one is shown whenever this is null.
@@ -120,6 +130,8 @@ export function ChiefChat() {
   // Announce a reply once it is complete (the chief is idle again), never while it is still working.
   useEffect(() => {
     if (!s || s.state === "running" || viewing) return; // an earlier conversation being read is not a new reply
+    // The log may still be the previous conversation's (or empty) for a moment after the active one changed.
+    if (!log.loaded || log.conversationId !== s.conversationId) return;
     const lastText = [...log.events].reverse().find((e) => e.kind === "text");
     if (spokenIn.current !== null && spokenIn.current !== s.conversationId) {
       // Another conversation became the active one: its existing replies are not new, and its numbering starts over.
@@ -208,7 +220,7 @@ export function ChiefChat() {
           viewing={viewing}
           busy={busy}
           working={working}
-          onRows={setRows}
+          onInfo={setDetails}
           onView={(id) => setViewId(id === s?.conversationId ? null : id)}
           onResume={(id) => void resume(id)}
           onRename={(id, title) => void patch(id, { title })}
@@ -236,6 +248,7 @@ export function ChiefChat() {
       {viewing || frozen ? (
         <div className="chat__bar" role="status">
           <span>{frozen ? "This conversation can be read but not continued." : "You are reading an earlier conversation."}</span>
+          {viewing && !shown && <span className="dim">{details.failed ? "Its details could not be loaded, so it cannot be resumed yet." : "Checking whether it can be resumed…"}</span>}
           {viewing && shown && !frozen && <button type="button" className="btn btn--primary" disabled={busy || working} title={working ? "Stop the chief of staff first: switching ends its current turn." : undefined} onClick={() => void resume(viewing)}>Resume this conversation</button>}
           {viewing && <button type="button" className="btn btn--quiet" onClick={() => setViewId(null)}>Back to current</button>}
         </div>
