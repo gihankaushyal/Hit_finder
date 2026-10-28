@@ -6,7 +6,7 @@ import { panelState } from "../components/bits";
 import { apiSend, errorMessage } from "../lib/api";
 import { useJournal } from "../lib/useAgentLog";
 import { AGENTS_REFRESH_MS, useResource } from "../lib/useResource";
-import type { AgentEvent, AgentState, ChiefSummary, ConversationsResponse } from "../../../shared/types";
+import type { AgentEvent, AgentState, ChiefSummary, ConversationInfo, ConversationsResponse } from "../../../shared/types";
 
 const MESSAGE_MAX = 8000;
 const TAIL_SLACK_PX = 6;
@@ -60,14 +60,40 @@ function Line({ e }: { e: AgentEvent }) {
   }
 }
 
+interface PaneProps {
+  open: boolean;
+  viewing: string | null;
+  busy: boolean;
+  working: boolean;
+  onRows: (rows: ConversationInfo[] | null) => void;
+  onView: (id: string) => void;
+  onResume: (id: string) => void;
+  onRename: (id: string, title: string) => void;
+  onArchive: (id: string, archived: boolean) => void;
+}
+
+/** Loads the conversations only while they are needed: the list is open, or one is being read (to know whether it can be resumed). */
+function ConversationsPane({ open, onRows, ...list }: PaneProps) {
+  const convs = useResource<ConversationsResponse>("chat", "/api/chief/conversations", () => false, AGENTS_REFRESH_MS);
+  const rows = convs.data?.conversations ?? null;
+  useEffect(() => {
+    onRows(rows);
+  }, [rows, onRows]);
+  return open ? <ConversationList rows={rows ?? []} viewingId={list.viewing} busy={list.busy} locked={list.working} onView={list.onView} onResume={list.onResume} onRename={list.onRename} onArchive={list.onArchive} /> : null;
+}
+
 export function ChiefChat() {
   const res = useResource<ChiefSummary>("chat", "/api/chief", () => false, AGENTS_REFRESH_MS);
-  const convs = useResource<ConversationsResponse>("chat", "/api/chief/conversations", () => false, AGENTS_REFRESH_MS);
   const s = res.data;
+  const [rows, setRows] = useState<ConversationInfo[] | null>(null);
   const [listOpen, setListOpen] = useState(false);
   const [viewId, setViewId] = useState<string | null>(null);
   // A parked conversation open for reading; the live one is shown whenever this is null.
   const viewing = viewId !== null && s !== null && viewId !== s.conversationId ? viewId : null;
+  // The conversation being read may have become the active one some other way; do not keep it as a pending view.
+  useEffect(() => {
+    if (viewId !== null && s !== null && viewId === s.conversationId) setViewId(null);
+  }, [viewId, s]);
   const log = useJournal(viewing ? `/api/chief/conversations/${encodeURIComponent(viewing)}/events` : "/api/chief/events", "chat", true);
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
@@ -77,18 +103,31 @@ export function ChiefChat() {
   const box = useRef<HTMLDivElement>(null);
   const atTail = useRef(true);
   const spoken = useRef(0);
+  const spokenIn = useRef<string | null>(null);
+  const seenView = useRef<string | null>(null);
 
   // The box only exists once the panel has left its loading state, so mounting it counts as a reason to follow the tail too.
   const ready = panelState(res) === "ready";
   useLayoutEffect(() => {
     const el = box.current;
+    if (seenView.current !== viewing) {
+      seenView.current = viewing;
+      atTail.current = true; // another log opens at its newest entry, wherever the last one was scrolled
+    }
     if (el && atTail.current) el.scrollTop = el.scrollHeight;
-  }, [log.events.length, ready]);
+  }, [log.events.length, ready, viewing]);
 
   // Announce a reply once it is complete (the chief is idle again), never while it is still working.
   useEffect(() => {
     if (!s || s.state === "running" || viewing) return; // an earlier conversation being read is not a new reply
     const lastText = [...log.events].reverse().find((e) => e.kind === "text");
+    if (spokenIn.current !== null && spokenIn.current !== s.conversationId) {
+      // Another conversation became the active one: its existing replies are not new, and its numbering starts over.
+      spokenIn.current = s.conversationId;
+      spoken.current = lastText?.seq ?? 0;
+      return;
+    }
+    spokenIn.current = s.conversationId;
     if (lastText && lastText.seq > spoken.current && lastText.kind === "text") {
       spoken.current = lastText.seq;
       setAnnounce(`Chief of staff: ${lastText.text}`);
@@ -115,8 +154,7 @@ export function ChiefChat() {
     setError(null);
     try {
       await apiSend("PATCH", `/api/chief/conversations/${encodeURIComponent(id)}`, body);
-      convs.reload();
-      res.reload();
+      res.reload(); // the list refreshes itself: the server announces the change
     } catch (err) {
       setError(errorMessage(err, "The request failed."));
     } finally {
@@ -126,7 +164,6 @@ export function ChiefChat() {
   async function resume(id: string) {
     if (await post(`/api/chief/conversations/${encodeURIComponent(id)}/resume`)) {
       setViewId(null);
-      convs.reload();
     }
   }
 
@@ -144,7 +181,7 @@ export function ChiefChat() {
 
   const word = s ? WORDS[s.state] : undefined;
   const working = s?.state === "running" || s?.state === "waiting-approval";
-  const shown = viewing ? convs.data?.conversations.find((c) => c.id === viewing) : undefined;
+  const shown = viewing ? rows?.find((c) => c.id === viewing) : undefined;
   const frozen = viewing ? shown?.readOnly ?? null : s?.readOnly ?? null;
   return (
     <PanelFrame title="Chief of staff" state={panelState(res)} error={res.error ?? undefined} onRetry={res.reload}>
@@ -165,11 +202,13 @@ export function ChiefChat() {
           <button type="button" className="btn btn--quiet" aria-expanded={listOpen} onClick={() => setListOpen((o) => !o)}>Conversations</button>
         </div>
       )}
-      {listOpen && (
-        <ConversationList
-          rows={convs.data?.conversations ?? []}
-          viewingId={viewing}
+      {(listOpen || viewing) && (
+        <ConversationsPane
+          open={listOpen}
+          viewing={viewing}
           busy={busy}
+          working={working}
+          onRows={setRows}
           onView={(id) => setViewId(id === s?.conversationId ? null : id)}
           onResume={(id) => void resume(id)}
           onRename={(id, title) => void patch(id, { title })}
@@ -197,7 +236,7 @@ export function ChiefChat() {
       {viewing || frozen ? (
         <div className="chat__bar" role="status">
           <span>{frozen ? "This conversation can be read but not continued." : "You are reading an earlier conversation."}</span>
-          {viewing && !frozen && <button type="button" className="btn btn--primary" disabled={busy} onClick={() => void resume(viewing)}>Resume this conversation</button>}
+          {viewing && shown && !frozen && <button type="button" className="btn btn--primary" disabled={busy || working} title={working ? "Stop the chief of staff first: switching ends its current turn." : undefined} onClick={() => void resume(viewing)}>Resume this conversation</button>}
           {viewing && <button type="button" className="btn btn--quiet" onClick={() => setViewId(null)}>Back to current</button>}
         </div>
       ) : (

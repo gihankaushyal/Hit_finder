@@ -59,6 +59,28 @@ describe("ConversationList", () => {
     expect(fns.onRename).toHaveBeenCalledTimes(1);
   });
 
+  it("does not send a rename that changes nothing", async () => {
+    const fns = setup([row({})]);
+    await userEvent.click(screen.getByRole("button", { name: "Rename Alpha" }));
+    await userEvent.type(screen.getByLabelText("Conversation title"), "{Enter}");
+    expect(fns.onRename).not.toHaveBeenCalled();
+  });
+
+  it("keeps Escape from reaching anything around the list", async () => {
+    const outer = vi.fn();
+    const fns = { onView: vi.fn(), onResume: vi.fn(), onRename: vi.fn(), onArchive: vi.fn() };
+    render(<div onKeyDown={outer}><ConversationList rows={[row({})]} viewingId={null} busy={false} {...fns} /></div>);
+    await userEvent.click(screen.getByRole("button", { name: "Rename Alpha" }));
+    await userEvent.type(screen.getByLabelText("Conversation title"), "{Escape}");
+    expect(outer).not.toHaveBeenCalled();
+  });
+
+  it("disables Resume while locked", () => {
+    setup([row({})], { locked: true });
+    expect(screen.getByRole("button", { name: "Resume Alpha" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Read Alpha" })).toBeEnabled();
+  });
+
   it("hides archived conversations until asked, and restores one", async () => {
     const fns = setup([row({}), row({ id: "c-b", title: "Old", archived: true })]);
     expect(screen.queryByText("Old")).toBeNull();

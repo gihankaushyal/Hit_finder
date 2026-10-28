@@ -214,5 +214,21 @@ describe("ChiefChat", () => {
       expect(await screen.findByText(/can be read but not continued/)).toBeInTheDocument();
       expect(screen.queryByRole("button", { name: "Resume this conversation" })).toBeNull();
     });
+
+    it("will not switch conversations while the chief is working", async () => {
+      mockApi({ ...base(), "GET /api/chief": chief({ conversationId: "c-now", state: "running" }), [OLD_EVENTS]: log([]) });
+      render(<ChiefChat />);
+      await userEvent.click(await screen.findByRole("button", { name: "Conversations" }));
+      expect(await screen.findByRole("button", { name: "Resume Old topic" })).toBeDisabled();
+      await userEvent.click(screen.getByRole("button", { name: "Read Old topic" }));
+      expect(await screen.findByRole("button", { name: "Resume this conversation" })).toBeDisabled();
+    });
+
+    it("lists nothing to read when the conversations could not be loaded", async () => {
+      mockApi({ "GET /api/chief": chief({ conversationId: "c-now" }), [EVENTS]: log([]), [OLD_EVENTS]: log([]) });
+      render(<ChiefChat />);
+      await userEvent.click(await screen.findByRole("button", { name: "Conversations" }));
+      expect(screen.queryByRole("button", { name: "Read Old topic" })).toBeNull(); // the list could not be loaded
+    });
   });
 });

@@ -24,7 +24,13 @@ export function useAgentLog(id: string, enabled: boolean): AgentLog {
 
 /** The same cursor-following read for any journal endpoint, re-reading when `resource` is announced. */
 export function useJournal(basePath: string, resource: string, enabled: boolean): AgentLog {
-  const [state, setState] = useState<AgentLog>({ events: [], error: null, loaded: false });
+  const [held, setHeld] = useState<{ path: string; log: AgentLog }>({ path: basePath, log: { events: [], error: null, loaded: false } });
+  // What was read from another path is never shown for this one, not even for the render before the reset lands.
+  const state: AgentLog = held.path === basePath ? held.log : { events: [], error: null, loaded: false };
+  const setState = useCallback((next: AgentLog | ((s: AgentLog) => AgentLog)) => {
+    setHeld((h) => (h.path === basePath ? { path: basePath, log: typeof next === "function" ? next(h.log) : next } : h));
+  }, [basePath]);
+  const generation = useRef(0);
   const cursor = useRef(0);
   const conv = useRef<string | null>(null);
   const busy = useRef(false);
@@ -37,11 +43,13 @@ export function useJournal(basePath: string, resource: string, enabled: boolean)
       return;
     }
     busy.current = true;
+    const mine = generation.current;
+    const stale = () => !live.current || generation.current !== mine;
     try {
       for (;;) {
         again.current = false;
         const res = await apiGet<AgentEventsResponse>(`${basePath}?after=${cursor.current}&limit=${PAGE}`);
-        if (!live.current) return;
+        if (stale()) return; // the path changed while this was in flight: its answer belongs to another log
         const switched = res.conversationId !== undefined && conv.current !== null && res.conversationId !== conv.current;
         if (res.conversationId !== undefined) conv.current = res.conversationId;
         if (switched || res.lastSeq < cursor.current) {
@@ -59,17 +67,20 @@ export function useJournal(basePath: string, resource: string, enabled: boolean)
         if (res.events.length < PAGE && !again.current) return;
       }
     } catch (err) {
-      if (live.current) setState((s) => ({ ...s, error: err instanceof ApiError ? err.message : "Could not load the log.", loaded: true }));
+      if (!stale()) setState((s) => ({ ...s, error: err instanceof ApiError ? err.message : "Could not load the log.", loaded: true }));
     } finally {
-      busy.current = false;
+      if (generation.current === mine) busy.current = false;
     }
-  }, [basePath]);
+  }, [basePath, setState]);
 
   useEffect(() => {
     live.current = true;
+    generation.current++; // abandons any fetch still running for the previous path
+    busy.current = false;
+    again.current = false;
     cursor.current = 0;
     conv.current = null;
-    setState({ events: [], error: null, loaded: false });
+    setHeld({ path: basePath, log: { events: [], error: null, loaded: false } });
     if (!enabled) return;
     void fetchMore();
     const off = subscribe({ resource, reload: () => void fetchMore() });

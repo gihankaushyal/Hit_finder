@@ -11,6 +11,8 @@ export interface ConversationListProps {
   /** The parked conversation whose log is open in the panel, if any. */
   viewingId: string | null;
   busy: boolean;
+  /** Switching conversations ends the current turn, so Resume waits until the chief is not working. */
+  locked?: boolean;
   onView: (id: string) => void;
   onResume: (id: string) => void;
   onRename: (id: string, title: string) => void;
@@ -27,13 +29,16 @@ export function ConversationList(p: ConversationListProps) {
   const commit = (id: string) => {
     const title = draft.trim();
     setEditing(null);
-    if (title) p.onRename(id, title);
+    if (title && title !== (p.rows.find((r) => r.id === id)?.title ?? null)) p.onRename(id, title);
   };
   const onKey = (e: KeyboardEvent<HTMLInputElement>, id: string) => {
     if (e.key === "Enter") {
       e.preventDefault();
       commit(id);
-    } else if (e.key === "Escape") setEditing(null);
+    } else if (e.key === "Escape") {
+      e.stopPropagation(); // cancelling an edit must not also close the drawer around the list
+      setEditing(null);
+    }
   };
 
   return (
@@ -67,7 +72,7 @@ export function ConversationList(p: ConversationListProps) {
             {r.readOnly && <span className="convs__badge">Read-only</span>}
             <span className="convs__actions">
               {!r.active && <button type="button" className="btn btn--quiet" aria-label={`Read ${label(r)}`} disabled={p.busy} onClick={() => p.onView(r.id)}>Read</button>}
-              {!r.active && !r.readOnly && <button type="button" className="btn btn--quiet" aria-label={`Resume ${label(r)}`} disabled={p.busy} onClick={() => p.onResume(r.id)}>Resume</button>}
+              {!r.active && !r.readOnly && <button type="button" className="btn btn--quiet" aria-label={`Resume ${label(r)}`} disabled={p.busy || p.locked} title={p.locked ? "Stop the chief of staff first: switching ends its current turn." : undefined} onClick={() => p.onResume(r.id)}>Resume</button>}
               <button type="button" className="btn btn--quiet" aria-label={`Rename ${label(r)}`} disabled={p.busy} onMouseDown={(e) => e.preventDefault()} onClick={() => { setEditing(r.id); setDraft(r.title ?? ""); }}>Rename</button>
               {!r.active && <button type="button" className="btn btn--quiet" aria-label={`${r.archived ? "Restore" : "Archive"} ${label(r)}`} disabled={p.busy} onClick={() => p.onArchive(r.id, !r.archived)}>{r.archived ? "Restore" : "Archive"}</button>}
             </span>
