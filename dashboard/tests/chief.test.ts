@@ -336,6 +336,7 @@ describe("conversations", () => {
   it("keeps the conversation if the active pointer is lost", async () => {
     await chief.send("keep me");
     await waitState("idle");
+    await chief.stop(); // the save queued by the last state change must land before the files are edited
     const saved = chief.summary();
     const file = path.join(cfg.stateDir, "chief", "index.json");
     const index = JSON.parse(fs.readFileSync(file, "utf8"));
@@ -353,6 +354,7 @@ describe("conversations", () => {
   it("starts a new conversation if the pointer is lost and the only one cannot be continued", async () => {
     await chief.send("old one");
     await waitState("idle");
+    await chief.stop(); // the save queued by the last state change must land before the files are edited
     const saved = chief.summary();
     const file = path.join(cfg.stateDir, "chief", "index.json");
     const index = JSON.parse(fs.readFileSync(file, "utf8"));
@@ -493,6 +495,7 @@ describe("conversations", () => {
   it("keeps each conversation's session id in its own folder and survives losing every index file", async () => {
     await chief.send("alpha");
     await waitState("idle");
+    await chief.stop();
     const alpha = chief.summary();
     const dir = path.join(cfg.stateDir, "chief");
     expect(alpha.sessionId).not.toBeNull();

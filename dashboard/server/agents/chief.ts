@@ -358,7 +358,11 @@ export function createChief(deps: ChiefDeps): Chief {
       });
     },
 
-    stop: () => serial(stopNow),
+    stop: () =>
+      serial(async () => {
+        await stopNow();
+        await writes; // once stopped, what was counted is on disk
+      }),
 
     reset: () =>
       serial(async () => {
