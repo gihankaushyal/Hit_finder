@@ -237,6 +237,7 @@ describe("ChiefChat", () => {
       await userEvent.click(await screen.findByRole("button", { name: "Read Old topic" }));
       expect(await screen.findByText(/can be read but not continued/)).toBeInTheDocument();
       expect(screen.queryByRole("button", { name: "Resume this conversation" })).toBeNull();
+      expect(screen.getByRole("button", { name: "Continue in a new conversation" })).toBeInTheDocument();
     });
 
     it("will not switch conversations while the chief is working", async () => {
@@ -260,6 +261,35 @@ describe("ChiefChat", () => {
       render(<ChiefChat />);
       await userEvent.click(await screen.findByRole("button", { name: "Conversations" }));
       expect(screen.queryByRole("button", { name: "Resume this conversation" })).toBeNull();
+    });
+
+    it("offers to continue a read-only conversation in a new one", async () => {
+      const api = mockApi({
+        ...base(),
+        "GET /api/chief/conversations": convs([NOW, info({ readOnly: "expired" })]),
+        [OLD_EVENTS]: log([]),
+        "POST /api/chief/conversations/c-old/continue": { body: { ok: true } },
+      });
+      render(<ChiefChat />);
+      await userEvent.click(await screen.findByRole("button", { name: "Conversations" }));
+      await userEvent.click(await screen.findByRole("button", { name: "Read Old topic" }));
+      await userEvent.click(await screen.findByRole("button", { name: "Continue in a new conversation" }));
+      await waitFor(() => expect(api.count("POST", "/api/chief/conversations/c-old/continue")).toBe(1));
+      expect(await screen.findByLabelText("Message to the chief of staff")).toBeInTheDocument();
+    });
+
+    it("replaces the composer on the current conversation when its session has expired", async () => {
+      const api = mockApi({
+        "GET /api/chief": chief({ conversationId: "c-now", readOnly: "expired", turns: 2 }),
+        [EVENTS]: log([ev(1, { kind: "user", text: "last thing" })]),
+        "GET /api/chief/conversations": convs([{ ...NOW, readOnly: "expired" }]),
+        "POST /api/chief/conversations/c-now/continue": { body: { ok: true } },
+      });
+      render(<ChiefChat />);
+      expect(await screen.findByText(/can be read but not continued/)).toBeInTheDocument();
+      expect(screen.queryByLabelText("Message to the chief of staff")).toBeNull();
+      await userEvent.click(screen.getByRole("button", { name: "Continue in a new conversation" }));
+      await waitFor(() => expect(api.count("POST", "/api/chief/conversations/c-now/continue")).toBe(1));
     });
   });
 });

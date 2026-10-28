@@ -179,6 +179,10 @@ export function ChiefChat() {
     }
   }
 
+  async function continueFrom(id: string) {
+    if (await post(`/api/chief/conversations/${encodeURIComponent(id)}/continue`)) setViewId(null);
+  }
+
   async function send(ev?: FormEvent) {
     ev?.preventDefault();
     if (!text.trim() || busy) return;
@@ -250,6 +254,7 @@ export function ChiefChat() {
           <span>{frozen ? "This conversation can be read but not continued." : "You are reading an earlier conversation."}</span>
           {viewing && !shown && <span className="dim">{details.failed ? "Its details could not be loaded, so it cannot be resumed yet." : "Checking whether it can be resumed…"}</span>}
           {viewing && shown && !frozen && <button type="button" className="btn btn--primary" disabled={busy || working} title={working ? "Stop the chief of staff first: switching ends its current turn." : undefined} onClick={() => void resume(viewing)}>Resume this conversation</button>}
+          {frozen && <button type="button" className="btn btn--primary" disabled={busy} onClick={() => void continueFrom(viewing ?? s?.conversationId ?? "")}>Continue in a new conversation</button>}
           {viewing && <button type="button" className="btn btn--quiet" onClick={() => setViewId(null)}>Back to current</button>}
         </div>
       ) : (

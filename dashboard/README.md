@@ -189,7 +189,11 @@ wait on an approval card that shows the exact arguments, so a spawned worker or 
 after you approve it. Kanban changes before the first import report the usual "not imported" message. The
 conversation is kept on disk (`dashboard/.state/chief/`) and resumed after a stop, a crash or a restart.
 **New conversation** parks it instead of discarding it; **Conversations** lists every conversation (title, date, turns,
-cost) so you can read an old one, resume it, rename it or archive it. The tool server runs inside the dashboard process (no extra port) and works under
+cost) so you can read an old one, resume it, rename it or archive it. A conversation's saved session (the SDK keeps
+transcripts for 30 days by default) can disappear; such a conversation turns read-only and offers **Continue in a new
+conversation**, which starts a fresh session whose first prompt carries a digest of the old one. Conversations idle for
+`DASH_CHIEF_ARCHIVE_DAYS` (default 30; `0` = never) are archived automatically; set `DASH_CHIEF_PURGE_DAYS` (default `0`
+= never) to also delete archived ones after that long. The tool server runs inside the dashboard process (no extra port) and works under
 the same safe mode and sandbox as the workers; the sandbox hides `dashboard/.state`.
 
 Limits and caveats:
@@ -246,6 +250,8 @@ on another local port works), which blocks DNS-rebinding pages.
 | `DASH_AGENT_MAX_TURNS` | `60` | Turn limit per agent session, 1 to 500 |
 | `DASH_WORKER_MODEL` | `sonnet` | Model for worker agents |
 | `DASH_CHIEF_MODEL` | `opus` | Model for the chief of staff |
+| `DASH_CHIEF_ARCHIVE_DAYS` | `30` | Archive chief conversations idle this many days (`0` = never) |
+| `DASH_CHIEF_PURGE_DAYS` | `0` | Delete archived chief conversations idle this many days (`0` = never) |
 | `DASH_CLAUDE_BIN` | `claude` | Claude Code binary the agents drive |
 | `DASH_AGENT_DRIVER` | `sdk` | `sdk` (real) or `fake` (scripted, for tests) |
 | `DASH_TERMINAL` | `on` | `off` switches the terminal off |
