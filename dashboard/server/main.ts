@@ -78,6 +78,8 @@ const chief = createChief({
   approvals,
   tools: createChiefTools({ supervisor: agents, kanban }),
   env: process.env,
+  // The fake driver's sessions have no transcript on disk, so they must not be mistaken for expired ones.
+  transcriptExists: config.agentDriver === "fake" ? async () => true : undefined,
 });
 const terminal = createTerminal({ cfg: config, env: process.env });
 const app = buildServer({ config, token, bus, gh, tests, kanban, runner: execRunner, runs, agents, approvals, chief, terminal });

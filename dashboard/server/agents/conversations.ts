@@ -292,3 +292,27 @@ export async function rebuildRegistry(dir: string, nowIso: string): Promise<Regi
   await fs.rename(oldMeta, `${oldMeta}.migrated`).catch(() => undefined);
   return reg;
 }
+
+export const DIGEST_MAX_CHARS = 8000;
+
+/**
+ * What an earlier conversation said, as plain text for the first prompt of a new one: the owner's messages and
+ * the chief's replies only (never tool output), newest kept when it is too long.
+ */
+export function buildDigest(events: AgentEvent[], maxChars: number = DIGEST_MAX_CHARS): string {
+  const lines: string[] = [];
+  for (const e of events) {
+    if (e.kind === "user") lines.push(`Owner: ${e.text}`);
+    else if (e.kind === "text") lines.push(`Chief: ${e.text}`);
+  }
+  let out = "";
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const next = out ? `${lines[i]}\n${out}` : lines[i];
+    if (next.length > maxChars) {
+      if (!out) out = lines[i].slice(-maxChars);
+      break;
+    }
+    out = next;
+  }
+  return out;
+}

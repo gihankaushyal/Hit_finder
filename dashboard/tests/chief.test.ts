@@ -690,6 +690,31 @@ describe("conversations", () => {
   });
 });
 
+describe("continuing in a new conversation", () => {
+  it("continues in a new conversation: the first prompt carries what was said, once", async () => {
+    await chief.send("we agreed on Tuesday");
+    await waitState("idle");
+    const src = chief.summary().conversationId;
+    await chief.continueFrom(src);
+    expect(chief.summary()).toMatchObject({ turns: 0, sessionId: null, title: null });
+    expect(chief.conversations().find((c) => c.active)).toMatchObject({ seededFrom: src });
+    const before = starts.length;
+    await chief.send("what did we agree?");
+    await waitState("idle");
+    expect(starts[before].prompt).toContain("we agreed on Tuesday");
+    expect(starts[before].prompt).toContain("The owner says:\nwhat did we agree?");
+    expect(starts[before].resume).toBeUndefined();
+    await chief.send("and next?");
+    await waitState("idle");
+    expect(starts).toHaveLength(before + 1); // later messages go to the live session, not a new prompt
+  });
+
+  it("refuses to continue from an unknown or empty conversation", async () => {
+    await expect(chief.continueFrom("c-nope")).rejects.toMatchObject({ code: "not-found" });
+    await expect(chief.continueFrom(chief.summary().conversationId)).rejects.toMatchObject({ code: "invalid" });
+  });
+});
+
 describe("a conversation whose session is gone", () => {
   const gone = { transcriptExists: async () => false };
 

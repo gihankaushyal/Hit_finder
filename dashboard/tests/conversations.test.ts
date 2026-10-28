@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { readJournalFile } from "../server/agents/journal";
 import {
-  ACTIVE_LEGACY_ID, adoptEntries, autoTitle, sweepTempFiles, blankEntry, cleanTitle, isEmptyConv, pickContinuable, CONV_ID, journalPath, loadRegistry, newConvId, rebuildRegistry, saveRegistry, statsOf,
+  ACTIVE_LEGACY_ID, adoptEntries, autoTitle, buildDigest, sweepTempFiles, blankEntry, cleanTitle, isEmptyConv, pickContinuable, CONV_ID, journalPath, loadRegistry, newConvId, rebuildRegistry, saveRegistry, statsOf,
   type Registry,
 } from "../server/agents/conversations";
 
@@ -290,5 +290,27 @@ describe("small helpers", () => {
     const convs = { "c-a": at("c-a", "2026-10-01T00:00:00.000Z"), "c-b": at("c-b", "2026-10-03T00:00:00.000Z", { archived: true }), "c-c": at("c-c", "2026-10-02T00:00:00.000Z") };
     expect(pickContinuable(convs)?.id).toBe("c-c");
     expect(pickContinuable({})).toBeUndefined();
+  });
+});
+
+describe("buildDigest", () => {
+  const ev = (seq: number, kind: string, text: string) => ({ kind, text, seq, at: "2026-10-20T08:00:00.000Z" }) as Parameters<typeof buildDigest>[0][number];
+
+  it("keeps the words of both sides in order and leaves out tool noise", () => {
+    const events = [ev(1, "user", "list workers"), { kind: "tool-use", tool: "t", toolUseId: "1", input: {}, seq: 2, at: "x" } as never, ev(3, "text", "None running.")];
+    expect(buildDigest(events)).toBe("Owner: list workers\nChief: None running.");
+  });
+
+  it("keeps the newest turns when over the cap, never splitting a line", () => {
+    const events = [ev(1, "user", "a".repeat(30)), ev(2, "text", "b".repeat(30)), ev(3, "user", "c".repeat(30))];
+    expect(buildDigest(events, 50)).toBe(`Owner: ${"c".repeat(30)}`);
+  });
+
+  it("keeps the tail of a single line that is longer than the cap", () => {
+    expect(buildDigest([ev(1, "user", "x".repeat(100))], 20)).toHaveLength(20);
+  });
+
+  it("is empty when nobody said anything", () => {
+    expect(buildDigest([])).toBe("");
   });
 });

@@ -6,7 +6,7 @@ import type { Config } from "../config";
 import type { EventBus } from "../events";
 import type { Approvals } from "./approvals";
 import type { AgentDriver, Session, SessionStart, ToolDef } from "./driver";
-import { adoptEntries, autoTitle, blankEntry, cleanTitle, convDir, isEmptyConv, journalPath, loadRegistry, newConvId, pickContinuable, rebuildRegistry, saveRegistry, sweepTempFiles, TITLE_EDIT_MAX, type ConvEntry, type Registry, type WriteMemo } from "./conversations";
+import { adoptEntries, autoTitle, blankEntry, buildDigest, cleanTitle, convDir, isEmptyConv, journalPath, loadRegistry, newConvId, pickContinuable, rebuildRegistry, saveRegistry, sweepTempFiles, TITLE_EDIT_MAX, type ConvEntry, type Registry, type WriteMemo } from "./conversations";
 import { eventsAfter, openJournal, readJournalFile, type Journal } from "./journal";
 import { createTranscriptProbe, type TranscriptProbe } from "./transcripts";
 import { chiefOptions } from "./policy";
@@ -23,6 +23,7 @@ const ACTIVE: AgentState[] = ["running", "waiting-approval", "idle"];
 const STARTING_MESSAGE = "The chief of staff is still starting. Try again in a moment.";
 const NO_ACTIVE_MESSAGE = "There is no active conversation. Start a new one.";
 const SAVE_FAILED_MESSAGE = "The change could not be saved. Check the disk and try again.";
+const SEED_INTRO = "Context from an earlier conversation with the owner (a digest, not the full record):";
 const NOT_FOUND_MESSAGE = "That conversation does not exist.";
 export const EXPIRED_MESSAGE = "The saved session for this conversation has expired. You can read it, or continue in a new conversation.";
 /** What the SDK says when asked to resume a session it no longer has (checked by hand against the real SDK). */
@@ -44,6 +45,8 @@ export interface Chief {
   stop(): Promise<void>;
   /** Park the conversation and start a new one. The parked one stays on disk, with its session id. */
   reset(): Promise<void>;
+  /** Start a new conversation whose first prompt carries what an earlier one said. */
+  continueFrom(id: string): Promise<void>;
   events(after: number, limit: number): Promise<AgentEventsResponse>;
   /** Every conversation, newest first. */
   conversations(): ConversationInfo[];
@@ -203,6 +206,25 @@ export function createChief(deps: ChiefDeps): Chief {
     const e = peek();
     return e && isEmptyConv(e) ? e.id : null;
   }
+  /** Park the active conversation and open a new one, optionally seeded from another. The caller holds `serial`. */
+  async function startNew(seededFrom: string | null): Promise<void> {
+    const dropped = await park();
+    try {
+      const id = newConvId(Date.now());
+      reg.convs[id] = blankEntry(id, new Date().toISOString(), seededFrom);
+      try {
+        await activate(id, dropped);
+      } catch (err) {
+        delete reg.convs[id]; // never became active: no blank entry is left behind
+        throw err;
+      }
+      const from = seededFrom ? find(seededFrom)?.title : null;
+      await j().append({ kind: "state", state: "idle", detail: seededFrom ? `Continued from “${from ?? "an earlier conversation"}”` : "New conversation" });
+    } finally {
+      await settle(dropped);
+    }
+    notify();
+  }
   const discard = async (id: string | null): Promise<void> => {
     if (id) await fs.rm(convDir(dir, id), { recursive: true, force: true });
   };
@@ -243,8 +265,17 @@ export function createChief(deps: ChiefDeps): Chief {
     if (session === s) session = null;
   }
 
+  /** The digest to put before the first prompt of a conversation that was started from another one. */
+  const seedText = async (): Promise<string> => {
+    const from = active().seededFrom;
+    if (!from || !find(from) || meta.turns > 0) return "";
+    const digest = buildDigest(await readJournalFile(journalPath(dir, from)));
+    return digest ? `${SEED_INTRO}\n${digest}\n\n` : "";
+  };
+
   async function startSession(prompt: string): Promise<void> {
     const resume = meta.sessionId ?? undefined;
+    const seed = resume ? "" : await seedText();
     const myGen = ++gen;
     const current = () => gen === myGen;
     // A real session announces itself (its `init`) before anything else; a resume that never does could not be opened.
@@ -255,7 +286,7 @@ export function createChief(deps: ChiefDeps): Chief {
       handler: async (a) => (stopping || !current() ? { text: "Cancelled: the chief of staff was stopped.", isError: true } : t.handler(a)),
     });
     const start: SessionStart = {
-      prompt: resume ? prompt : `${chiefPrompt(cfg.repoRoot)}\n\nThe owner says:\n${prompt}`,
+      prompt: resume ? prompt : `${chiefPrompt(cfg.repoRoot)}\n\n${seed}The owner says:\n${prompt}`,
       resume,
       claudeBin: cfg.claudeBin,
       options: chiefOptions(cfg, { cwd: sandboxDir, env: deps.env }),
@@ -409,23 +440,13 @@ export function createChief(deps: ChiefDeps): Chief {
         await writes; // once stopped, what was counted is on disk
       }),
 
-    reset: () =>
+    reset: () => serial(() => startNew(null)),
+
+    continueFrom: (id) =>
       serial(async () => {
-        const dropped = await park();
-        try {
-          const id = newConvId(Date.now());
-          reg.convs[id] = blankEntry(id, new Date().toISOString());
-          try {
-            await activate(id, dropped);
-          } catch (err) {
-            delete reg.convs[id]; // never became active: no blank entry is left behind
-            throw err;
-          }
-          await j().append({ kind: "state", state: "idle", detail: "New conversation" });
-        } finally {
-          await settle(dropped);
-        }
-        notify();
+        if (!find(id)) throw new AgentError("not-found", NOT_FOUND_MESSAGE);
+        if (!buildDigest(await readJournalFile(journalPath(dir, id)))) throw new AgentError("invalid", "That conversation has nothing to continue from.");
+        await startNew(id);
       }),
 
     conversations() {

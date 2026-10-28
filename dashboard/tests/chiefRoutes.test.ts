@@ -144,4 +144,13 @@ describe("conversation routes", () => {
     expect((await patch(`/api/chief/conversations/${id}`, { archived: true })).status).toBe(409);
     expect((await get(`/api/chief/conversations/${id}/events?after=-1`)).status).toBe(400);
   });
+
+  it("continues in a new conversation seeded from an earlier one", async () => {
+    await post("/api/chief/message", { text: "seed words" });
+    await until(() => rig.chief.summary().turns === 1 || undefined);
+    const src = rig.chief.summary().conversationId;
+    expect((await post(`/api/chief/conversations/${src}/continue`)).status).toBe(200);
+    expect((await list()).find((r) => r.active)).toMatchObject({ seededFrom: src });
+    expect((await post("/api/chief/conversations/c-nope/continue")).status).toBe(404);
+  });
 });
