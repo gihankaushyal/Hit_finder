@@ -221,7 +221,7 @@ describe("robustness", () => {
   it("answers safely before init has finished", async () => {
     const early = build();
     expect(early.summary()).toMatchObject({ state: "idle", lastSeq: 0 });
-    expect(await early.events(0, 10)).toEqual({ events: [], lastSeq: 0 });
+    expect(await early.events(0, 10)).toEqual({ events: [], lastSeq: 0, conversationId: "" });
     await expect(early.send("hi")).rejects.toMatchObject({ code: "state" });
   });
 
@@ -592,5 +592,75 @@ describe("conversations", () => {
     const first = await chief.eventsFor(alpha, 0, 100);
     expect(await chief.eventsFor(alpha, 0, 100)).toEqual(first);
     expect((await chief.eventsFor(alpha, first.lastSeq, 100)).events).toEqual([]);
+  });
+  it("names the conversation in every log answer, so a reader can tell when it changed", async () => {
+    await chief.send("alpha");
+    await waitState("idle");
+    const alpha = chief.summary().conversationId;
+    expect((await chief.events(0, 100)).conversationId).toBe(alpha);
+    await chief.reset();
+    const second = chief.summary().conversationId;
+    expect((await chief.events(0, 100)).conversationId).toBe(second);
+    expect((await chief.eventsFor(alpha, 0, 100)).conversationId).toBe(alpha);
+  });
+
+  it("keeps the dropped empty conversation's folder when the switch could not be saved", async () => {
+    const first = chief.summary().conversationId;
+    const file = path.join(cfg.stateDir, "chief", "index.json");
+    fs.rmSync(file);
+    fs.mkdirSync(file); // every save fails
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    await expect(chief.reset()).rejects.toMatchObject({ code: "state" });
+    log.mockRestore();
+    expect(fs.existsSync(path.join(cfg.stateDir, "chief", "conv", first))).toBe(true);
+  });
+
+  it("clears the live counters of the conversation it left when the next one cannot be opened", async () => {
+    await chief.send("alpha");
+    await waitState("idle");
+    const alpha = chief.summary().conversationId;
+    await chief.reset();
+    await chief.send("beta");
+    await waitState("idle");
+    const beta = chief.summary().conversationId;
+    expect(chief.summary()).toMatchObject({ turns: 1 });
+    fs.rmSync(path.join(cfg.stateDir, "chief", "conv", alpha), { recursive: true });
+    fs.writeFileSync(path.join(cfg.stateDir, "chief", "conv", alpha), "x"); // alpha's journal cannot be opened
+    await expect(chief.resume(alpha)).rejects.toThrow();
+    expect(chief.summary()).toMatchObject({ conversationId: "", turns: 0, costUsd: null, sessionId: null, state: "idle" });
+    expect(chief.conversations().find((c) => c.id === beta)).toMatchObject({ turns: 1, active: false }); // beta itself is safe
+  });
+
+  it("puts the old title back on disk when a rename could not be saved", async () => {
+    await chief.send("alpha");
+    await waitState("idle");
+    const alpha = chief.summary().conversationId;
+    await chief.reset();
+    const file = path.join(cfg.stateDir, "chief", "index.json");
+    fs.rmSync(file);
+    fs.mkdirSync(file);
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    await expect(chief.patch(alpha, { title: "Renamed" })).rejects.toMatchObject({ code: "state" });
+    log.mockRestore();
+    const saved = JSON.parse(fs.readFileSync(path.join(cfg.stateDir, "chief", "conv", alpha, "entry.json"), "utf8"));
+    expect(saved.title).toBe("alpha");
+  });
+
+  it("gives no title to a first message with nothing printable in it", async () => {
+    await chief.send("\u0001\u0002");
+    await waitState("idle");
+    expect(chief.summary().title).toBeNull();
+  });
+
+  it("clears temp files a killed process left when it starts", async () => {
+    await chief.stop();
+    const dir = path.join(cfg.stateDir, "chief");
+    const id = chief.summary().conversationId;
+    fs.writeFileSync(path.join(dir, "index.json.99999.tmp"), "x");
+    fs.writeFileSync(path.join(dir, "conv", id, "entry.json.99999.tmp"), "x");
+    const again = build();
+    await again.init();
+    expect(fs.existsSync(path.join(dir, "index.json.99999.tmp"))).toBe(false);
+    expect(fs.existsSync(path.join(dir, "conv", id, "entry.json.99999.tmp"))).toBe(false);
   });
 });

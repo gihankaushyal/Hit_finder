@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { readJournalFile } from "../server/agents/journal";
 import {
-  ACTIVE_LEGACY_ID, adoptEntries, autoTitle, blankEntry, cleanTitle, isEmptyConv, pickContinuable, CONV_ID, journalPath, loadRegistry, newConvId, rebuildRegistry, saveRegistry, statsOf,
+  ACTIVE_LEGACY_ID, adoptEntries, autoTitle, sweepTempFiles, blankEntry, cleanTitle, isEmptyConv, pickContinuable, CONV_ID, journalPath, loadRegistry, newConvId, rebuildRegistry, saveRegistry, statsOf,
   type Registry,
 } from "../server/agents/conversations";
 
@@ -46,6 +46,26 @@ describe("ids and titles", () => {
     const long = autoTitle("x".repeat(100));
     expect(long).toHaveLength(61);
     expect(long.endsWith("…")).toBe(true);
+  });
+
+  it("cuts a title by code point and gives no title for text with nothing printable", () => {
+    const emoji = autoTitle("😀".repeat(70));
+    expect([...emoji]).toHaveLength(61);
+    expect(emoji).not.toMatch(/[\ud800-\udbff](?![\udc00-\udfff])/); // no lone surrogate
+    expect(autoTitle("\u0001\u0002 \n")).toBe("");
+  });
+
+  it("removes temp files a killed process left, but not this process's own", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dash-sweep-"));
+    fs.mkdirSync(path.join(dir, "conv", "c-a"), { recursive: true });
+    fs.writeFileSync(path.join(dir, "index.json.99999.tmp"), "x");
+    fs.writeFileSync(path.join(dir, "conv", "c-a", "entry.json.99999.tmp"), "x");
+    fs.writeFileSync(path.join(dir, "conv", "c-a", `entry.json.${process.pid}.tmp`), "x");
+    fs.writeFileSync(path.join(dir, "index.json"), "{}");
+    await sweepTempFiles(dir);
+    expect(fs.readdirSync(dir).sort()).toEqual(["conv", "index.json"]);
+    expect(fs.readdirSync(path.join(dir, "conv", "c-a"))).toEqual([`entry.json.${process.pid}.tmp`]);
+    fs.rmSync(dir, { recursive: true, force: true });
   });
 });
 

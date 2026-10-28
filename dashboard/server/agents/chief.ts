@@ -6,7 +6,7 @@ import type { Config } from "../config";
 import type { EventBus } from "../events";
 import type { Approvals } from "./approvals";
 import type { AgentDriver, Session, SessionStart, ToolDef } from "./driver";
-import { adoptEntries, autoTitle, blankEntry, cleanTitle, convDir, isEmptyConv, journalPath, loadRegistry, newConvId, pickContinuable, rebuildRegistry, saveRegistry, TITLE_EDIT_MAX, type ConvEntry, type Registry } from "./conversations";
+import { adoptEntries, autoTitle, blankEntry, cleanTitle, convDir, isEmptyConv, journalPath, loadRegistry, newConvId, pickContinuable, rebuildRegistry, saveRegistry, sweepTempFiles, TITLE_EDIT_MAX, type ConvEntry, type Registry, type WriteMemo } from "./conversations";
 import { eventsAfter, openJournal, readJournalFile, type Journal } from "./journal";
 import { chiefOptions } from "./policy";
 import { chiefPrompt } from "./rolePrompts";
@@ -84,6 +84,7 @@ export function createChief(deps: ChiefDeps): Chief {
   let writes: Promise<void> = Promise.resolve();
   let lock: Promise<unknown> = Promise.resolve();
   let ready = false;
+  const memo: WriteMemo = {};
   /** The last parked journal read, reused while the file is unchanged (a panel polls it). */
   let parked: { id: string; key: string; all: AgentEvent[] } | null = null;
 
@@ -118,7 +119,7 @@ export function createChief(deps: ChiefDeps): Chief {
   const persist = (bump = true, ...also: string[]): Promise<void> => {
     const run = writes.then(async () => {
       syncEntry(bump);
-      await saveRegistry(dir, reg, [...new Set([reg.active, ...also])]);
+      await saveRegistry(dir, reg, [...new Set([reg.active, ...also])], memo);
     });
     writes = run.catch((err) => {
       console.error("chief index write failed", (err as NodeJS.ErrnoException).code ?? "error");
@@ -168,6 +169,8 @@ export function createChief(deps: ChiefDeps): Chief {
       journal = null;
       reg.active = "";
       if (drop) delete reg.convs[drop];
+      // Nothing of the conversation that was active may linger in the live counters.
+      Object.assign(meta, { state: "idle", turns: 0, costUsd: null, sessionId: null, error: null });
       throw err;
     }
     reg.active = id;
@@ -196,18 +199,15 @@ export function createChief(deps: ChiefDeps): Chief {
   const discard = async (id: string | null): Promise<void> => {
     if (id) await fs.rm(convDir(dir, id), { recursive: true, force: true });
   };
-  /** End of a switch: the new registry is on disk before the dropped conversation's folder goes. */
+  /** End of a switch: the new registry is on disk before the dropped conversation's folder goes (and only then). */
   async function settle(dropped: string | null): Promise<void> {
-    try {
-      await save();
-    } finally {
-      await discard(dropped);
-    }
+    await save(); // if this fails the folder stays: the next start finds it and clears it as a leftover
+    await discard(dropped);
   }
 
   const activeEvents = async (after: number, limit: number): Promise<AgentEventsResponse> => {
-    if (!journal) return { events: [], lastSeq: 0 };
-    return { events: await journal.read(after, limit), lastSeq: journal.lastSeq() };
+    if (!journal) return { events: [], lastSeq: 0, conversationId: reg.active };
+    return { events: await journal.read(after, limit), lastSeq: journal.lastSeq(), conversationId: reg.active };
   };
 
   async function startSession(prompt: string): Promise<void> {
@@ -303,6 +303,7 @@ export function createChief(deps: ChiefDeps): Chief {
   return {
     async init() {
       await fs.mkdir(dir, { recursive: true });
+      await sweepTempFiles(dir);
       const loaded = await loadRegistry(dir);
       if (loaded) await adoptEntries(dir, loaded.convs); // a rebuilt registry has adopted them already
       reg = loaded ?? (await rebuildRegistry(dir, new Date().toISOString()));
@@ -318,7 +319,7 @@ export function createChief(deps: ChiefDeps): Chief {
       for (const c of leftovers) delete reg.convs[c.id];
       // No session survives a restart; the conversation is resumed from its id on the next message.
       await activate(reg.active);
-      await saveRegistry(dir, reg, Object.keys(reg.convs));
+      await saveRegistry(dir, reg, Object.keys(reg.convs), memo);
       for (const c of leftovers) await discard(c.id);
       ready = true;
     },
@@ -337,7 +338,7 @@ export function createChief(deps: ChiefDeps): Chief {
         const conv = active();
         if (conv.readOnly) throw new AgentError("state", READONLY_MESSAGE);
         await jr.append({ kind: "user", text });
-        if (!conv.titleManual && conv.title === null) conv.title = autoTitle(text);
+        if (!conv.titleManual && conv.title === null) conv.title = autoTitle(text) || null; // all control characters: no title
         touch(); // a message is activity: it bumps updatedAt
         const live = session;
         if (live && ACTIVE.includes(meta.state)) {
@@ -360,7 +361,12 @@ export function createChief(deps: ChiefDeps): Chief {
         try {
           const id = newConvId(Date.now());
           reg.convs[id] = blankEntry(id, new Date().toISOString());
-          await activate(id, dropped);
+          try {
+            await activate(id, dropped);
+          } catch (err) {
+            delete reg.convs[id]; // never became active: no blank entry is left behind
+            throw err;
+          }
           await j().append({ kind: "state", state: "idle", detail: "New conversation" });
         } finally {
           await settle(dropped);
@@ -415,6 +421,8 @@ export function createChief(deps: ChiefDeps): Chief {
           await save(false, id);
         } catch (err) {
           Object.assign(target, before); // what the owner is told matches what is on disk
+          // The entry file is written before the index, so it may already hold the change: put the old one back if the disk allows.
+          await persist(false, id).catch(() => undefined);
           throw err;
         }
         notify();
@@ -428,7 +436,7 @@ export function createChief(deps: ChiefDeps): Chief {
       const key = st ? `${st.mtimeMs}:${st.size}` : "";
       if (parked?.id !== id || parked.key !== key) parked = { id, key, all: await readJournalFile(file) };
       const all = parked.all;
-      return { events: eventsAfter(all, after, limit), lastSeq: all.length > 0 ? all[all.length - 1].seq : 0 };
+      return { events: eventsAfter(all, after, limit), lastSeq: all.length > 0 ? all[all.length - 1].seq : 0, conversationId: id };
     },
 
     events: activeEvents,

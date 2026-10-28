@@ -4,6 +4,7 @@ import path from "node:path";
 import type { AgentEvent, AgentEventsResponse, AgentState, AgentSummary } from "../../shared/types";
 import type { Config } from "../config";
 import type { EventBus } from "../events";
+import { writeAtomic } from "../lib/atomicFile";
 import type { Approvals } from "./approvals";
 import type { AgentDriver, Session, SessionStart } from "./driver";
 import { openJournal, type Journal } from "./journal";
@@ -75,9 +76,7 @@ export interface SupervisorDeps {
 }
 
 async function writeMeta(dir: string, meta: Meta): Promise<void> {
-  const tmp = path.join(dir, `meta.json.${process.pid}.tmp`);
-  await fs.writeFile(tmp, JSON.stringify(meta, null, 2));
-  await fs.rename(tmp, path.join(dir, "meta.json"));
+  await writeAtomic(path.join(dir, "meta.json"), JSON.stringify(meta, null, 2));
 }
 
 export function createSupervisor(deps: SupervisorDeps): Supervisor {

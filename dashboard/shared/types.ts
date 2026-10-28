@@ -223,6 +223,8 @@ export interface AgentEventsResponse {
   events: AgentEvent[];
   /** Newest sequence number in the journal, so the browser knows when it has everything. */
   lastSeq: number;
+  /** Set for the chief of staff's log: which conversation these entries belong to, so a reader can tell when it changed. */
+  conversationId?: string;
 }
 
 /** A tool call an agent wants to make that needs a human decision. */

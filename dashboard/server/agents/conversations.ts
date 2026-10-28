@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentEvent, ConversationReadOnly } from "../../shared/types";
+import { sweepTemp, writeAtomic } from "../lib/atomicFile";
 import { readJournalFile } from "./journal";
 
 /** Conversation ids become directory names, so only this shape is accepted from outside. */
@@ -57,10 +58,10 @@ export const journalPath = (dir: string, id: string): string => path.join(convDi
 // eslint-disable-next-line no-control-regex
 export const cleanTitle = (text: string): string => text.replace(/[\s\u0000-\u001f\u007f]+/g, " ").trim();
 
-/** The first message, cleaned and cut to a title. */
+/** The first message, cleaned and cut to a title; "" when nothing printable is left (callers treat that as no title). */
 export function autoTitle(text: string): string {
-  const flat = cleanTitle(text);
-  return flat.length > TITLE_MAX ? `${flat.slice(0, TITLE_MAX)}…` : flat;
+  const chars = [...cleanTitle(text)]; // by code point: a cut must not split an emoji
+  return chars.length > TITLE_MAX ? `${chars.slice(0, TITLE_MAX).join("")}…` : chars.join("");
 }
 
 /** Nothing worth keeping: never messaged, untitled, not seeded from another conversation. */
@@ -138,16 +139,23 @@ export async function loadRegistry(dir: string): Promise<Registry | null> {
   return null;
 }
 
-/** What this process last wrote to each `index.json`, with the file's stamp, to tell whether anyone else changed it. */
-const lastWritten = new Map<string, { text: string; mtimeMs: number; size: number }>();
+/**
+ * What one writer last put in `index.json`, with the file's stamp, to tell whether anyone else changed it.
+ * It belongs to the writer (the chief keeps one), not to the module: two writers on one directory must not share it.
+ */
+export interface WriteMemo {
+  last?: { text: string; mtimeMs: number; size: number };
+}
 
 const sameDay = (a: number, b: number): boolean => new Date(a).toISOString().slice(0, 10) === new Date(b).toISOString().slice(0, 10);
 
-const writeAtomic = async (file: string, text: string): Promise<void> => {
-  const tmp = `${file}.${process.pid}.tmp`;
-  await fs.writeFile(tmp, text);
-  await fs.rename(tmp, file);
-};
+/** Removes temp files that a killed process left in the state directory and in each conversation folder. */
+export async function sweepTempFiles(dir: string): Promise<void> {
+  await sweepTemp(dir);
+  for (const id of await fs.readdir(path.join(dir, "conv")).catch(() => [] as string[])) {
+    if (CONV_ID.test(id)) await sweepTemp(convDir(dir, id));
+  }
+}
 
 const entryFile = (dir: string, id: string): string => path.join(convDir(dir, id), "entry.json");
 
@@ -185,14 +193,14 @@ export async function adoptEntries(dir: string, convs: Record<string, ConvEntry>
  * `index.json.daily` (a corrupt one never replaces either). `entryIds` are the conversations that changed: their
  * `entry.json` is written first, so a crash between the two writes leaves the newer truth on disk.
  */
-export async function saveRegistry(dir: string, reg: Registry, entryIds: readonly string[] = []): Promise<void> {
+export async function saveRegistry(dir: string, reg: Registry, entryIds: readonly string[] = [], memo: WriteMemo = {}): Promise<void> {
   const file = path.join(dir, "index.json");
   for (const id of entryIds) if (Object.hasOwn(reg.convs, id)) await writeEntry(dir, reg.convs[id]);
   const text = JSON.stringify(reg, null, 2);
   let current: string | null = null;
   let valid = false;
   const st = await fs.stat(file).catch(() => null);
-  const last = lastWritten.get(dir);
+  const last = memo.last;
   if (st && last && last.mtimeMs === st.mtimeMs && last.size === st.size) {
     // The file is still exactly what this process wrote (and validated), so it is not read and parsed again.
     current = last.text;
@@ -209,7 +217,7 @@ export async function saveRegistry(dir: string, reg: Registry, entryIds: readonl
   }
   await writeAtomic(file, text);
   const after = await fs.stat(file);
-  lastWritten.set(dir, { text, mtimeMs: after.mtimeMs, size: after.size });
+  memo.last = { text, mtimeMs: after.mtimeMs, size: after.size };
 }
 
 const exists = (p: string): Promise<boolean> => fs.access(p).then(() => true, () => false);
@@ -242,7 +250,7 @@ export async function rebuildRegistry(dir: string, nowIso: string): Promise<Regi
     const stats = statsOf(await readJournalFile(activeFile));
     convs[ACTIVE_LEGACY_ID] = {
       ...blankEntry(ACTIVE_LEGACY_ID, stats.firstAt ?? nowIso),
-      title: stats.firstUser ? autoTitle(stats.firstUser) : null,
+      title: autoTitle(stats.firstUser ?? "") || null,
       updatedAt: stats.lastAt ?? nowIso,
       turns: typeof saved.turns === "number" ? saved.turns : stats.turns,
       costUsd: typeof saved.costUsd === "number" ? saved.costUsd : stats.costUsd,
@@ -261,7 +269,7 @@ export async function rebuildRegistry(dir: string, nowIso: string): Promise<Regi
     const stats = statsOf(await readJournalFile(journalPath(dir, id)));
     convs[id] = {
       ...blankEntry(id, stats.firstAt ?? nowIso),
-      title: stats.firstUser ? autoTitle(stats.firstUser) : null,
+      title: autoTitle(stats.firstUser ?? "") || null,
       updatedAt: stats.lastAt ?? nowIso,
       turns: stats.turns,
       costUsd: stats.costUsd,
