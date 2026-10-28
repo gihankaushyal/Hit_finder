@@ -26,6 +26,7 @@ export function useAgentLog(id: string, enabled: boolean): AgentLog {
 export function useJournal(basePath: string, resource: string, enabled: boolean): AgentLog {
   const [state, setState] = useState<AgentLog>({ events: [], error: null, loaded: false });
   const cursor = useRef(0);
+  const conv = useRef<string | null>(null);
   const busy = useRef(false);
   const again = useRef(false);
   const live = useRef(true);
@@ -41,8 +42,10 @@ export function useJournal(basePath: string, resource: string, enabled: boolean)
         again.current = false;
         const res = await apiGet<AgentEventsResponse>(`${basePath}?after=${cursor.current}&limit=${PAGE}`);
         if (!live.current) return;
-        if (res.lastSeq < cursor.current) {
-          // The server's log was replaced (a new conversation): forget ours and read the new one from the top.
+        const switched = res.conversationId !== undefined && conv.current !== null && res.conversationId !== conv.current;
+        if (res.conversationId !== undefined) conv.current = res.conversationId;
+        if (switched || res.lastSeq < cursor.current) {
+          // The server's log was replaced (a new or resumed conversation): forget ours and read the new one from the top.
           cursor.current = 0;
           setState({ events: [], error: null, loaded: false });
           continue;
@@ -65,6 +68,7 @@ export function useJournal(basePath: string, resource: string, enabled: boolean)
   useEffect(() => {
     live.current = true;
     cursor.current = 0;
+    conv.current = null;
     setState({ events: [], error: null, loaded: false });
     if (!enabled) return;
     void fetchMore();

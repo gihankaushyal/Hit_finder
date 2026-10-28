@@ -9,7 +9,7 @@ beforeEach(() => stubEventSource());
 afterEach(() => vi.unstubAllGlobals());
 
 const chief = (over: Partial<ChiefSummary> = {}): { body: ChiefSummary } => ({
-  body: { state: "idle", model: "opus", turns: 0, costUsd: null, sessionId: null, error: null, pendingApprovals: 0, lastSeq: 0, ...over },
+  body: { state: "idle", model: "opus", turns: 0, costUsd: null, sessionId: null, error: null, pendingApprovals: 0, lastSeq: 0, conversationId: "c-now", title: null, readOnly: null, ...over },
 });
 const ev = (seq: number, e: AgentEventBody): AgentEvent => ({ ...e, seq, at: "2026-10-20T08:01:00.000Z" });
 const log = (events: AgentEvent[]): { body: AgentEventsResponse } => ({ body: { events, lastSeq: events.length } });
@@ -60,7 +60,9 @@ describe("ChiefChat", () => {
     expect(within(region).getByText("Starting one.")).toBeInTheDocument();
     expect(within(region).getByText("spawn_worker")).toBeInTheDocument();
     expect(within(region).getByText(/"name": "docs-one"/)).toBeInTheDocument();
-    expect(within(region).getByText(/Started worker docs-one/)).toBeInTheDocument();
+    // A result is collapsed to a one-line preview in its summary, with the full text in the body below it.
+    const result = within(region).getByText("Result").closest("details") as HTMLElement;
+    expect(within(result).getAllByText(/Started worker docs-one/)).toHaveLength(2);
   });
 
   it("renders everything as text, never HTML", async () => {

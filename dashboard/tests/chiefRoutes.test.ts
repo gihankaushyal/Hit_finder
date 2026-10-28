@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { makeAgentRig, until, AUTH, AGENT_TOKEN, type AgentRig } from "./helpers/agentRig";
-import type { AgentEventsResponse, ApprovalsResponse, ChiefSummary } from "../shared/types";
+import type { AgentEventsResponse, ApprovalsResponse, ChiefSummary, ConversationsResponse } from "../shared/types";
 
 let rig: AgentRig;
 beforeEach(async () => {
@@ -81,5 +81,67 @@ describe("chief routes", () => {
     });
     expect(res.status).toBe(403);
     expect(rig.chief.summary().turns).toBe(0);
+  });
+});
+
+const patch = (url: string, body: unknown) => rig.app.request(url, { method: "PATCH", headers: AUTH, body: JSON.stringify(body) });
+const list = async (query = "") => ((await (await get(`/api/chief/conversations${query}`)).json()) as ConversationsResponse).conversations;
+
+describe("conversation routes", () => {
+  it("parks a conversation on 'new', reads it back, and resumes it", async () => {
+    await post("/api/chief/message", { text: "first topic" });
+    await until(() => rig.chief.summary().turns === 1 || undefined);
+    const first = rig.chief.summary().conversationId;
+    expect((await post("/api/chief/conversations")).status).toBe(200);
+    const second = rig.chief.summary().conversationId;
+    expect(second).not.toBe(first);
+
+    const rows = await list();
+    expect(rows.find((r) => r.id === first)).toMatchObject({ title: "first topic", turns: 1, active: false });
+    expect(rows.find((r) => r.id === second)).toMatchObject({ active: true });
+
+    const log = (await (await get(`/api/chief/conversations/${first}/events`)).json()) as AgentEventsResponse;
+    expect(log.events[0]).toMatchObject({ kind: "user", text: "first topic" });
+
+    expect((await post(`/api/chief/conversations/${first}/resume`)).status).toBe(200);
+    expect(rig.chief.summary().conversationId).toBe(first);
+    expect(await list()).toHaveLength(1); // the empty second conversation was dropped
+  });
+
+  it("keeps /chief/reset working as an alias", async () => {
+    await post("/api/chief/message", { text: "hi" });
+    await until(() => rig.chief.summary().turns === 1 || undefined);
+    const before = rig.chief.summary().conversationId;
+    expect((await post("/api/chief/reset")).status).toBe(200);
+    expect(rig.chief.summary().conversationId).not.toBe(before);
+  });
+
+  it("renames and archives, and filters the list by archived", async () => {
+    await post("/api/chief/message", { text: "alpha" });
+    await until(() => rig.chief.summary().turns === 1 || undefined);
+    const alpha = rig.chief.summary().conversationId;
+    await post("/api/chief/conversations");
+    expect((await patch(`/api/chief/conversations/${alpha}`, { title: "Renamed", archived: true })).status).toBe(200);
+    expect((await list("?archived=1")).map((r) => [r.id, r.title])).toEqual([[alpha, "Renamed"]]);
+    expect((await list("?archived=0")).every((r) => !r.archived)).toBe(true);
+    expect((await list("?archived=true")).map((r) => r.id)).toEqual([alpha]);
+    expect((await list("?archived=false")).every((r) => !r.archived)).toBe(true);
+    expect((await get("/api/chief/conversations?archived=maybe")).status).toBe(400);
+    expect((await list()).length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("answers bad input with 400, unknown ids with 404, and the active conversation with 409", async () => {
+    const id = rig.chief.summary().conversationId;
+    expect((await post("/api/chief/conversations/not_an_id/resume")).status).toBe(400);
+    expect((await get("/api/chief/conversations/..%2Fx/events")).status).toBe(400);
+    expect((await post("/api/chief/conversations/c-nope/resume")).status).toBe(404);
+    expect((await get("/api/chief/conversations/c-nope/events")).status).toBe(404);
+    expect((await patch("/api/chief/conversations/c-nope", { title: "x" })).status).toBe(404);
+    expect((await patch(`/api/chief/conversations/${id}`, { title: 4 })).status).toBe(400);
+    expect((await patch(`/api/chief/conversations/${id}`, { archived: "yes" })).status).toBe(400);
+    expect((await patch(`/api/chief/conversations/${id}`, {})).status).toBe(400);
+    expect((await patch(`/api/chief/conversations/${id}`, { title: "" })).status).toBe(400);
+    expect((await patch(`/api/chief/conversations/${id}`, { archived: true })).status).toBe(409);
+    expect((await get(`/api/chief/conversations/${id}/events?after=-1`)).status).toBe(400);
   });
 });
