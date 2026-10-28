@@ -218,6 +218,13 @@ describe("rebuildRegistry", () => {
 });
 
 describe("entry files and backups", () => {
+  it("sets an unreadable index aside before replacing it", async () => {
+    await saveRegistry(dir, { v: 1, active: "c-a", convs: { "c-a": blankEntry("c-a", "2026-10-20T08:00:00.000Z") } });
+    fs.writeFileSync(path.join(dir, "index.json"), JSON.stringify({ v: 2, active: "c-a", convs: {} }));
+    await saveRegistry(dir, { v: 1, active: "c-a", convs: { "c-a": blankEntry("c-a", "2026-10-20T08:00:00.000Z") } });
+    expect(JSON.parse(fs.readFileSync(path.join(dir, "index.json.corrupt"), "utf8")).v).toBe(2);
+  });
+
   const reg = (title: string): Registry => ({ v: 1, active: "c-a", convs: { "c-a": { ...blankEntry("c-a", "2026-10-20T08:00:00.000Z"), title } } });
 
   it("writes only the entries it is told changed, and adoptEntries prefers them over the index", async () => {

@@ -139,6 +139,18 @@ describe("tool calls and approvals", () => {
     expect(kinds).toEqual(expect.arrayContaining(["approval:requested", "approval:allow", "tool-use", "tool-result"]));
   });
 
+  it("a card left over from a conversation that was switched away writes nothing into the new one", async () => {
+    chief = build(spawnScript);
+    await chief.init();
+    await chief.send("start a worker");
+    await waitState("waiting-approval");
+    await chief.reset();
+    await new Promise((r) => setTimeout(r, 60)); // time for the cancelled card's continuation to run
+    const kinds = (await chief.events(0, 100)).events.map((e) => e.kind);
+    expect(kinds).not.toContain("approval");
+    expect(chief.summary().state).toBe("idle");
+  });
+
   it("a denied tool does not run and the chief is told", async () => {
     chief = build(spawnScript);
     await chief.init();
@@ -602,6 +614,15 @@ describe("conversations", () => {
     const second = chief.summary().conversationId;
     expect((await chief.events(0, 100)).conversationId).toBe(second);
     expect((await chief.eventsFor(alpha, 0, 100)).conversationId).toBe(alpha);
+  });
+
+  it("labels a log read with the conversation it started on, even if a reset lands meanwhile", async () => {
+    await chief.send("alpha");
+    await waitState("idle");
+    const alpha = chief.summary().conversationId;
+    const pending = chief.events(0, 100);
+    await chief.reset();
+    expect((await pending).conversationId).toBe(alpha);
   });
 
   it("keeps the dropped empty conversation's folder when the switch could not be saved", async () => {

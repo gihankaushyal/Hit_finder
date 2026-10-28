@@ -206,8 +206,11 @@ export function createChief(deps: ChiefDeps): Chief {
   }
 
   const activeEvents = async (after: number, limit: number): Promise<AgentEventsResponse> => {
-    if (!journal) return { events: [], lastSeq: 0, conversationId: reg.active };
-    return { events: await journal.read(after, limit), lastSeq: journal.lastSeq(), conversationId: reg.active };
+    // Captured before the await: a switch while the read is pending must not relabel the old conversation's entries.
+    const jr = journal;
+    const conversationId = reg.active;
+    if (!jr) return { events: [], lastSeq: 0, conversationId };
+    return { events: await jr.read(after, limit), lastSeq: jr.lastSeq(), conversationId };
   };
 
   async function startSession(prompt: string): Promise<void> {
@@ -234,9 +237,11 @@ export function createChief(deps: ChiefDeps): Chief {
           signal: ctx.signal,
           onCreated: (a) => {
             approvalId = a.id;
+            if (!current()) return; // a session that was stopped or replaced writes nothing into the conversation now open
             void setState("waiting-approval").then(() => j().append({ kind: "approval", approvalId, tool, outcome: "requested" }));
           },
         });
+        if (!current()) return outcome;
         await j().append({ kind: "approval", approvalId, tool, outcome: outcome.cancelled ? "cancelled" : outcome.decision });
         if (!stopping && meta.state === "waiting-approval" && approvals.countFor(CHIEF_ID) === 0) await setState("running");
         return outcome;

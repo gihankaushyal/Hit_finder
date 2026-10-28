@@ -124,6 +124,9 @@ describe("conversation routes", () => {
     expect((await patch(`/api/chief/conversations/${alpha}`, { title: "Renamed", archived: true })).status).toBe(200);
     expect((await list("?archived=1")).map((r) => [r.id, r.title])).toEqual([[alpha, "Renamed"]]);
     expect((await list("?archived=0")).every((r) => !r.archived)).toBe(true);
+    expect((await list("?archived=true")).map((r) => r.id)).toEqual([alpha]);
+    expect((await list("?archived=false")).every((r) => !r.archived)).toBe(true);
+    expect((await get("/api/chief/conversations?archived=maybe")).status).toBe(400);
     expect((await list()).length).toBeGreaterThanOrEqual(2);
   });
 

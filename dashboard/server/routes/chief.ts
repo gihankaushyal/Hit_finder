@@ -41,10 +41,12 @@ export function chiefRoutes(api: Hono, d: { chief: Chief }): void {
   api.post("/chief/stop", (c) => done(c, () => d.chief.stop()));
   api.post("/chief/reset", (c) => done(c, () => d.chief.reset()));
 
-  // Conversations: `?archived=1` lists only archived ones, `?archived=0` only the others, no query lists all.
+  // Conversations: `?archived=1|true` lists only archived ones, `?archived=0|false` only the others, no query lists all.
   api.get("/chief/conversations", (c) => {
     const q = c.req.query("archived");
-    const rows = d.chief.conversations().filter((r) => (q === "1" ? r.archived : q === "0" ? !r.archived : true));
+    if (q !== undefined && !["1", "0", "true", "false"].includes(q)) return badRequest(c, "archived must be 1, 0, true or false");
+    const want = q === undefined ? null : q === "1" || q === "true";
+    const rows = d.chief.conversations().filter((r) => want === null || r.archived === want);
     return c.json({ conversations: rows });
   });
   api.post("/chief/conversations", (c) => done(c, () => d.chief.reset()));

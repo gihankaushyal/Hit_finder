@@ -208,6 +208,8 @@ export async function saveRegistry(dir: string, reg: Registry, entryIds: readonl
   } else if (st) {
     current = await fs.readFile(file, "utf8");
     valid = parseRegistry(current) !== null;
+    // An index this build cannot read (a newer version's, a torn file) is set aside, not silently overwritten.
+    if (!valid && current.length > 0) await writeAtomic(`${file}.corrupt`, current);
   }
   if (valid && current === text) return; // nothing to save
   if (current !== null && valid) {
