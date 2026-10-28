@@ -188,7 +188,7 @@ repository (Read, Grep, Glob) but cannot run commands or edit files. It acts onl
 wait on an approval card that shows the exact arguments, so a spawned worker or a new kanban item exists only
 after you approve it. Kanban changes before the first import report the usual "not imported" message. The
 conversation is kept on disk (`dashboard/.state/chief/`) and resumed after a stop, a crash or a restart;
-**New conversation** forgets it. The tool server runs inside the dashboard process (no extra port) and works under
+**New conversation** parks it: **Conversations** lists every conversation (title, date, turns, cost) so you can read an old one, resume it, rename it or archive it. The tool server runs inside the dashboard process (no extra port) and works under
 the same safe mode and sandbox as the workers; the sandbox hides `dashboard/.state`.
 
 Limits and caveats:

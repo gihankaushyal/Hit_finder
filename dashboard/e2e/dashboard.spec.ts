@@ -685,6 +685,25 @@ test.describe("chief of staff", () => {
     await expect(chief(page).getByRole("button", { name: "New conversation" })).toBeDisabled();
   });
 
+  test("an earlier conversation can be read, resumed, renamed and archived", async ({ page }) => {
+    const dash = dashboard();
+    await open(page, dash);
+    await openDrawer(page);
+    await say(page, "hello chief");
+    await expect(chief(page).getByRole("log")).toContainText("Received: hello chief");
+    await chief(page).getByRole("button", { name: "New conversation" }).click();
+    await chief(page).getByRole("button", { name: "Yes, start over" }).click();
+    await chief(page).getByRole("button", { name: "Conversations" }).click();
+    await chief(page).getByRole("button", { name: "Read hello chief" }).click();
+    await expect(chief(page).getByRole("log")).toContainText("Received: hello chief");
+    await expect(chief(page).getByText("You are reading an earlier conversation.")).toBeVisible();
+    await chief(page).getByRole("button", { name: "Resume this conversation" }).click();
+    await expect(chief(page).getByLabel("Message to the chief of staff")).toBeVisible();
+    await expect(chief(page).getByRole("log")).toContainText("Received: hello chief");
+    await say(page, "and again");
+    await expect(chief(page).getByRole("log")).toContainText("Received: and again");
+  });
+
   test("stopping cancels the pending card", async ({ page }) => {
     const dash = dashboard();
     await open(page, dash);
