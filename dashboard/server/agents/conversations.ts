@@ -26,6 +26,8 @@ export interface ConvEntry {
   /** The SDK session to resume; null once it is known to be gone. */
   sessionId: string | null;
   archived: boolean;
+  /** When it was archived, so the purge limit counts from then and not from the last message; null if unknown. */
+  archivedAt: string | null;
   readOnly: ConversationReadOnly | null;
   seededFrom: string | null;
 }
@@ -48,7 +50,7 @@ export const newConvId = (nowMs: number, rand: () => number = Math.random): stri
   `c-${nowMs.toString(36)}${Math.floor(rand() * RAND_RANGE).toString(36).padStart(RAND_DIGITS, "0")}`;
 
 export const blankEntry = (id: string, at: string, seededFrom: string | null = null): ConvEntry => ({
-  id, title: null, titleManual: false, createdAt: at, updatedAt: at, turns: 0, costUsd: null, sessionId: null, archived: false, readOnly: null, seededFrom,
+  id, title: null, titleManual: false, createdAt: at, updatedAt: at, turns: 0, costUsd: null, sessionId: null, archived: false, archivedAt: null, readOnly: null, seededFrom,
 });
 
 export const convDir = (dir: string, id: string): string => path.join(dir, "conv", id);
@@ -101,7 +103,7 @@ const toEntry = (id: string, v: unknown): ConvEntry | null => {
   const readOnly = e.readOnly == null ? null : READ_ONLY_VALUES.includes(e.readOnly as ConversationReadOnly) ? (e.readOnly as ConversationReadOnly) : "legacy";
   return {
     id, title: text(e.title), titleManual: e.titleManual === true, createdAt: e.createdAt, updatedAt: e.updatedAt, turns: count(e.turns) ?? 0,
-    costUsd: count(e.costUsd), sessionId: text(e.sessionId), archived: e.archived === true, readOnly, seededFrom: text(e.seededFrom),
+    costUsd: count(e.costUsd), sessionId: text(e.sessionId), archived: e.archived === true, archivedAt: e.archived === true ? text(e.archivedAt) : null, readOnly, seededFrom: text(e.seededFrom),
   };
 };
 
@@ -319,15 +321,24 @@ export function buildDigest(events: AgentEvent[], maxChars: number = DIGEST_MAX_
 
 const DAY_MS = 86_400_000;
 
-/** Which conversations the daily sweep archives (idle past `archiveDays`) and purges (archived, idle past `purgeDays`). 0 turns a step off; the active conversation is never touched. */
-export function selectSweep(convs: ConvEntry[], activeId: string, nowMs: number, archiveDays: number, purgeDays: number): { archive: string[]; purge: string[] } {
+/**
+ * What the daily sweep does: archive conversations idle past `archiveDays`; delete archived ones past `purgeDays`
+ * counted from when they were archived (`stamp` lists archived ones whose date is not known yet: they get today's, so
+ * a conversation archived by hand long after its last message is not deleted at once). 0 turns a step off; the active
+ * conversation is never touched.
+ */
+export function selectSweep(convs: ConvEntry[], activeId: string, nowMs: number, archiveDays: number, purgeDays: number): { archive: string[]; purge: string[]; stamp: string[] } {
   const archive: string[] = [];
   const purge: string[] = [];
+  const stamp: string[] = [];
   for (const c of convs) {
     if (c.id === activeId) continue;
-    const idle = nowMs - Date.parse(c.updatedAt);
-    if (!c.archived && archiveDays > 0 && idle > archiveDays * DAY_MS) archive.push(c.id);
-    else if (c.archived && purgeDays > 0 && idle > purgeDays * DAY_MS) purge.push(c.id);
+    if (!c.archived) {
+      if (archiveDays > 0 && nowMs - Date.parse(c.updatedAt) > archiveDays * DAY_MS) archive.push(c.id);
+    } else if (purgeDays > 0) {
+      if (c.archivedAt === null) stamp.push(c.id);
+      else if (nowMs - Date.parse(c.archivedAt) > purgeDays * DAY_MS) purge.push(c.id);
+    }
   }
-  return { archive, purge };
+  return { archive, purge, stamp };
 }

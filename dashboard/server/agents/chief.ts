@@ -48,6 +48,8 @@ export interface Chief {
   reset(): Promise<void>;
   /** Start a new conversation whose first prompt carries what an earlier one said. */
   continueFrom(id: string): Promise<void>;
+  /** Stops the background sweep. */
+  dispose(): void;
   events(after: number, limit: number): Promise<AgentEventsResponse>;
   /** Every conversation, newest first. */
   conversations(): ConversationInfo[];
@@ -244,13 +246,26 @@ export function createChief(deps: ChiefDeps): Chief {
     return { events: await jr.read(after, limit), lastSeq: jr.lastSeq(), conversationId };
   };
 
-  /** Mark a conversation as no longer resumable. */
+  /**
+   * The SDK itself said the session is gone: the conversation is read-only for good and the dead session id is dropped.
+   */
   const expire = (e: ConvEntry) => {
     e.readOnly = "expired";
     e.sessionId = null;
     if (e.id === reg.active) meta.sessionId = null;
   };
+  /**
+   * Only the probe (a look at the disk) says the transcript is missing: read-only, but the session id is kept and the
+   * probe is asked again later, so a wrong answer costs nothing permanent.
+   */
+  const suspect = (e: ConvEntry) => {
+    e.readOnly = "expired";
+  };
   const transcriptGone = async (e: ConvEntry): Promise<boolean> => e.sessionId !== null && !(await transcriptExists(e.sessionId));
+  /** A conversation marked expired by the probe alone is released again once its transcript is found. */
+  const recheck = async (e: ConvEntry): Promise<void> => {
+    if (e.readOnly === "expired" && e.sessionId !== null && (await transcriptExists(e.sessionId))) e.readOnly = null;
+  };
 
   /** A session that was asked to resume could not: say so in the log and leave the conversation read-only, not failed. */
   async function lostSession(s: Session): Promise<void> {
@@ -272,13 +287,23 @@ export function createChief(deps: ChiefDeps): Chief {
    * conversations are written to disk (their own entry files too), and a folder goes only after the registry no longer lists it.
    */
   async function sweep(): Promise<void> {
-    const { archive, purge } = selectSweep(Object.values(reg.convs), reg.active, Date.now(), cfg.chiefArchiveDays, cfg.chiefPurgeDays);
-    if (archive.length === 0 && purge.length === 0) return;
-    for (const id of archive) reg.convs[id].archived = true;
+    const now = Date.now();
+    const { archive, purge, stamp } = selectSweep(Object.values(reg.convs), reg.active, now, cfg.chiefArchiveDays, cfg.chiefPurgeDays);
+    if (archive.length === 0 && purge.length === 0 && stamp.length === 0) return;
+    const stampedAt = new Date(now).toISOString();
+    const before = new Map([...archive, ...stamp, ...purge].map((id) => [id, { ...reg.convs[id] }]));
+    for (const id of archive) Object.assign(reg.convs[id], { archived: true, archivedAt: stampedAt });
+    for (const id of stamp) reg.convs[id].archivedAt = stampedAt;
     for (const id of purge) delete reg.convs[id];
-    await save(false, ...archive);
+    try {
+      await save(false, ...archive, ...stamp);
+    } catch (err) {
+      // What the owner is told and what is on disk must agree: nothing was swept.
+      for (const [id, e] of before) reg.convs[id] = e;
+      throw err;
+    }
     for (const id of purge) await discard(id);
-    console.log(`chief conversations: archived ${archive.length}, deleted ${purge.length}`);
+    if (archive.length > 0 || purge.length > 0) console.log(`chief conversations: archived ${archive.length}, deleted ${purge.length}`);
     notify();
   }
 
@@ -337,11 +362,6 @@ export function createChief(deps: ChiefDeps): Chief {
         for await (const item of s.events) {
           if (!current()) continue;
           if ("sessionId" in item) {
-            // Asked to resume a session, handed a different one: the old session is gone.
-            if (resume && !opened && item.sessionId !== resume) {
-              await lostSession(s);
-              return;
-            }
             opened = true;
             touch({ sessionId: item.sessionId });
             continue;
@@ -404,6 +424,7 @@ export function createChief(deps: ChiefDeps): Chief {
       const loaded = await loadRegistry(dir);
       if (loaded) await adoptEntries(dir, loaded.convs); // a rebuilt registry has adopted them already
       reg = loaded ?? (await rebuildRegistry(dir, new Date().toISOString()));
+      for (const c of Object.values(reg.convs)) await recheck(c);
       if (!peek() || peek()?.readOnly) {
         // The pointer to the active conversation was lost, or names one that cannot be continued: take the newest one that can still be continued.
         const live = pickContinuable(reg.convs);
@@ -414,12 +435,12 @@ export function createChief(deps: ChiefDeps): Chief {
       // Empty conversations other than the active one are leftovers of an interrupted switch.
       const leftovers = Object.values(reg.convs).filter((c) => c.id !== reg.active && isEmptyConv(c));
       for (const c of leftovers) delete reg.convs[c.id];
-      if (await transcriptGone(active())) expire(active());
+      if (await transcriptGone(active())) suspect(active());
       // No session survives a restart; the conversation is resumed from its id on the next message.
       await activate(reg.active);
       await saveRegistry(dir, reg, Object.keys(reg.convs), memo);
       for (const c of leftovers) await discard(c.id);
-      await sweep();
+      await sweep().catch((err) => console.error("chief sweep failed:", err instanceof Error ? err.message : err));
       sweepTimer ??= setInterval(() => void serial(sweep).catch((err) => console.error("chief sweep failed:", err instanceof Error ? err.message : err)), SWEEP_EVERY_MS).unref();
       ready = true;
     },
@@ -484,9 +505,10 @@ export function createChief(deps: ChiefDeps): Chief {
         const target = find(id);
         if (!target) throw new AgentError("not-found", NOT_FOUND_MESSAGE);
         if (id === reg.active) return;
+        await recheck(target);
         if (target.readOnly) throw new AgentError("state", READONLY_MESSAGE);
         if (await transcriptGone(target)) {
-          expire(target);
+          suspect(target);
           await save(false, id); // remembered, so it is not probed again
           notify();
           throw new AgentError("state", EXPIRED_MESSAGE);
@@ -494,7 +516,8 @@ export function createChief(deps: ChiefDeps): Chief {
         const dropped = await park();
         try {
           await activate(id, dropped);
-          target.archived = false; // continuing an archived conversation brings it back; only once it is really active
+          target.archived = false;
+          target.archivedAt = null; // continuing an archived conversation brings it back; only once it is really active
         } finally {
           await settle(dropped);
         }
@@ -510,12 +533,15 @@ export function createChief(deps: ChiefDeps): Chief {
           throw new AgentError("invalid", `The title must be 1 to ${TITLE_EDIT_MAX} characters.`);
         }
         if (change.archived === true && id === reg.active) throw new AgentError("state", "Start a new conversation before archiving this one.");
-        const before = { title: target.title, titleManual: target.titleManual, archived: target.archived };
+        const before = { title: target.title, titleManual: target.titleManual, archived: target.archived, archivedAt: target.archivedAt };
         if (title !== undefined) {
           target.title = title;
           target.titleManual = true;
         }
-        if (change.archived !== undefined) target.archived = change.archived;
+        if (change.archived !== undefined && change.archived !== target.archived) {
+          target.archived = change.archived;
+          target.archivedAt = change.archived ? new Date().toISOString() : null;
+        }
         try {
           // Housekeeping, not activity: it must not reorder the list by bumping `updatedAt`.
           await save(false, id);
@@ -537,6 +563,11 @@ export function createChief(deps: ChiefDeps): Chief {
       if (parked?.id !== id || parked.key !== key) parked = { id, key, all: await readJournalFile(file) };
       const all = parked.all;
       return { events: eventsAfter(all, after, limit), lastSeq: all.length > 0 ? all[all.length - 1].seq : 0, conversationId: id };
+    },
+
+    dispose() {
+      if (sweepTimer) clearInterval(sweepTimer);
+      sweepTimer = null;
     },
 
     events: activeEvents,

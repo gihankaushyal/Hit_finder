@@ -27,4 +27,19 @@ describe("transcript probe", () => {
     fs.mkdirSync(path.join(configDir, "projects"), { recursive: true });
     expect(await createTranscriptProbe(configDir)("../../etc/passwd")).toBe(true);
   });
+
+  it("looks under HOME, where the chief's own claude writes, and ignores the dashboard's CLAUDE_CONFIG_DIR", async () => {
+    const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "dash-home-")));
+    fs.mkdirSync(path.join(home, ".claude", "projects", "p"), { recursive: true });
+    fs.writeFileSync(path.join(home, ".claude", "projects", "p", "s-1.jsonl"), "{}\n");
+    const saved = { HOME: process.env.HOME, CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR };
+    process.env.HOME = home;
+    process.env.CLAUDE_CONFIG_DIR = configDir; // somewhere else, empty
+    try {
+      expect(await createTranscriptProbe()("s-1")).toBe(true);
+    } finally {
+      for (const [k, v] of Object.entries(saved)) v === undefined ? delete process.env[k] : (process.env[k] = v);
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
 });

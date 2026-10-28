@@ -10,11 +10,12 @@ export type TranscriptProbe = (sessionId: string) => Promise<boolean>;
 /**
  * Looks for `<configDir>/projects/<any project>/<sessionId>.jsonl`, which is where the SDK keeps a session's
  * transcript (30 days by default). It scans every project folder rather than computing the folder name, so it
- * does not depend on how the SDK encodes the working directory. When it cannot tell (unreadable folder, odd id)
+ * does not depend on how the SDK encodes the working directory. The default folder is the one under HOME, because that is
+ * where the chief's `claude` child writes (it is not given the dashboard's own CLAUDE_CONFIG_DIR). When it cannot tell (unreadable folder, odd id)
  * it answers true: a wrong "gone" would lock a good conversation, while a wrong "there" is caught when the
  * session fails to resume.
  */
-export function createTranscriptProbe(configDir: string = process.env.CLAUDE_CONFIG_DIR ?? path.join(os.homedir(), ".claude")): TranscriptProbe {
+export function createTranscriptProbe(configDir: string = path.join(os.homedir(), ".claude")): TranscriptProbe {
   const projects = path.join(configDir, "projects");
   return async (sessionId) => {
     if (!SAFE_SESSION_ID.test(sessionId)) return true;

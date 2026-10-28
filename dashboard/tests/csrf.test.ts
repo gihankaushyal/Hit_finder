@@ -34,7 +34,7 @@ function server() {
     stopAll: vi.fn(async () => {}),
   };
   const approvals = { pending: vi.fn(() => []), decide: vi.fn(), request: vi.fn(), cancelAgent: vi.fn(), count: vi.fn(() => 0), countFor: vi.fn(() => 0) };
-  const chief = { summary: vi.fn(() => ({}) as never), send: vi.fn(async () => {}), stop: vi.fn(async () => {}), reset: vi.fn(async () => {}), events: vi.fn(async () => ({ events: [], lastSeq: 0 })), conversations: vi.fn(() => []), resume: vi.fn(async () => {}), continueFrom: vi.fn(async () => {}), patch: vi.fn(async () => {}), eventsFor: vi.fn(async () => ({ events: [], lastSeq: 0 })), init: vi.fn(async () => {}) };
+  const chief = { summary: vi.fn(() => ({}) as never), send: vi.fn(async () => {}), stop: vi.fn(async () => {}), reset: vi.fn(async () => {}), events: vi.fn(async () => ({ events: [], lastSeq: 0 })), conversations: vi.fn(() => []), resume: vi.fn(async () => {}), continueFrom: vi.fn(async () => {}), dispose: vi.fn(), patch: vi.fn(async () => {}), eventsFor: vi.fn(async () => ({ events: [], lastSeq: 0 })), init: vi.fn(async () => {}) };
   const terminal = { enabled: true, open: vi.fn(() => ({ id: "t" })), attach: vi.fn(), input: vi.fn(), resize: vi.fn(), close: vi.fn(async () => {}), closeAll: vi.fn(async () => {}), count: vi.fn(() => 0) };
   const app = buildServer({
     config: { webDist: "/nonexistent", repoRoot: "/tmp" } as Config,

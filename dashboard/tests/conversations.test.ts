@@ -319,21 +319,26 @@ describe("selectSweep", () => {
   const DAY = 86_400_000;
   const NOW = Date.parse("2026-10-27T00:00:00.000Z");
   const at = (days: number) => new Date(NOW - days * DAY).toISOString();
-  const e = (id: string, days: number, archived = false) => ({ ...blankEntry(id, at(days)), updatedAt: at(days), archived });
+  const e = (id: string, days: number, archivedDays: number | null = null) => ({ ...blankEntry(id, at(days)), updatedAt: at(days), archived: archivedDays !== null, archivedAt: archivedDays === null ? null : at(archivedDays) });
+  const none = { archive: [], purge: [], stamp: [] };
 
   it("archives idle conversations past the limit, never the active one", () => {
     const r = selectSweep([e("c-a", 40), e("c-b", 10), e("c-active", 99)], "c-active", NOW, 30, 0);
-    expect(r).toEqual({ archive: ["c-a"], purge: [] });
+    expect(r).toEqual({ ...none, archive: ["c-a"] });
   });
 
-  it("purges only archived conversations past the purge limit, and only when purge is on", () => {
-    const rows = [e("c-a", 100, true), e("c-b", 50, true), e("c-c", 100)];
-    expect(selectSweep(rows, "c-x", NOW, 30, 90)).toEqual({ archive: ["c-c"], purge: ["c-a"] });
+  it("purges by the date of archiving, not of the last message, and only when purge is on", () => {
+    const rows = [e("c-a", 100, 95), e("c-b", 100, 5), e("c-c", 100)];
+    expect(selectSweep(rows, "c-x", NOW, 30, 90)).toEqual({ archive: ["c-c"], purge: ["c-a"], stamp: [] });
     expect(selectSweep(rows, "c-x", NOW, 30, 0).purge).toEqual([]);
   });
 
+  it("asks for a date on an archived conversation that has none, instead of deleting it", () => {
+    expect(selectSweep([e("c-a", 500, 0), { ...e("c-b", 500, 0), archivedAt: null }], "c-x", NOW, 0, 90)).toEqual({ ...none, stamp: ["c-b"] });
+  });
+
   it("does nothing when both limits are off, or when a date is unreadable", () => {
-    expect(selectSweep([e("c-a", 999)], "c-x", NOW, 0, 0)).toEqual({ archive: [], purge: [] });
-    expect(selectSweep([{ ...e("c-a", 1), updatedAt: "garbage" }], "c-x", NOW, 30, 90)).toEqual({ archive: [], purge: [] });
+    expect(selectSweep([e("c-a", 999)], "c-x", NOW, 0, 0)).toEqual(none);
+    expect(selectSweep([{ ...e("c-a", 1), updatedAt: "garbage" }], "c-x", NOW, 30, 90)).toEqual(none);
   });
 });
