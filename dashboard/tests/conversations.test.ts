@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { readJournalFile } from "../server/agents/journal";
 import {
-  ACTIVE_LEGACY_ID, adoptEntries, autoTitle, blankEntry, CONV_ID, journalPath, loadRegistry, newConvId, rebuildRegistry, saveRegistry, statsOf,
+  ACTIVE_LEGACY_ID, adoptEntries, autoTitle, blankEntry, cleanTitle, isEmptyConv, pickContinuable, CONV_ID, journalPath, loadRegistry, newConvId, rebuildRegistry, saveRegistry, statsOf,
   type Registry,
 } from "../server/agents/conversations";
 
@@ -210,6 +210,17 @@ describe("entry files and backups", () => {
     expect(fs.existsSync(path.join(dir, "conv", "c-b", "entry.json"))).toBe(false);
   });
 
+  it("does not rewrite an index that has not changed", async () => {
+    await saveRegistry(dir, reg("one"));
+    const file = path.join(dir, "index.json");
+    const old = new Date(Date.now() - 3_600_000);
+    fs.utimesSync(file, old, old);
+    await saveRegistry(dir, reg("one"));
+    expect(fs.statSync(file).mtimeMs).toBeLessThan(Date.now() - 3_000_000);
+    await saveRegistry(dir, reg("two"));
+    expect(JSON.parse(fs.readFileSync(file, "utf8")).convs["c-a"].title).toBe("two");
+  });
+
   it("ignores an unreadable or mismatched entry file", async () => {
     fs.mkdirSync(path.join(dir, "conv", "c-a"), { recursive: true });
     fs.writeFileSync(path.join(dir, "conv", "c-a", "entry.json"), "{ nope");
@@ -233,5 +244,24 @@ describe("entry files and backups", () => {
     fs.writeFileSync(path.join(dir, "index.json"), "garbage");
     fs.writeFileSync(path.join(dir, "index.json.bak"), "garbage");
     expect((await loadRegistry(dir))!.convs["c-a"].title).toBe("three");
+  });
+});
+
+describe("small helpers", () => {
+  it("cleans a title to one line", () => {
+    expect(cleanTitle(" a\n b\t\u0007c ")).toBe("a b c");
+  });
+  it("calls only an unused, untitled, unseeded conversation empty", () => {
+    const e = blankEntry("c-a", "2026-10-20T08:00:00.000Z");
+    expect(isEmptyConv(e)).toBe(true);
+    expect(isEmptyConv({ ...e, seededFrom: "c-b" })).toBe(false);
+    expect(isEmptyConv({ ...e, title: "t" })).toBe(false);
+    expect(isEmptyConv({ ...e, readOnly: "legacy" })).toBe(false);
+  });
+  it("picks the newest conversation that can be continued", () => {
+    const at = (id: string, updatedAt: string, over = {}) => ({ ...blankEntry(id, updatedAt), updatedAt, ...over });
+    const convs = { "c-a": at("c-a", "2026-10-01T00:00:00.000Z"), "c-b": at("c-b", "2026-10-03T00:00:00.000Z", { archived: true }), "c-c": at("c-c", "2026-10-02T00:00:00.000Z") };
+    expect(pickContinuable(convs)?.id).toBe("c-c");
+    expect(pickContinuable({})).toBeUndefined();
   });
 });

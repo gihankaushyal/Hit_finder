@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -504,6 +504,54 @@ describe("conversations", () => {
     expect(again.conversations().find((c) => c.id === alpha)).toMatchObject({ title: "alpha", turns: 1 });
   });
 
+  it("tells the owner when a change could not be saved, and leaves the title as it was", async () => {
+    await chief.send("alpha");
+    await waitState("idle");
+    const alpha = chief.summary().conversationId;
+    await chief.reset();
+    const file = path.join(cfg.stateDir, "chief", "index.json");
+    fs.rmSync(file);
+    fs.mkdirSync(file); // a directory where the index should be: every save fails
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    await expect(chief.patch(alpha, { title: "Renamed" })).rejects.toMatchObject({ code: "state" });
+    log.mockRestore();
+    expect(chief.conversations().find((c) => c.id === alpha)?.title).toBe("alpha");
+  });
+
+  it("stores a typed title on one line", async () => {
+    const id = chief.summary().conversationId;
+    await chief.patch(id, { title: "  a\n\n\tb\u0000c  " });
+    expect(chief.summary().title).toBe("a b c");
+  });
+
+  it("keeps a conversation seeded from another one when the owner switches away", async () => {
+    const dir = path.join(cfg.stateDir, "chief");
+    const id = chief.summary().conversationId;
+    const file = path.join(dir, "index.json");
+    const index = JSON.parse(fs.readFileSync(file, "utf8"));
+    index.convs[id].seededFrom = "c-elsewhere";
+    fs.writeFileSync(file, JSON.stringify(index));
+    fs.writeFileSync(path.join(dir, "conv", id, "entry.json"), JSON.stringify(index.convs[id]));
+    const again = build();
+    await again.init();
+    await again.reset();
+    expect(again.conversations().find((c) => c.id === id)).toMatchObject({ seededFrom: "c-elsewhere" });
+    expect(fs.existsSync(path.join(dir, "conv", id))).toBe(true);
+  });
+
+  it("removes empty leftovers of an interrupted switch when it starts", async () => {
+    const dir = path.join(cfg.stateDir, "chief");
+    const id = chief.summary().conversationId;
+    const ghost = { ...JSON.parse(fs.readFileSync(path.join(dir, "conv", id, "entry.json"), "utf8")), id: "c-ghost", updatedAt: "2020-01-01T00:00:00.000Z" };
+    fs.mkdirSync(path.join(dir, "conv", "c-ghost"), { recursive: true });
+    fs.writeFileSync(path.join(dir, "conv", "c-ghost", "entry.json"), JSON.stringify(ghost));
+    const again = build();
+    await again.init();
+    expect(again.summary().conversationId).toBe(id);
+    expect(again.conversations().map((c) => c.id)).toEqual([id]);
+    expect(fs.existsSync(path.join(dir, "conv", "c-ghost"))).toBe(false);
+  });
+
   it("does not start on a read-only conversation that the index names as active", async () => {
     const file = path.join(cfg.stateDir, "chief", "index.json");
     const index = JSON.parse(fs.readFileSync(file, "utf8"));
@@ -522,12 +570,16 @@ describe("conversations", () => {
     await waitState("idle");
     const alpha = chief.summary().conversationId;
     await chief.reset();
+    const second = chief.summary().conversationId;
     // A plain file where alpha's folder should be makes opening its journal fail.
     fs.rmSync(path.join(cfg.stateDir, "chief", "conv", alpha), { recursive: true });
     fs.writeFileSync(path.join(cfg.stateDir, "chief", "conv", alpha), "x");
     await expect(chief.resume(alpha)).rejects.toThrow();
     expect(chief.summary().conversationId).toBe("");
-    await expect(chief.send("lost?")).rejects.toMatchObject({ code: "state" });
+    await expect(chief.send("lost?")).rejects.toMatchObject({ code: "state", message: expect.stringMatching(/no active conversation/i) });
+    const saved = JSON.parse(fs.readFileSync(path.join(cfg.stateDir, "chief", "index.json"), "utf8"));
+    expect(saved.active).toBe(""); // the index on disk agrees, and no longer lists the dropped conversation
+    expect(Object.keys(saved.convs)).not.toContain(second);
     await chief.reset(); // a new conversation recovers
     expect(chief.summary().conversationId).not.toBe("");
   });

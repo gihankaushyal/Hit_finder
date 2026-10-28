@@ -6,8 +6,8 @@ import type { Config } from "../config";
 import type { EventBus } from "../events";
 import type { Approvals } from "./approvals";
 import type { AgentDriver, Session, SessionStart, ToolDef } from "./driver";
-import { adoptEntries, autoTitle, blankEntry, convDir, journalPath, loadRegistry, newConvId, rebuildRegistry, saveRegistry, TITLE_EDIT_MAX, type ConvEntry, type Registry } from "./conversations";
-import { openJournal, readJournalFile, type Journal } from "./journal";
+import { adoptEntries, autoTitle, blankEntry, cleanTitle, convDir, isEmptyConv, journalPath, loadRegistry, newConvId, pickContinuable, rebuildRegistry, saveRegistry, TITLE_EDIT_MAX, type ConvEntry, type Registry } from "./conversations";
+import { eventsAfter, openJournal, readJournalFile, type Journal } from "./journal";
 import { chiefOptions } from "./policy";
 import { chiefPrompt } from "./rolePrompts";
 import { AgentError, MESSAGE_MAX_CHARS } from "./supervisor";
@@ -20,6 +20,8 @@ const STOP_WAIT_MS = 3000;
 const INTERRUPT_WAIT_MS = 2000;
 const ACTIVE: AgentState[] = ["running", "waiting-approval", "idle"];
 const STARTING_MESSAGE = "The chief of staff is still starting. Try again in a moment.";
+const NO_ACTIVE_MESSAGE = "There is no active conversation. Start a new one.";
+const SAVE_FAILED_MESSAGE = "The change could not be saved. Check the disk and try again.";
 const NOT_FOUND_MESSAGE = "That conversation does not exist.";
 export const READONLY_MESSAGE = "This conversation can no longer be continued. Read it, or continue in a new conversation.";
 
@@ -81,6 +83,7 @@ export function createChief(deps: ChiefDeps): Chief {
   let timer: NodeJS.Timeout | null = null;
   let writes: Promise<void> = Promise.resolve();
   let lock: Promise<unknown> = Promise.resolve();
+  let ready = false;
   /** The last parked journal read, reused while the file is unchanged (a panel polls it). */
   let parked: { id: string; key: string; all: AgentEvent[] } | null = null;
 
@@ -96,7 +99,7 @@ export function createChief(deps: ChiefDeps): Chief {
   const peek = (): ConvEntry | undefined => find(reg.active);
   const active = (): ConvEntry => {
     const e = peek();
-    if (!e) throw new AgentError("state", STARTING_MESSAGE);
+    if (!e) throw new AgentError("state", ready ? NO_ACTIVE_MESSAGE : STARTING_MESSAGE);
     return e;
   };
   /** Copies the live counters into the active conversation's entry. */
@@ -108,25 +111,32 @@ export function createChief(deps: ChiefDeps): Chief {
     e.sessionId = meta.sessionId;
     if (bump) e.updatedAt = new Date().toISOString();
   };
-  /** `bump` marks the active conversation as just used; renaming or archiving another one must not. */
+  /**
+   * Queue a save. `bump` marks the active conversation as just used (renaming or archiving another one must not).
+   * The returned promise rejects if this save failed; the queue itself carries on either way.
+   */
   const persist = (bump = true, ...also: string[]): Promise<void> => {
-    writes = writes.then(async () => {
-      try {
-        syncEntry(bump);
-        await saveRegistry(dir, reg, [...new Set([reg.active, ...also])]);
-      } catch (err) {
-        console.error("chief index write failed", (err as NodeJS.ErrnoException).code ?? "error");
-      }
+    const run = writes.then(async () => {
+      syncEntry(bump);
+      await saveRegistry(dir, reg, [...new Set([reg.active, ...also])]);
     });
-    return writes;
+    writes = run.catch((err) => {
+      console.error("chief index write failed", (err as NodeJS.ErrnoException).code ?? "error");
+    });
+    return run;
   };
+  /** A save the caller waits for: a failure becomes an error the owner sees instead of a silent `ok`. */
+  const save = (bump = true, ...also: string[]): Promise<void> =>
+    persist(bump, ...also).catch(() => {
+      throw new AgentError("state", SAVE_FAILED_MESSAGE);
+    });
   const touch = (patch: Partial<Meta> = {}) => {
     Object.assign(meta, patch);
-    void persist();
+    persist().catch(() => undefined); // already logged
     notify();
   };
   const j = (): Journal => {
-    if (!journal) throw new AgentError("state", STARTING_MESSAGE);
+    if (!journal) throw new AgentError("state", ready ? NO_ACTIVE_MESSAGE : STARTING_MESSAGE);
     return journal;
   };
   const setState = async (state: AgentState, error: string | null = null, detail?: string) => {
@@ -148,7 +158,7 @@ export function createChief(deps: ChiefDeps): Chief {
    * journal at it, so a reader never sees a half-switched chief. If the journal cannot be opened nothing is half-done:
    * there is no active conversation until the next reset or resume. The caller holds `serial`.
    */
-  async function activate(id: string): Promise<void> {
+  async function activate(id: string, drop: string | null = null): Promise<void> {
     const e = find(id);
     if (!e) throw new AgentError("not-found", NOT_FOUND_MESSAGE);
     let opened: Journal;
@@ -157,9 +167,11 @@ export function createChief(deps: ChiefDeps): Chief {
     } catch (err) {
       journal = null;
       reg.active = "";
+      if (drop) delete reg.convs[drop];
       throw err;
     }
     reg.active = id;
+    if (drop) delete reg.convs[drop];
     meta.turns = e.turns;
     meta.costUsd = e.costUsd;
     meta.sessionId = e.sessionId;
@@ -170,25 +182,28 @@ export function createChief(deps: ChiefDeps): Chief {
   }
 
   /**
-   * Stop the session and file the active conversation away. An empty untitled one is dropped from the registry and its
-   * id returned, to be removed from disk with `discard` once the next conversation is active (`active` keeps pointing
-   * at it until then, so readers see one consistent conversation; a crash in between is repaired by `init`).
-   * The caller holds `serial`.
+   * Stop the session and file the active conversation away. If it is empty, its id is returned: the caller passes it to
+   * `activate` (which drops it from the registry in the same step as the switch, so readers never see a half-switched
+   * chief) and then to `settle`, which deletes its folder once the registry is saved. The caller holds `serial`.
    */
   async function park(): Promise<string | null> {
     await stopNow();
     await writes;
     syncEntry(false);
     const e = peek();
-    if (e && e.turns === 0 && e.sessionId === null && e.title === null) {
-      delete reg.convs[e.id];
-      return e.id;
-    }
-    return null;
+    return e && isEmptyConv(e) ? e.id : null;
   }
   const discard = async (id: string | null): Promise<void> => {
     if (id) await fs.rm(convDir(dir, id), { recursive: true, force: true });
   };
+  /** End of a switch: the new registry is on disk before the dropped conversation's folder goes. */
+  async function settle(dropped: string | null): Promise<void> {
+    try {
+      await save();
+    } finally {
+      await discard(dropped);
+    }
+  }
 
   const activeEvents = async (after: number, limit: number): Promise<AgentEventsResponse> => {
     if (!journal) return { events: [], lastSeq: 0 };
@@ -288,18 +303,24 @@ export function createChief(deps: ChiefDeps): Chief {
   return {
     async init() {
       await fs.mkdir(dir, { recursive: true });
-      reg = (await loadRegistry(dir)) ?? (await rebuildRegistry(dir, new Date().toISOString()));
-      await adoptEntries(dir, reg.convs);
+      const loaded = await loadRegistry(dir);
+      if (loaded) await adoptEntries(dir, loaded.convs); // a rebuilt registry has adopted them already
+      reg = loaded ?? (await rebuildRegistry(dir, new Date().toISOString()));
       if (!peek() || peek()?.readOnly) {
         // The pointer to the active conversation was lost, or names one that cannot be continued: take the newest one that can still be continued.
-        const live = Object.values(reg.convs).filter((c) => !c.archived && !c.readOnly).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
+        const live = pickContinuable(reg.convs);
         const id = live?.id ?? newConvId(Date.now());
         if (!live) reg.convs[id] = blankEntry(id, new Date().toISOString());
         reg.active = id;
       }
+      // Empty conversations other than the active one are leftovers of an interrupted switch.
+      const leftovers = Object.values(reg.convs).filter((c) => c.id !== reg.active && isEmptyConv(c));
+      for (const c of leftovers) delete reg.convs[c.id];
       // No session survives a restart; the conversation is resumed from its id on the next message.
       await activate(reg.active);
       await saveRegistry(dir, reg, Object.keys(reg.convs));
+      for (const c of leftovers) await discard(c.id);
+      ready = true;
     },
 
     summary: () => ({
@@ -339,18 +360,18 @@ export function createChief(deps: ChiefDeps): Chief {
         try {
           const id = newConvId(Date.now());
           reg.convs[id] = blankEntry(id, new Date().toISOString());
-          await activate(id);
+          await activate(id, dropped);
           await j().append({ kind: "state", state: "idle", detail: "New conversation" });
         } finally {
-          await discard(dropped);
+          await settle(dropped);
         }
-        touch();
-        await writes;
+        notify();
       }),
 
     conversations() {
-      syncEntry(false);
+      // The live counters are shown for the active one without writing them into the entry: a read changes nothing.
       return Object.values(reg.convs)
+        .map((c) => (c.id === reg.active ? { ...c, turns: meta.turns, costUsd: meta.costUsd } : c))
         .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
         .map((c) => ({
           id: c.id, title: c.title, createdAt: c.createdAt, updatedAt: c.updatedAt, turns: c.turns, costUsd: c.costUsd,
@@ -366,33 +387,37 @@ export function createChief(deps: ChiefDeps): Chief {
         if (target.readOnly) throw new AgentError("state", READONLY_MESSAGE);
         const dropped = await park();
         try {
-          await activate(id);
+          await activate(id, dropped);
           target.archived = false; // continuing an archived conversation brings it back; only once it is really active
         } finally {
-          await discard(dropped);
+          await settle(dropped);
         }
-        touch();
-        await writes;
+        notify();
       }),
 
     patch: (id, change) =>
       serial(async () => {
         const target = find(id);
         if (!target) throw new AgentError("not-found", NOT_FOUND_MESSAGE);
-        const title = change.title === undefined ? undefined : change.title.trim();
+        const title = change.title === undefined ? undefined : cleanTitle(change.title);
         if (title !== undefined && (title.length === 0 || title.length > TITLE_EDIT_MAX)) {
           throw new AgentError("invalid", `The title must be 1 to ${TITLE_EDIT_MAX} characters.`);
         }
         if (change.archived === true && id === reg.active) throw new AgentError("state", "Start a new conversation before archiving this one.");
+        const before = { title: target.title, titleManual: target.titleManual, archived: target.archived };
         if (title !== undefined) {
           target.title = title;
           target.titleManual = true;
         }
         if (change.archived !== undefined) target.archived = change.archived;
-        // Housekeeping, not activity: it must not reorder the list by bumping `updatedAt`.
-        void persist(false, id);
+        try {
+          // Housekeeping, not activity: it must not reorder the list by bumping `updatedAt`.
+          await save(false, id);
+        } catch (err) {
+          Object.assign(target, before); // what the owner is told matches what is on disk
+          throw err;
+        }
         notify();
-        await writes;
       }),
 
     async eventsFor(id, after, limit) {
@@ -403,7 +428,7 @@ export function createChief(deps: ChiefDeps): Chief {
       const key = st ? `${st.mtimeMs}:${st.size}` : "";
       if (parked?.id !== id || parked.key !== key) parked = { id, key, all: await readJournalFile(file) };
       const all = parked.all;
-      return { events: all.filter((e) => e.seq > after).slice(0, Math.max(0, limit)), lastSeq: all.length > 0 ? all[all.length - 1].seq : 0 };
+      return { events: eventsAfter(all, after, limit), lastSeq: all.length > 0 ? all[all.length - 1].seq : 0 };
     },
 
     events: activeEvents,

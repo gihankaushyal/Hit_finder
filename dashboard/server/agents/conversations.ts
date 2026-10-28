@@ -53,11 +53,22 @@ export const blankEntry = (id: string, at: string, seededFrom: string | null = n
 export const convDir = (dir: string, id: string): string => path.join(dir, "conv", id);
 export const journalPath = (dir: string, id: string): string => path.join(convDir(dir, id), "journal.jsonl");
 
-/** The first message, whitespace collapsed and cut to a title. */
+/** One line: whitespace and control characters become single spaces. Used for every title, typed or automatic. */
+// eslint-disable-next-line no-control-regex
+export const cleanTitle = (text: string): string => text.replace(/[\s\u0000-\u001f\u007f]+/g, " ").trim();
+
+/** The first message, cleaned and cut to a title. */
 export function autoTitle(text: string): string {
-  const flat = text.replace(/\s+/g, " ").trim();
+  const flat = cleanTitle(text);
   return flat.length > TITLE_MAX ? `${flat.slice(0, TITLE_MAX)}…` : flat;
 }
+
+/** Nothing worth keeping: never messaged, untitled, not seeded from another conversation. */
+export const isEmptyConv = (e: ConvEntry): boolean => e.turns === 0 && e.sessionId === null && e.title === null && e.seededFrom === null && e.readOnly === null;
+
+/** The newest conversation that can still be continued. */
+export const pickContinuable = (convs: Record<string, ConvEntry>): ConvEntry | undefined =>
+  Object.values(convs).filter((c) => !c.archived && !c.readOnly).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
 
 export function statsOf(events: AgentEvent[]): JournalStats {
   let firstUser: string | null = null;
@@ -127,6 +138,9 @@ export async function loadRegistry(dir: string): Promise<Registry | null> {
   return null;
 }
 
+/** What this process last wrote to each `index.json`, with the file's stamp, to tell whether anyone else changed it. */
+const lastWritten = new Map<string, { text: string; mtimeMs: number; size: number }>();
+
 const sameDay = (a: number, b: number): boolean => new Date(a).toISOString().slice(0, 10) === new Date(b).toISOString().slice(0, 10);
 
 const writeAtomic = async (file: string, text: string): Promise<void> => {
@@ -174,18 +188,28 @@ export async function adoptEntries(dir: string, convs: Record<string, ConvEntry>
 export async function saveRegistry(dir: string, reg: Registry, entryIds: readonly string[] = []): Promise<void> {
   const file = path.join(dir, "index.json");
   for (const id of entryIds) if (Object.hasOwn(reg.convs, id)) await writeEntry(dir, reg.convs[id]);
+  const text = JSON.stringify(reg, null, 2);
   let current: string | null = null;
-  try {
+  let valid = false;
+  const st = await fs.stat(file).catch(() => null);
+  const last = lastWritten.get(dir);
+  if (st && last && last.mtimeMs === st.mtimeMs && last.size === st.size) {
+    // The file is still exactly what this process wrote (and validated), so it is not read and parsed again.
+    current = last.text;
+    valid = true;
+  } else if (st) {
     current = await fs.readFile(file, "utf8");
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+    valid = parseRegistry(current) !== null;
   }
-  if (current !== null && parseRegistry(current)) {
+  if (valid && current === text) return; // nothing to save
+  if (current !== null && valid) {
     await writeAtomic(`${file}.bak`, current);
     const daily = await fs.stat(`${file}.daily`).catch(() => null);
     if (!daily || !sameDay(daily.mtimeMs, Date.now())) await writeAtomic(`${file}.daily`, current);
   }
-  await writeAtomic(file, JSON.stringify(reg, null, 2));
+  await writeAtomic(file, text);
+  const after = await fs.stat(file);
+  lastWritten.set(dir, { text, mtimeMs: after.mtimeMs, size: after.size });
 }
 
 const exists = (p: string): Promise<boolean> => fs.access(p).then(() => true, () => false);
@@ -248,9 +272,7 @@ export async function rebuildRegistry(dir: string, nowIso: string): Promise<Regi
 
   // Conversations that saved their own entry come back whole (session id included), not as read-only archives.
   await adoptEntries(dir, convs);
-  if (active === null || convs[active]?.readOnly) {
-    active = Object.values(convs).filter((c) => !c.archived && !c.readOnly).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0]?.id ?? null;
-  }
+  if (active === null || convs[active]?.readOnly) active = pickContinuable(convs)?.id ?? null;
   if (active === null) {
     active = newConvId(Date.parse(nowIso));
     convs[active] = blankEntry(active, nowIso);

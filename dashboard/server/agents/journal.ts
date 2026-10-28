@@ -38,6 +38,18 @@ async function readEntries(file: string): Promise<AgentEvent[]> {
   return out;
 }
 
+/** The entries with seq greater than `after` from a list sorted by seq, at most `limit` (binary search). */
+export function eventsAfter(entries: readonly AgentEvent[], after: number, limit: number): AgentEvent[] {
+  let lo = 0;
+  let hi = entries.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (entries[mid].seq > after) hi = mid;
+    else lo = mid + 1;
+  }
+  return entries.slice(lo, lo + Math.max(0, limit));
+}
+
 /**
  * Reads a journal without opening it for writing: a torn last line is skipped and the file is never
  * modified (unlike `openJournal`, which repairs it). For parked conversations.
@@ -107,14 +119,7 @@ export async function openJournal(file: string, opts: { maxBytes?: number } = {}
     append,
     async read(after, limit) {
       await chain;
-      let lo = 0;
-      let hi = entries.length;
-      while (lo < hi) {
-        const mid = (lo + hi) >> 1;
-        if (entries[mid].seq > after) hi = mid;
-        else lo = mid + 1;
-      }
-      return entries.slice(lo, lo + Math.max(0, limit));
+      return eventsAfter(entries, after, limit);
     },
     lastSeq: () => seq,
   };
