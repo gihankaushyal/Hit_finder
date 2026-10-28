@@ -690,6 +690,41 @@ describe("conversations", () => {
   });
 });
 
+describe("retention", () => {
+  const seedRegistry = (rows: Record<string, object>) => {
+    const file = path.join(cfg.stateDir, "chief", "index.json");
+    const index = JSON.parse(fs.readFileSync(file, "utf8"));
+    Object.assign(index.convs, rows);
+    fs.writeFileSync(file, JSON.stringify(index));
+  };
+  const aged = (id: string, days: number, archived: boolean) => ({
+    id, title: id, titleManual: false, createdAt: "2026-01-01T00:00:00.000Z", updatedAt: new Date(Date.now() - days * 86_400_000).toISOString(),
+    turns: 1, costUsd: null, sessionId: null, archived, readOnly: null, seededFrom: null,
+  });
+
+  it("archives idle conversations when it starts", async () => {
+    seedRegistry({ "c-stale": aged("c-stale", 45, false), "c-fresh": aged("c-fresh", 2, false) });
+    const again = build();
+    await again.init();
+    const rows = again.conversations();
+    expect(rows.find((c) => c.id === "c-stale")).toMatchObject({ archived: true });
+    expect(rows.find((c) => c.id === "c-fresh")).toMatchObject({ archived: false });
+  });
+
+  it("purges old archived conversations only when a purge limit is set", async () => {
+    seedRegistry({ "c-ancient": aged("c-ancient", 200, true) });
+    fs.mkdirSync(path.join(cfg.stateDir, "chief", "conv", "c-ancient"), { recursive: true });
+    fs.writeFileSync(path.join(cfg.stateDir, "chief", "conv", "c-ancient", "journal.jsonl"), "");
+    const off = build();
+    await off.init();
+    expect(off.conversations().some((c) => c.id === "c-ancient")).toBe(true);
+    const on = createChief({ cfg: { ...cfg, chiefPurgeDays: 90 }, bus, driver: createFakeDriver({ stepMs: 0 }), approvals, tools, env: {}, transcriptExists: async () => true });
+    await on.init();
+    expect(on.conversations().some((c) => c.id === "c-ancient")).toBe(false);
+    expect(fs.existsSync(path.join(cfg.stateDir, "chief", "conv", "c-ancient"))).toBe(false);
+  });
+});
+
 describe("continuing in a new conversation", () => {
   it("continues in a new conversation: the first prompt carries what was said, once", async () => {
     await chief.send("we agreed on Tuesday");

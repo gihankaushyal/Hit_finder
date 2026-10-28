@@ -6,7 +6,7 @@ import type { Config } from "../config";
 import type { EventBus } from "../events";
 import type { Approvals } from "./approvals";
 import type { AgentDriver, Session, SessionStart, ToolDef } from "./driver";
-import { adoptEntries, autoTitle, blankEntry, buildDigest, cleanTitle, convDir, isEmptyConv, journalPath, loadRegistry, newConvId, pickContinuable, rebuildRegistry, saveRegistry, sweepTempFiles, TITLE_EDIT_MAX, type ConvEntry, type Registry, type WriteMemo } from "./conversations";
+import { adoptEntries, autoTitle, blankEntry, buildDigest, cleanTitle, convDir, isEmptyConv, journalPath, loadRegistry, newConvId, pickContinuable, rebuildRegistry, saveRegistry, selectSweep, sweepTempFiles, TITLE_EDIT_MAX, type ConvEntry, type Registry, type WriteMemo } from "./conversations";
 import { eventsAfter, openJournal, readJournalFile, type Journal } from "./journal";
 import { createTranscriptProbe, type TranscriptProbe } from "./transcripts";
 import { chiefOptions } from "./policy";
@@ -18,6 +18,7 @@ export const CHIEF_NAME = "Chief of staff";
 export const CHIEF_FAILED_MESSAGE = "The chief of staff session ended with an error.";
 const NOTIFY_MS = 150;
 const STOP_WAIT_MS = 3000;
+const SWEEP_EVERY_MS = 24 * 60 * 60 * 1000;
 const INTERRUPT_WAIT_MS = 2000;
 const ACTIVE: AgentState[] = ["running", "waiting-approval", "idle"];
 const STARTING_MESSAGE = "The chief of staff is still starting. Try again in a moment.";
@@ -91,6 +92,7 @@ export function createChief(deps: ChiefDeps): Chief {
   let stopping = false;
   let gen = 0;
   let timer: NodeJS.Timeout | null = null;
+  let sweepTimer: NodeJS.Timeout | null = null;
   let writes: Promise<void> = Promise.resolve();
   let lock: Promise<unknown> = Promise.resolve();
   let ready = false;
@@ -265,6 +267,21 @@ export function createChief(deps: ChiefDeps): Chief {
     if (session === s) session = null;
   }
 
+  /**
+   * Archive conversations idle for too long and, when enabled, delete long-archived ones. Only the changed
+   * conversations are written to disk (their own entry files too), and a folder goes only after the registry no longer lists it.
+   */
+  async function sweep(): Promise<void> {
+    const { archive, purge } = selectSweep(Object.values(reg.convs), reg.active, Date.now(), cfg.chiefArchiveDays, cfg.chiefPurgeDays);
+    if (archive.length === 0 && purge.length === 0) return;
+    for (const id of archive) reg.convs[id].archived = true;
+    for (const id of purge) delete reg.convs[id];
+    await save(false, ...archive);
+    for (const id of purge) await discard(id);
+    console.log(`chief conversations: archived ${archive.length}, deleted ${purge.length}`);
+    notify();
+  }
+
   /** The digest to put before the first prompt of a conversation that was started from another one. */
   const seedText = async (): Promise<string> => {
     const from = active().seededFrom;
@@ -402,6 +419,8 @@ export function createChief(deps: ChiefDeps): Chief {
       await activate(reg.active);
       await saveRegistry(dir, reg, Object.keys(reg.convs), memo);
       for (const c of leftovers) await discard(c.id);
+      await sweep();
+      sweepTimer ??= setInterval(() => void serial(sweep).catch((err) => console.error("chief sweep failed:", err instanceof Error ? err.message : err)), SWEEP_EVERY_MS).unref();
       ready = true;
     },
 

@@ -316,3 +316,18 @@ export function buildDigest(events: AgentEvent[], maxChars: number = DIGEST_MAX_
   }
   return out;
 }
+
+const DAY_MS = 86_400_000;
+
+/** Which conversations the daily sweep archives (idle past `archiveDays`) and purges (archived, idle past `purgeDays`). 0 turns a step off; the active conversation is never touched. */
+export function selectSweep(convs: ConvEntry[], activeId: string, nowMs: number, archiveDays: number, purgeDays: number): { archive: string[]; purge: string[] } {
+  const archive: string[] = [];
+  const purge: string[] = [];
+  for (const c of convs) {
+    if (c.id === activeId) continue;
+    const idle = nowMs - Date.parse(c.updatedAt);
+    if (!c.archived && archiveDays > 0 && idle > archiveDays * DAY_MS) archive.push(c.id);
+    else if (c.archived && purgeDays > 0 && idle > purgeDays * DAY_MS) purge.push(c.id);
+  }
+  return { archive, purge };
+}

@@ -17,6 +17,8 @@ export interface Config {
   agentMaxTurns: number;  // DASH_AGENT_MAX_TURNS, default 60 per worker (1 to 500)
   workerModel: string;    // DASH_WORKER_MODEL, default sonnet
   chiefModel: string;     // DASH_CHIEF_MODEL, default opus
+  chiefArchiveDays: number; // DASH_CHIEF_ARCHIVE_DAYS, default 30; 0 = never archive automatically
+  chiefPurgeDays: number;   // DASH_CHIEF_PURGE_DAYS, default 0 = never delete
   agentDriver: "sdk" | "fake"; // DASH_AGENT_DRIVER, default sdk; fake is for tests only
   terminalEnabled: boolean;      // DASH_TERMINAL, on (default) or off
   terminalSession: string;       // DASH_TERMINAL_SESSION, the tmux session the terminal attaches to
@@ -37,6 +39,14 @@ const AGENT_MAX_LIMIT = 8;
 const DEFAULT_AGENT_MAX_TURNS = 60;
 const AGENT_MAX_TURNS_LIMIT = 500;
 
+const MAX_RETENTION_DAYS = 3650;
+const DEFAULT_CHIEF_ARCHIVE_DAYS = 30;
+/** Like boundedInt, but 0 is allowed and means "off". */
+function dayCount(name: string, value: string | undefined, fallback: number): number {
+  if (value === undefined) return fallback;
+  if (!/^\d+$/.test(value) || Number(value) > MAX_RETENTION_DAYS) throw new Error(`${name} must be a whole number of days from 0 to ${MAX_RETENTION_DAYS}, got "${value}"`);
+  return Number(value);
+}
 /** A whole number from 1 to `limit`, or the default for an unset setting; anything else is an error naming the setting. */
 function boundedInt(name: string, value: string | undefined, fallback: number, limit: number): number {
   if (value === undefined) return fallback;
@@ -106,6 +116,8 @@ export function loadConfig(raw: NodeJS.ProcessEnv): Config {
     agentMaxTurns: boundedInt("DASH_AGENT_MAX_TURNS", get("DASH_AGENT_MAX_TURNS"), DEFAULT_AGENT_MAX_TURNS, AGENT_MAX_TURNS_LIMIT),
     workerModel: get("DASH_WORKER_MODEL") ?? "sonnet",
     chiefModel: get("DASH_CHIEF_MODEL") ?? "opus",
+    chiefArchiveDays: dayCount("DASH_CHIEF_ARCHIVE_DAYS", get("DASH_CHIEF_ARCHIVE_DAYS"), DEFAULT_CHIEF_ARCHIVE_DAYS),
+    chiefPurgeDays: dayCount("DASH_CHIEF_PURGE_DAYS", get("DASH_CHIEF_PURGE_DAYS"), 0),
     agentDriver: agentDriver(get("DASH_AGENT_DRIVER")),
     agentBase: get("DASH_AGENT_BASE") ?? "origin/phase-05",
     terminalEnabled: terminalSwitch(get("DASH_TERMINAL")),
