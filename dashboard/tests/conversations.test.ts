@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { readJournalFile } from "../server/agents/journal";
 import {
-  ACTIVE_LEGACY_ID, autoTitle, blankEntry, CONV_ID, journalPath, loadRegistry, newConvId, rebuildRegistry, saveRegistry, statsOf,
+  ACTIVE_LEGACY_ID, adoptEntries, autoTitle, blankEntry, CONV_ID, journalPath, loadRegistry, newConvId, rebuildRegistry, saveRegistry, statsOf,
   type Registry,
 } from "../server/agents/conversations";
 
@@ -183,5 +183,55 @@ describe("rebuildRegistry", () => {
     fs.rmSync(path.join(dir, "index.json.bak"), { force: true });
     const r = await rebuildRegistry(dir, NOW);
     expect(r.convs["c-a"]).toMatchObject({ title: "kept", sessionId: null, archived: true, readOnly: "legacy" });
+  });
+
+  it("recovers conversations whole when they saved their own entry, and picks the newest to continue", async () => {
+    const old = { ...blankEntry("c-old", "2026-10-01T00:00:00.000Z"), title: "old", sessionId: "s-old", updatedAt: "2026-10-02T00:00:00.000Z" };
+    const live = { ...blankEntry("c-live", "2026-10-03T00:00:00.000Z"), title: "live", sessionId: "s-live", updatedAt: "2026-10-04T00:00:00.000Z", turns: 2 };
+    await saveRegistry(dir, { v: 1, active: "c-live", convs: { "c-old": old, "c-live": live } }, ["c-old", "c-live"]);
+    for (const f of fs.readdirSync(dir).filter((n) => n.startsWith("index.json"))) fs.rmSync(path.join(dir, f));
+    const r = await rebuildRegistry(dir, NOW);
+    expect(r.active).toBe("c-live");
+    expect(r.convs["c-live"]).toMatchObject({ sessionId: "s-live", turns: 2, readOnly: null, archived: false });
+    expect(r.convs["c-old"]).toMatchObject({ sessionId: "s-old", archived: false });
+  });
+});
+
+describe("entry files and backups", () => {
+  const reg = (title: string): Registry => ({ v: 1, active: "c-a", convs: { "c-a": { ...blankEntry("c-a", "2026-10-20T08:00:00.000Z"), title } } });
+
+  it("writes only the entries it is told changed, and adoptEntries prefers them over the index", async () => {
+    await saveRegistry(dir, reg("one"), ["c-a"]);
+    const stale = reg("stale").convs;
+    await adoptEntries(dir, stale);
+    expect(stale["c-a"].title).toBe("one");
+    const other = { "c-b": blankEntry("c-b", "2026-10-20T08:00:00.000Z") };
+    await saveRegistry(dir, { v: 1, active: "c-b", convs: other });
+    expect(fs.existsSync(path.join(dir, "conv", "c-b", "entry.json"))).toBe(false);
+  });
+
+  it("ignores an unreadable or mismatched entry file", async () => {
+    fs.mkdirSync(path.join(dir, "conv", "c-a"), { recursive: true });
+    fs.writeFileSync(path.join(dir, "conv", "c-a", "entry.json"), "{ nope");
+    fs.mkdirSync(path.join(dir, "conv", "c-b"), { recursive: true });
+    fs.writeFileSync(path.join(dir, "conv", "c-b", "entry.json"), JSON.stringify(blankEntry("c-other", "2026-10-20T08:00:00.000Z")));
+    const convs = {};
+    await adoptEntries(dir, convs);
+    expect(convs).toEqual({});
+  });
+
+  it("keeps a copy from before today's first save, and falls back to it", async () => {
+    await saveRegistry(dir, reg("one"));
+    await saveRegistry(dir, reg("two"));
+    await saveRegistry(dir, reg("three"));
+    const daily = path.join(dir, "index.json.daily");
+    expect(JSON.parse(fs.readFileSync(daily, "utf8")).convs["c-a"].title).toBe("one"); // not refreshed again the same day
+    const yesterday = new Date(Date.now() - 86_400_000);
+    fs.utimesSync(daily, yesterday, yesterday);
+    await saveRegistry(dir, reg("four"));
+    expect(JSON.parse(fs.readFileSync(daily, "utf8")).convs["c-a"].title).toBe("three");
+    fs.writeFileSync(path.join(dir, "index.json"), "garbage");
+    fs.writeFileSync(path.join(dir, "index.json.bak"), "garbage");
+    expect((await loadRegistry(dir))!.convs["c-a"].title).toBe("three");
   });
 });

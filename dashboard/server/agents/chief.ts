@@ -6,7 +6,7 @@ import type { Config } from "../config";
 import type { EventBus } from "../events";
 import type { Approvals } from "./approvals";
 import type { AgentDriver, Session, SessionStart, ToolDef } from "./driver";
-import { autoTitle, blankEntry, convDir, journalPath, loadRegistry, newConvId, rebuildRegistry, saveRegistry, TITLE_EDIT_MAX, type ConvEntry, type Registry } from "./conversations";
+import { adoptEntries, autoTitle, blankEntry, convDir, journalPath, loadRegistry, newConvId, rebuildRegistry, saveRegistry, TITLE_EDIT_MAX, type ConvEntry, type Registry } from "./conversations";
 import { openJournal, readJournalFile, type Journal } from "./journal";
 import { chiefOptions } from "./policy";
 import { chiefPrompt } from "./rolePrompts";
@@ -109,11 +109,11 @@ export function createChief(deps: ChiefDeps): Chief {
     if (bump) e.updatedAt = new Date().toISOString();
   };
   /** `bump` marks the active conversation as just used; renaming or archiving another one must not. */
-  const persist = (bump = true): Promise<void> => {
+  const persist = (bump = true, ...also: string[]): Promise<void> => {
     writes = writes.then(async () => {
       try {
         syncEntry(bump);
-        await saveRegistry(dir, reg);
+        await saveRegistry(dir, reg, [...new Set([reg.active, ...also])]);
       } catch (err) {
         console.error("chief index write failed", (err as NodeJS.ErrnoException).code ?? "error");
       }
@@ -289,6 +289,7 @@ export function createChief(deps: ChiefDeps): Chief {
     async init() {
       await fs.mkdir(dir, { recursive: true });
       reg = (await loadRegistry(dir)) ?? (await rebuildRegistry(dir, new Date().toISOString()));
+      await adoptEntries(dir, reg.convs);
       if (!peek() || peek()?.readOnly) {
         // The pointer to the active conversation was lost, or names one that cannot be continued: take the newest one that can still be continued.
         const live = Object.values(reg.convs).filter((c) => !c.archived && !c.readOnly).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
@@ -298,7 +299,7 @@ export function createChief(deps: ChiefDeps): Chief {
       }
       // No session survives a restart; the conversation is resumed from its id on the next message.
       await activate(reg.active);
-      await saveRegistry(dir, reg);
+      await saveRegistry(dir, reg, Object.keys(reg.convs));
     },
 
     summary: () => ({
@@ -389,7 +390,7 @@ export function createChief(deps: ChiefDeps): Chief {
         }
         if (change.archived !== undefined) target.archived = change.archived;
         // Housekeeping, not activity: it must not reorder the list by bumping `updatedAt`.
-        void persist(false);
+        void persist(false, id);
         notify();
         await writes;
       }),

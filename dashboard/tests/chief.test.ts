@@ -348,6 +348,7 @@ describe("conversations", () => {
     index.convs[saved.conversationId].archived = true;
     index.convs[saved.conversationId].readOnly = "legacy";
     fs.writeFileSync(file, JSON.stringify(index));
+    fs.writeFileSync(path.join(cfg.stateDir, "chief", "conv", saved.conversationId, "entry.json"), JSON.stringify(index.convs[saved.conversationId])); // the entry file is the source of truth
     fs.rmSync(`${file}.bak`, { force: true });
     const again = build();
     await again.init();
@@ -475,6 +476,32 @@ describe("conversations", () => {
     const again = build();
     await again.init();
     await expect(again.resume("c-old")).rejects.toMatchObject({ code: "state" });
+  });
+
+  it("keeps each conversation's session id in its own folder and survives losing every index file", async () => {
+    await chief.send("alpha");
+    await waitState("idle");
+    const alpha = chief.summary();
+    const dir = path.join(cfg.stateDir, "chief");
+    expect(alpha.sessionId).not.toBeNull();
+    for (const f of fs.readdirSync(dir).filter((n) => n.startsWith("index.json"))) fs.rmSync(path.join(dir, f));
+    const again = build();
+    await again.init();
+    expect(again.summary()).toMatchObject({ conversationId: alpha.conversationId, sessionId: alpha.sessionId, title: "alpha", readOnly: null });
+  });
+
+  it("brings back an entry the index lost", async () => {
+    await chief.send("alpha");
+    await waitState("idle");
+    const alpha = chief.summary().conversationId;
+    await chief.reset();
+    const file = path.join(cfg.stateDir, "chief", "index.json");
+    const index = JSON.parse(fs.readFileSync(file, "utf8"));
+    delete index.convs[alpha];
+    fs.writeFileSync(file, JSON.stringify(index));
+    const again = build();
+    await again.init();
+    expect(again.conversations().find((c) => c.id === alpha)).toMatchObject({ title: "alpha", turns: 1 });
   });
 
   it("does not start on a read-only conversation that the index names as active", async () => {

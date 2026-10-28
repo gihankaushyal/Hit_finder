@@ -111,9 +111,12 @@ function parseRegistry(text: string): Registry | null {
   }
 }
 
-/** The registry from `index.json`, or from its backup when that is unreadable; null when neither exists. */
+/** The index, the copy from before the last save, and the copy from before today's first save. */
+const INDEX_COPIES = ["index.json", "index.json.bak", "index.json.daily"];
+
+/** The registry from `index.json`, or from the newest backup that is readable; null when none is. */
 export async function loadRegistry(dir: string): Promise<Registry | null> {
-  for (const name of ["index.json", "index.json.bak"]) {
+  for (const name of INDEX_COPIES) {
     try {
       const reg = parseRegistry(await fs.readFile(path.join(dir, name), "utf8"));
       if (reg) return reg;
@@ -124,9 +127,53 @@ export async function loadRegistry(dir: string): Promise<Registry | null> {
   return null;
 }
 
-/** Atomic write; the previous good copy is kept as `index.json.bak` (a corrupt one never replaces it). */
-export async function saveRegistry(dir: string, reg: Registry): Promise<void> {
+const sameDay = (a: number, b: number): boolean => new Date(a).toISOString().slice(0, 10) === new Date(b).toISOString().slice(0, 10);
+
+const writeAtomic = async (file: string, text: string): Promise<void> => {
+  const tmp = `${file}.${process.pid}.tmp`;
+  await fs.writeFile(tmp, text);
+  await fs.rename(tmp, file);
+};
+
+const entryFile = (dir: string, id: string): string => path.join(convDir(dir, id), "entry.json");
+
+/**
+ * Each conversation also keeps its own `entry.json` beside its journal, so the index can be rebuilt without losing
+ * session ids: the index is a fast copy of these files, not the only place the information lives.
+ */
+async function writeEntry(dir: string, e: ConvEntry): Promise<void> {
+  await fs.mkdir(convDir(dir, e.id), { recursive: true });
+  await writeAtomic(entryFile(dir, e.id), JSON.stringify(e, null, 2));
+}
+
+async function readEntry(dir: string, id: string): Promise<ConvEntry | null> {
+  try {
+    return toEntry(id, JSON.parse(await fs.readFile(entryFile(dir, id), "utf8")));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Takes the on-disk `entry.json` of every conversation folder over what `convs` says: an entry the index lost is
+ * brought back, and one saved just before a crash (entries are written before the index) wins over a stale index.
+ */
+export async function adoptEntries(dir: string, convs: Record<string, ConvEntry>): Promise<void> {
+  for (const id of await fs.readdir(path.join(dir, "conv")).catch(() => [] as string[])) {
+    if (!CONV_ID.test(id)) continue;
+    const saved = await readEntry(dir, id);
+    if (saved) convs[id] = saved;
+  }
+}
+
+/**
+ * Atomic write. The previous good copy is kept as `index.json.bak` and the first good copy of each day as
+ * `index.json.daily` (a corrupt one never replaces either). `entryIds` are the conversations that changed: their
+ * `entry.json` is written first, so a crash between the two writes leaves the newer truth on disk.
+ */
+export async function saveRegistry(dir: string, reg: Registry, entryIds: readonly string[] = []): Promise<void> {
   const file = path.join(dir, "index.json");
+  for (const id of entryIds) if (Object.hasOwn(reg.convs, id)) await writeEntry(dir, reg.convs[id]);
   let current: string | null = null;
   try {
     current = await fs.readFile(file, "utf8");
@@ -134,13 +181,11 @@ export async function saveRegistry(dir: string, reg: Registry): Promise<void> {
     if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
   }
   if (current !== null && parseRegistry(current)) {
-    const bakTmp = `${file}.bak.${process.pid}.tmp`;
-    await fs.writeFile(bakTmp, current);
-    await fs.rename(bakTmp, `${file}.bak`);
+    await writeAtomic(`${file}.bak`, current);
+    const daily = await fs.stat(`${file}.daily`).catch(() => null);
+    if (!daily || !sameDay(daily.mtimeMs, Date.now())) await writeAtomic(`${file}.daily`, current);
   }
-  const tmp = `${file}.${process.pid}.tmp`;
-  await fs.writeFile(tmp, JSON.stringify(reg, null, 2));
-  await fs.rename(tmp, file);
+  await writeAtomic(file, JSON.stringify(reg, null, 2));
 }
 
 const exists = (p: string): Promise<boolean> => fs.access(p).then(() => true, () => false);
@@ -201,12 +246,17 @@ export async function rebuildRegistry(dir: string, nowIso: string): Promise<Regi
     };
   }
 
+  // Conversations that saved their own entry come back whole (session id included), not as read-only archives.
+  await adoptEntries(dir, convs);
+  if (active === null || convs[active]?.readOnly) {
+    active = Object.values(convs).filter((c) => !c.archived && !c.readOnly).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0]?.id ?? null;
+  }
   if (active === null) {
     active = newConvId(Date.parse(nowIso));
     convs[active] = blankEntry(active, nowIso);
   }
   const reg: Registry = { v: 1, active, convs };
-  await saveRegistry(dir, reg);
+  await saveRegistry(dir, reg, Object.keys(convs));
   await fs.rename(oldMeta, `${oldMeta}.migrated`).catch(() => undefined);
   return reg;
 }
