@@ -13,6 +13,28 @@ const page = (events: AgentEvent[], conversationId: string): { body: AgentEvents
 });
 
 describe("useJournal", () => {
+  it("ignores a slow answer for the path it has left", async () => {
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((r) => (release = r));
+    mockApi({
+      "GET /api/chief/events?after=0&limit=200": async () => (await gate, page([ev(1, "live")], "live")),
+      "GET /api/chief/conversations/c-old/events?after=0&limit=200": () => page([ev(1, "parked")], "c-old"),
+    });
+    const { result, rerender } = renderHook(({ p }) => useJournal(p, "chat", true), { initialProps: { p: "/api/chief/events" } });
+    rerender({ p: "/api/chief/conversations/c-old/events" });
+    await waitFor(() => expect(result.current.events.map((e) => (e as { text: string }).text)).toEqual(["parked"]));
+    release();
+    await new Promise((r) => setTimeout(r, 30));
+    expect(result.current.events.map((e) => (e as { text: string }).text)).toEqual(["parked"]);
+  });
+
+  it("shows nothing from the old path while the new one is loading", () => {
+    mockApi({ "GET /api/chief/events?after=0&limit=200": () => page([ev(1, "live")], "live") });
+    const { result, rerender } = renderHook(({ p }) => useJournal(p, "chat", true), { initialProps: { p: "/api/chief/events" } });
+    rerender({ p: "/api/chief/conversations/c-x/events" });
+    expect(result.current).toEqual({ events: [], error: null, loaded: false });
+  });
+
   it("starts over when the server's log moves to another conversation, even if it is longer than ours", async () => {
     // Conversation B already has more entries than the cursor we hold from A: only its id tells them apart.
     const a = [ev(1, "a1"), ev(2, "a2"), ev(3, "a3")];

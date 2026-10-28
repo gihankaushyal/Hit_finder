@@ -3,7 +3,7 @@ import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ChiefChat } from "../../web/src/panels/ChiefChat";
 import { FakeEventSource, mockApi, stubEventSource } from "./helpers";
-import type { AgentEvent, AgentEventBody, AgentEventsResponse, ChiefSummary } from "../../shared/types";
+import type { AgentEvent, AgentEventBody, AgentEventsResponse, ChiefSummary, ConversationInfo, ConversationsResponse } from "../../shared/types";
 
 beforeEach(() => stubEventSource());
 afterEach(() => vi.unstubAllGlobals());
@@ -12,7 +12,7 @@ const chief = (over: Partial<ChiefSummary> = {}): { body: ChiefSummary } => ({
   body: { state: "idle", model: "opus", turns: 0, costUsd: null, sessionId: null, error: null, pendingApprovals: 0, lastSeq: 0, conversationId: "c-now", title: null, readOnly: null, ...over },
 });
 const ev = (seq: number, e: AgentEventBody): AgentEvent => ({ ...e, seq, at: "2026-10-20T08:01:00.000Z" });
-const log = (events: AgentEvent[]): { body: AgentEventsResponse } => ({ body: { events, lastSeq: events.length } });
+const log = (events: AgentEvent[]): { body: AgentEventsResponse } => ({ body: { events, lastSeq: events.length, conversationId: "c-now" } });
 const EVENTS = "GET /api/chief/events?after=0&limit=200";
 
 describe("ChiefChat", () => {
@@ -161,5 +161,105 @@ describe("ChiefChat", () => {
     render(<ChiefChat />);
     expect(await screen.findByText("The chief of staff session ended with an error.")).toBeInTheDocument();
     expect(screen.getByLabelText("Message to the chief of staff")).toBeEnabled();
+  });
+
+  it("does not announce the old replies of a conversation that has just become the active one", async () => {
+    const a = [ev(1, { kind: "user", text: "hi" }), ev(2, { kind: "text", text: "alpha reply" })];
+    const b = [ev(1, { kind: "user", text: "yo" }), ev(2, { kind: "text", text: "beta old" })];
+    let cur: { conv: string; events: AgentEvent[] } = { conv: "c-a", events: a };
+    const page = (after: number) => ({ body: { events: cur.events.filter((e) => e.seq > after), lastSeq: cur.events[cur.events.length - 1].seq, conversationId: cur.conv } as AgentEventsResponse });
+    mockApi({
+      "GET /api/chief": () => chief({ conversationId: cur.conv, turns: 1 }),
+      "GET /api/chief/events?after=0&limit=200": () => page(0),
+      "GET /api/chief/events?after=2&limit=200": () => page(2),
+      "GET /api/chief/events?after=3&limit=200": () => page(3),
+    });
+    render(<ChiefChat />);
+    const live = await screen.findByRole("status");
+    await waitFor(() => expect(live).toHaveTextContent("Chief of staff: alpha reply"));
+    cur = { conv: "c-b", events: b };
+    act(() => FakeEventSource.emit({ type: "invalidate", resource: "chat" }));
+    await screen.findByText("beta old");
+    await new Promise((r) => setTimeout(r, 30));
+    expect(live).toHaveTextContent("Chief of staff: alpha reply"); // "beta old" is not new
+    cur = { conv: "c-b", events: [...b, ev(3, { kind: "text", text: "beta new" })] };
+    act(() => FakeEventSource.emit({ type: "invalidate", resource: "chat" }));
+    await waitFor(() => expect(live).toHaveTextContent("Chief of staff: beta new"));
+  });
+
+  describe("conversations", () => {
+    const info = (over: Partial<ConversationInfo>): ConversationInfo => ({
+      id: "c-old", title: "Old topic", createdAt: "2026-10-20T08:00:00.000Z", updatedAt: "2026-10-20T09:00:00.000Z", turns: 1, costUsd: null,
+      archived: false, readOnly: null, active: false, seededFrom: null, ...over,
+    });
+    const convs = (rows: ConversationInfo[]): { body: ConversationsResponse } => ({ body: { conversations: rows } });
+    const NOW = info({ id: "c-now", title: "Now", active: true });
+    const OLD_EVENTS = "GET /api/chief/conversations/c-old/events?after=0&limit=200";
+    const base = () => ({ "GET /api/chief": chief({ conversationId: "c-now", title: "Now", turns: 1 }), [EVENTS]: log([]), "GET /api/chief/conversations": convs([NOW, info({})]) });
+
+    it("opens the list, reads a parked conversation, and hides the composer while reading", async () => {
+      mockApi({ ...base(), [OLD_EVENTS]: log([ev(1, { kind: "user", text: "what we said before" })]) });
+      render(<ChiefChat />);
+      await userEvent.click(await screen.findByRole("button", { name: "Conversations" }));
+      await userEvent.click(await screen.findByRole("button", { name: "Read Old topic" }));
+      expect(await screen.findByText("what we said before")).toBeInTheDocument();
+      expect(screen.getByText("You are reading an earlier conversation.")).toBeInTheDocument();
+      expect(screen.queryByLabelText("Message to the chief of staff")).toBeNull();
+      await userEvent.click(screen.getByRole("button", { name: "Back to current" }));
+      expect(await screen.findByLabelText("Message to the chief of staff")).toBeInTheDocument();
+    });
+
+    it("resumes the conversation being read", async () => {
+      const api = mockApi({ ...base(), [OLD_EVENTS]: log([]), "POST /api/chief/conversations/c-old/resume": { body: { ok: true } } });
+      render(<ChiefChat />);
+      await userEvent.click(await screen.findByRole("button", { name: "Conversations" }));
+      await userEvent.click(await screen.findByRole("button", { name: "Read Old topic" }));
+      await userEvent.click(await screen.findByRole("button", { name: "Resume this conversation" }));
+      await waitFor(() => expect(api.count("POST", "/api/chief/conversations/c-old/resume")).toBe(1));
+      expect(await screen.findByLabelText("Message to the chief of staff")).toBeInTheDocument();
+    });
+
+    it("renames and archives through the API", async () => {
+      const api = mockApi({ ...base(), "PATCH /api/chief/conversations/c-old": { body: { ok: true } } });
+      render(<ChiefChat />);
+      await userEvent.click(await screen.findByRole("button", { name: "Conversations" }));
+      await userEvent.click(await screen.findByRole("button", { name: "Archive Old topic" }));
+      await waitFor(() => expect(api.calls.find((c) => c.method === "PATCH")?.body).toEqual({ archived: true }));
+      await userEvent.click(screen.getByRole("button", { name: "Rename Old topic" }));
+      await userEvent.type(screen.getByLabelText("Conversation title"), " v2{Enter}");
+      await waitFor(() => expect(api.calls.filter((c) => c.method === "PATCH")[1]?.body).toEqual({ title: "Old topic v2" }));
+    });
+
+    it("says why a read-only conversation cannot be continued", async () => {
+      mockApi({ ...base(), "GET /api/chief/conversations": convs([NOW, info({ readOnly: "legacy" })]), [OLD_EVENTS]: log([]) });
+      render(<ChiefChat />);
+      await userEvent.click(await screen.findByRole("button", { name: "Conversations" }));
+      await userEvent.click(await screen.findByRole("button", { name: "Read Old topic" }));
+      expect(await screen.findByText(/can be read but not continued/)).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Resume this conversation" })).toBeNull();
+    });
+
+    it("will not switch conversations while the chief is working", async () => {
+      mockApi({ ...base(), "GET /api/chief": chief({ conversationId: "c-now", state: "running" }), [OLD_EVENTS]: log([]) });
+      render(<ChiefChat />);
+      await userEvent.click(await screen.findByRole("button", { name: "Conversations" }));
+      expect(await screen.findByRole("button", { name: "Resume Old topic" })).toBeDisabled();
+      await userEvent.click(screen.getByRole("button", { name: "Read Old topic" }));
+      expect(await screen.findByRole("button", { name: "Resume this conversation" })).toBeDisabled();
+    });
+
+    it("lists nothing to read when the conversations could not be loaded", async () => {
+      mockApi({ "GET /api/chief": chief({ conversationId: "c-now" }), [EVENTS]: log([]), [OLD_EVENTS]: log([]) });
+      render(<ChiefChat />);
+      await userEvent.click(await screen.findByRole("button", { name: "Conversations" }));
+      expect(screen.queryByRole("button", { name: "Read Old topic" })).toBeNull(); // the list could not be loaded
+    });
+
+    it("says so when the details of the conversation being read cannot be loaded", async () => {
+      mockApi({ "GET /api/chief": chief({ conversationId: "c-now" }), [EVENTS]: log([]), [OLD_EVENTS]: log([]) });
+      render(<ChiefChat />);
+      await userEvent.click(await screen.findByRole("button", { name: "Conversations" }));
+      expect(screen.queryByRole("button", { name: "Resume this conversation" })).toBeNull();
+    });
   });
 });

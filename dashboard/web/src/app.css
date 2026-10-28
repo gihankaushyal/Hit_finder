@@ -214,6 +214,15 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .chat__result summary { cursor: pointer; overflow-wrap: anywhere; }
 .chat__tool { margin: 0 0 var(--s2); }
 .chat__chip { display: inline-block; padding: 0 var(--s2); border: 1px solid var(--rule); border-radius: 999px; background: var(--surface-2); font-size: 0.8rem; }
+.chat__bar { display: flex; flex-wrap: wrap; gap: var(--s2); align-items: center; }
+.convs { margin: 0 0 var(--s2); border: 1px solid var(--rule); border-radius: 6px; padding: var(--s2); }
+.convs__toggle { display: inline-flex; gap: var(--s1); align-items: center; font-size: 0.85rem; }
+.convs__list { list-style: none; margin: var(--s2) 0 0; padding: 0; }
+.convs__row { display: flex; flex-wrap: wrap; gap: var(--s2); align-items: center; padding: var(--s1) 0; border-top: 1px solid var(--rule); }
+.convs__row--open { background: var(--surface-2); }
+.convs__title { font-weight: 600; overflow-wrap: anywhere; }
+.convs__badge { padding: 0 var(--s2); border: 1px solid var(--rule); border-radius: 999px; font-size: 0.75rem; }
+.convs__actions { margin-left: auto; display: inline-flex; gap: var(--s1); }
 
 /* Panels and the runs table clip their content, so a ring drawn outside the box would be cut off at the edge. */
 .panel :focus-visible, .runs-wrap :focus-visible { outline-offset: -2px; }
