@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { createChief, CHIEF_ID, CHIEF_NAME, type Chief } from "../server/agents/chief";
+import { createChief, CHIEF_ID, CHIEF_NAME, type Chief, type ChiefDeps } from "../server/agents/chief";
 import { AgentError } from "../server/agents/supervisor";
 import { createFakeDriver, type FakeDriverOptions } from "../server/agents/fakeDriver";
 import { createApprovals, type Approvals } from "../server/agents/approvals";
@@ -25,11 +25,12 @@ const tools: ToolDef[] = [
   { name: "list_workers", description: "d", schema: {}, handler: async () => ({ text: "none" }) },
 ];
 
-function build(fake: FakeDriverOptions = { stepMs: 0 }, driver?: AgentDriver): Chief {
+function build(fake: FakeDriverOptions = { stepMs: 0 }, driver?: AgentDriver, extra: Partial<ChiefDeps> = {}): Chief {
   const inner = driver ?? createFakeDriver(fake);
   const recording: AgentDriver = { start: (s) => (starts.push(s), inner.start(s)) };
   approvals = createApprovals({ bus, auditPath: path.join(root, "audit.jsonl") });
-  return createChief({ cfg, bus, driver: recording, approvals, tools, env: { PATH: process.env.PATH ?? "" }, notifyMs: 5 });
+  // The fake driver's session ids are not on disk: tests get a probe that finds every transcript unless they ask otherwise.
+  return createChief({ cfg, bus, driver: recording, approvals, tools, env: { PATH: process.env.PATH ?? "" }, notifyMs: 5, transcriptExists: async () => true, ...extra });
 }
 async function until<T>(f: () => T | undefined | false, ms = 3000): Promise<T> {
   const end = Date.now() + ms;
@@ -686,5 +687,119 @@ describe("conversations", () => {
     await again.init();
     expect(fs.existsSync(path.join(dir, "index.json.99999.tmp"))).toBe(false);
     expect(fs.existsSync(path.join(dir, "conv", id, "entry.json.99999.tmp"))).toBe(false);
+  });
+});
+
+describe("a conversation whose session is gone", () => {
+  const gone = { transcriptExists: async () => false };
+
+  it("is read-only after a restart when its saved transcript has vanished", async () => {
+    await chief.send("remember this");
+    await waitState("idle");
+    const id = chief.summary().conversationId;
+    const again = build({ stepMs: 0 }, undefined, gone);
+    await again.init();
+    expect(again.summary()).toMatchObject({ conversationId: id, readOnly: "expired", sessionId: null });
+    await expect(again.send("hello?")).rejects.toMatchObject({ code: "state" });
+    expect((await again.events(0, 100)).events.filter((e) => e.kind === "user")).toHaveLength(1); // the refused message was not journalled
+  });
+
+  it("refuses to resume a parked conversation whose transcript vanished, and says so in the list", async () => {
+    await chief.send("topic");
+    await waitState("idle");
+    const first = chief.summary().conversationId;
+    await chief.reset();
+    const later = build({ stepMs: 0 }, undefined, gone);
+    await later.init();
+    await expect(later.resume(first)).rejects.toMatchObject({ code: "state" });
+    expect(later.conversations().find((c) => c.id === first)).toMatchObject({ readOnly: "expired" });
+    // and it is remembered across another restart without probing again
+    const third = build();
+    await third.init();
+    expect(third.conversations().find((c) => c.id === first)).toMatchObject({ readOnly: "expired" });
+  });
+
+  it("turns a resume that fails before saying anything into a read-only conversation, not a failed one", async () => {
+    await chief.send("topic");
+    await waitState("idle");
+    const id = chief.summary().conversationId;
+    const failing: AgentDriver = {
+      start: () => ({
+        events: (async function* () { throw new Error("No conversation found with session ID"); })(),
+        send() {}, interrupt: async () => {}, close() {},
+      }),
+    };
+    const again = build({}, failing);
+    await again.init();
+    await again.send("are you there?");
+    await until(() => (again.summary().readOnly && again.summary().state === "idle") || undefined);
+    expect(again.summary()).toMatchObject({ conversationId: id, state: "idle", readOnly: "expired", sessionId: null, error: null });
+    expect((await again.events(0, 100)).events.some((e) => e.kind === "error")).toBe(true);
+  });
+
+  it("handles the way the real SDK reports a missing session: a failed result, then an error", async () => {
+    await chief.send("topic");
+    await waitState("idle");
+    const id = chief.summary().conversationId;
+    const real: AgentDriver = {
+      start: () => ({
+        events: (async function* () {
+          yield { body: { kind: "result" as const, ok: false, text: "error_during_execution", turns: 0, costUsd: null } };
+          throw new Error("Claude Code returned an error result: No conversation found with session ID: s-1");
+        })(),
+        send() {}, interrupt: async () => {}, close() {},
+      }),
+    };
+    const again = build({}, real);
+    await again.init();
+    await again.send("are you there?");
+    await until(() => (again.summary().readOnly && again.summary().state === "idle") || undefined);
+    expect(again.summary()).toMatchObject({ conversationId: id, readOnly: "expired", turns: 1, error: null });
+    const kinds = (await again.events(0, 100)).events.map((e) => e.kind);
+    expect(kinds.filter((k) => k === "result")).toHaveLength(1); // only the real turn from before; the failed attempt is not one
+  });
+
+  it("does not expire a conversation because a resume failed for another reason", async () => {
+    await chief.send("topic");
+    await waitState("idle");
+    const flaky: AgentDriver = {
+      start: () => ({ events: (async function* () { throw new Error("socket hang up"); })(), send() {}, interrupt: async () => {}, close() {} }),
+    };
+    const again = build({}, flaky);
+    await again.init();
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    await again.send("hello?");
+    await until(() => again.summary().state === "failed" || undefined);
+    log.mockRestore();
+    expect(again.summary().readOnly).toBeNull();
+    expect(again.summary().sessionId).not.toBeNull(); // still resumable once the network is back
+  });
+
+  it("treats a resume that quietly starts a different session as a lost session", async () => {
+    await chief.send("topic");
+    await waitState("idle");
+    const stray: AgentDriver = {
+      start: () => ({
+        events: (async function* () { yield { sessionId: "a-brand-new-session" }; await new Promise(() => undefined); })(),
+        send() {}, interrupt: async () => {}, close() {},
+      }),
+    };
+    const again = build({}, stray);
+    await again.init();
+    await again.send("are you there?");
+    await until(() => (again.summary().readOnly && again.summary().state === "idle") || undefined);
+    expect(again.summary()).toMatchObject({ readOnly: "expired", sessionId: null, state: "idle" });
+  });
+
+  it("does not treat an ordinary failure of a brand-new conversation as expiry", async () => {
+    const failing: AgentDriver = {
+      start: () => ({ events: (async function* () { throw new Error("boom"); })(), send() {}, interrupt: async () => {}, close() {} }),
+    };
+    chief = build({}, failing);
+    await chief.init();
+    await chief.reset();
+    await chief.send("first words");
+    await until(() => chief.summary().state === "failed" || undefined);
+    expect(chief.summary().readOnly).toBeNull();
   });
 });

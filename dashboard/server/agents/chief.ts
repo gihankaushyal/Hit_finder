@@ -8,6 +8,7 @@ import type { Approvals } from "./approvals";
 import type { AgentDriver, Session, SessionStart, ToolDef } from "./driver";
 import { adoptEntries, autoTitle, blankEntry, cleanTitle, convDir, isEmptyConv, journalPath, loadRegistry, newConvId, pickContinuable, rebuildRegistry, saveRegistry, sweepTempFiles, TITLE_EDIT_MAX, type ConvEntry, type Registry, type WriteMemo } from "./conversations";
 import { eventsAfter, openJournal, readJournalFile, type Journal } from "./journal";
+import { createTranscriptProbe, type TranscriptProbe } from "./transcripts";
 import { chiefOptions } from "./policy";
 import { chiefPrompt } from "./rolePrompts";
 import { AgentError, MESSAGE_MAX_CHARS } from "./supervisor";
@@ -23,6 +24,9 @@ const STARTING_MESSAGE = "The chief of staff is still starting. Try again in a m
 const NO_ACTIVE_MESSAGE = "There is no active conversation. Start a new one.";
 const SAVE_FAILED_MESSAGE = "The change could not be saved. Check the disk and try again.";
 const NOT_FOUND_MESSAGE = "That conversation does not exist.";
+export const EXPIRED_MESSAGE = "The saved session for this conversation has expired. You can read it, or continue in a new conversation.";
+/** What the SDK says when asked to resume a session it no longer has (checked by hand against the real SDK). */
+const SESSION_GONE = /no conversation found/i;
 export const READONLY_MESSAGE = "This conversation can no longer be continued. Read it, or continue in a new conversation.";
 
 interface Meta {
@@ -59,6 +63,8 @@ export interface ChiefDeps {
   env: Record<string, string | undefined>;
   notifyMs?: number;
   interruptWaitMs?: number;
+  /** Whether the SDK still has a session's transcript; the real one looks in `~/.claude/projects`. */
+  transcriptExists?: TranscriptProbe;
 }
 
 /**
@@ -72,6 +78,7 @@ export function createChief(deps: ChiefDeps): Chief {
   const sandboxDir = path.join(cfg.agentsDir, ".chief");
   const notifyMs = deps.notifyMs ?? NOTIFY_MS;
   const interruptWaitMs = deps.interruptWaitMs ?? INTERRUPT_WAIT_MS;
+  const transcriptExists = deps.transcriptExists ?? createTranscriptProbe();
   const meta: Meta = { state: "idle", turns: 0, costUsd: null, sessionId: null, error: null };
   // `meta` is the live state of the active conversation; `reg` holds every conversation, the active one included.
   let reg: Registry = { v: 1, active: "", convs: {} };
@@ -213,10 +220,35 @@ export function createChief(deps: ChiefDeps): Chief {
     return { events: await jr.read(after, limit), lastSeq: jr.lastSeq(), conversationId };
   };
 
+  /** Mark a conversation as no longer resumable. */
+  const expire = (e: ConvEntry) => {
+    e.readOnly = "expired";
+    e.sessionId = null;
+    if (e.id === reg.active) meta.sessionId = null;
+  };
+  const transcriptGone = async (e: ConvEntry): Promise<boolean> => e.sessionId !== null && !(await transcriptExists(e.sessionId));
+
+  /** A session that was asked to resume could not: say so in the log and leave the conversation read-only, not failed. */
+  async function lostSession(s: Session): Promise<void> {
+    gen++; // anything this session still yields belongs to no one
+    approvals.cancelAgent(CHIEF_ID);
+    expire(active());
+    await j().append({ kind: "error", message: EXPIRED_MESSAGE });
+    await setState("idle");
+    try {
+      s.close();
+    } catch {
+      /* already closed */
+    }
+    if (session === s) session = null;
+  }
+
   async function startSession(prompt: string): Promise<void> {
     const resume = meta.sessionId ?? undefined;
     const myGen = ++gen;
     const current = () => gen === myGen;
+    // A real session announces itself (its `init`) before anything else; a resume that never does could not be opened.
+    let opened = false;
     // A tool call approved a moment before a stop or reset must not still act.
     const guard = (t: ToolDef): ToolDef => ({
       ...t,
@@ -257,9 +289,17 @@ export function createChief(deps: ChiefDeps): Chief {
         for await (const item of s.events) {
           if (!current()) continue;
           if ("sessionId" in item) {
+            // Asked to resume a session, handed a different one: the old session is gone.
+            if (resume && !opened && item.sessionId !== resume) {
+              await lostSession(s);
+              return;
+            }
+            opened = true;
             touch({ sessionId: item.sessionId });
             continue;
           }
+          // The SDK reports a missing session as a failed result and then throws; the failure is not a turn of this conversation.
+          if (resume && !opened && item.body.kind === "result" && !item.body.ok) continue;
           await j().append(item.body);
           if (!current()) continue;
           if (item.body.kind === "result") {
@@ -273,6 +313,10 @@ export function createChief(deps: ChiefDeps): Chief {
         }
       } catch (err) {
         if (stopping || !current()) return;
+        if (resume && !opened && SESSION_GONE.test(err instanceof Error ? err.message : "")) {
+          await lostSession(s);
+          return;
+        }
         console.error("chief session failed:", err instanceof Error ? err.message : err);
         approvals.cancelAgent(CHIEF_ID);
         await j().append({ kind: "error", message: CHIEF_FAILED_MESSAGE });
@@ -322,6 +366,7 @@ export function createChief(deps: ChiefDeps): Chief {
       // Empty conversations other than the active one are leftovers of an interrupted switch.
       const leftovers = Object.values(reg.convs).filter((c) => c.id !== reg.active && isEmptyConv(c));
       for (const c of leftovers) delete reg.convs[c.id];
+      if (await transcriptGone(active())) expire(active());
       // No session survives a restart; the conversation is resumed from its id on the next message.
       await activate(reg.active);
       await saveRegistry(dir, reg, Object.keys(reg.convs), memo);
@@ -400,6 +445,12 @@ export function createChief(deps: ChiefDeps): Chief {
         if (!target) throw new AgentError("not-found", NOT_FOUND_MESSAGE);
         if (id === reg.active) return;
         if (target.readOnly) throw new AgentError("state", READONLY_MESSAGE);
+        if (await transcriptGone(target)) {
+          expire(target);
+          await save(false, id); // remembered, so it is not probed again
+          notify();
+          throw new AgentError("state", EXPIRED_MESSAGE);
+        }
         const dropped = await park();
         try {
           await activate(id, dropped);
