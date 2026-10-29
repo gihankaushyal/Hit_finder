@@ -1,6 +1,6 @@
 # Detailed Results — LODO Benchmark (Track 1 Supervised, Track 2 SSL; 4-fold)
 
-*Full per-fold breakdown referenced from README.md. Last updated: 2026-10-22. All "±" values are the sample standard deviation (n−1) over folds, as printed by `scripts/aggregate_lodo_results.py`.*
+*Full per-fold breakdown referenced from README.md. Last updated: 2026-10-29. All "±" values are the sample standard deviation (n−1) over folds, as printed by `scripts/aggregate_lodo_results.py`.*
 
 **Contents:** [Protocol](#evaluation-protocol) · [Pipeline comparison](#pipeline-comparison) · [Naive baseline](#phase-4-naive-baseline--frame-level-labels-random-crops) · [Asymmetric v1](#asymmetric-pipeline-baseline--hitfinder-guided-crops--all-pr-22-fixes) · [Asymmetric v2](#asymmetric-pipeline-v2--frame-cache-backed-training) · [Track 2 SSL](#track-2--self-supervised-mae-vit-s16) · [Key findings](#key-findings) · [Thresholds](#inference-thresholds)
 
@@ -80,6 +80,8 @@ Full 4-fold 100-epoch results. Config: `configs/supervised/resnet18_asymmetric.y
 | 4 | Eiger4M | 0.8330 | 0.8596 | 0.8138 | −0.098 |
 | **Mean** | | **0.839 ± 0.024** | | | **+0.027** |
 
+**Provenance.** The table above is the original 2026-08 evaluation. The `results.json` files now under `checkpoints/resnet18-asymmetric-fold*-seed42/` were rewritten on 2026-10-05/06 (the `best.pt` files date from August) and `scripts/aggregate_lodo_results.py` reports different values for the same models: cross AP 0.8075 / 0.8616 / 0.8585 / 0.8595 (mean 0.8468 ± 0.0262, AUC 0.9159, F1 0.8196) and in-domain AP 0.8648 / 0.9441 / 0.8551 / 0.8877. Folds 2 and 4 differ most. The August record is kept here because the Δ columns and the v1 → v2 comparisons in this repo are built on it; both sets agree that the asymmetric pipeline closed the AGIPD gap.
+
 ### In-domain results (training-detector test set — sanity check)
 
 | Fold | Held-out (train detectors tested) | In-domain AP | In-domain AUC | In-domain F1 |
@@ -126,7 +128,7 @@ Mean cross AP rose 0.839 → 0.900, but fold-to-fold spread rose with it (±0.02
 
 Encoder: `mae_vit_small_patch16` (embed dim 384, depth 12, 6 heads; decoder 256-dim, depth 4). Pretraining: 400 epochs, batch 256, lr 1.5e-4, mask ratio 0.6, 4 crops per frame. Fine-tune: 100 epochs, lr 5e-5, early-stopping patience 10, on the same asymmetric patch pipeline as Track 1. Linear probe: encoder frozen. Configs: `configs/ssl/mae_{pretrain,finetune}.yaml`.
 
-These numbers are the **September 2026 generation** (pretrain checkpoints `mae-vits16-fold*`, result directories `vits16-mae-{finetune,probe}-fold*-seed42-v2`), run on uncached preprocessing — so the like-for-like Track 1 comparator is **asymmetric v1** (0.839), not v2. The rerun under the current naming standard (`mae-vits16-v2`, `vits16-mae-{finetune,probe}-v2`) had finished only fold 1 of the fine-tune and probe on 2026-10-22 (fine-tune cross AP 0.7728, probe 0.9425 on AGIPD), so it is excluded here.
+These numbers are the **September 2026 generation** (pretrain checkpoints `mae-vits16-fold*`, result directories `vits16-mae-{finetune,probe}-fold*-seed42-v2`), run on uncached preprocessing — so the like-for-like Track 1 comparator is **asymmetric v1** (0.839), not v2. The rerun under the current naming standard (`mae-vits16-v2`, `vits16-mae-{finetune,probe}-v2`, cached preprocessing) has since finished 4/4 folds and is reported separately in [Track 2 — SSL rerun (v2)](#track-2--ssl-rerun-v2) below; it is not mixed into these tables.
 
 **Encoder generations are mixed.** By checkpoint timestamp, the fold 1 and 2 pretrained encoders (`mae-vits16-fold{1,2}-seed42/last.pt`, 2026-09-07) predate the crop-diversity fix (PR #34, merged 2026-09-08), while folds 3 and 4 (2026-09-10) include it. The fine-tune and probe stages themselves were all submitted after the fix and use `AsymmetricCXIDataset`, which PR #34 did not touch. A local, untracked project log describes this table as post-fix; the checkpoint timestamps above are the authoritative record. The fold-1 fine-tune (AP 0.752, best epoch 1) and fold-2 in-domain AP (0.785) are the weakest figures and are the ones the older encoders could explain (n = 2, not proven).
 
@@ -161,8 +163,37 @@ The fold-2 probe was cancelled at about epoch 79 of 100 (SLURM job 63035721) and
 | ViT-S/16 MAE fine-tune (Track 2) | 0.8356 | 0.0581 | 4/4 |
 | ViT-S/16 MAE linear probe (Track 2) | 0.8291 | 0.0840 | 3/4 |
 | *ResNet18 asymmetric v2 (Track 1, cached) — not comparable to the rows above* | *0.8999* | *0.0895* | *4/4* |
+| *ViT-S/16 MAE fine-tune v2 (Track 2, cached) — see [SSL rerun (v2)](#track-2--ssl-rerun-v2)* | *0.8579* | *0.0604* | *4/4* |
+| *ViT-S/16 MAE linear probe v2 (Track 2, cached) — see [SSL rerun (v2)](#track-2--ssl-rerun-v2)* | *0.9617* | *0.0240* | *4/4* |
 
 The fine-tuned ViT-S matches the supervised ResNet18 on mean cross AP but is less consistent across held-out detectors (AGIPD is the weakest fold: 0.752). The frozen-encoder probe is the best single result on ePix10k (0.906) and the worst on Eiger4M (0.740).
+
+---
+
+## Track 2 — SSL rerun (v2)
+
+Runs `mae-vits16-v2` (pretrain), `vits16-mae-finetune-v2` and `vits16-mae-probe-v2` (`checkpoints/*-v2-fold*-seed42/results.json`, aggregated 2026-10-29). Same configs as above, run under the current run-naming standard with the frame cache enabled (`cache.enabled: true` in `configs/ssl/mae_{pretrain,finetune}.yaml`), so the like-for-like Track 1 comparator is **asymmetric v2** (0.8999). The pretrain checkpoints were written 2026-10-20 to 2026-10-22, after the crop-diversity fix (PR #34). All three arms have 4/4 folds.
+
+### Cross-detector results
+
+| Fold | Held-out | Fine-tune AP | Fine-tune AUC | Fine-tune F1 | Probe AP | Probe AUC | Probe F1 |
+|------|----------|--------------|---------------|--------------|----------|-----------|----------|
+| 1 | AGIPD | 0.7728 | 0.9512 | 0.6658 | 0.9425 | 0.9847 | 0.8961 |
+| 2 | JUNGFRAU_4M | 0.8589 | 0.9957 | 0.7452 | 0.9420 | 0.9986 | 0.9004 |
+| 3 | ePix10k | 0.9087 | 0.9967 | 0.8414 | 0.9916 | 0.9986 | 0.9735 |
+| 4 | Eiger4M | 0.8913 | 0.9900 | 0.8068 | 0.9707 | 0.9983 | 0.9450 |
+| **Mean** | | **0.858 ± 0.060** | 0.983 ± 0.022 | 0.765 ± 0.077 | **0.962 ± 0.024** | 0.995 ± 0.007 | 0.929 ± 0.037 |
+
+### In-domain results
+
+| Fold | Fine-tune AP | Fine-tune AUC | Fine-tune F1 | Probe AP | Probe AUC | Probe F1 |
+|------|--------------|---------------|--------------|----------|-----------|----------|
+| 1 | 0.8850 | 0.9956 | 0.7942 | 0.9627 | 0.9889 | 0.9179 |
+| 2 | 0.8776 | 0.9806 | 0.7698 | 0.9911 | 0.9994 | 0.9775 |
+| 3 | 0.8796 | 0.9951 | 0.7804 | 0.9701 | 0.9912 | 0.9190 |
+| 4 | 0.8698 | 0.9987 | 0.7616 | 0.9542 | 0.9933 | 0.9117 |
+
+The linear probe is the best arm of every generation on mean cross AP and has the smallest fold-to-fold spread, while full fine-tuning (0.858) stays below the supervised ResNet18 v2 (0.900). Cross F1 is the optimum on the evaluated split (see Inference Thresholds); AP and AUC are threshold-free.
 
 ---
 
