@@ -271,7 +271,10 @@ export function createChief(deps: ChiefDeps): Chief {
   async function lostSession(s: Session): Promise<void> {
     gen++; // anything this session still yields belongs to no one
     approvals.cancelAgent(CHIEF_ID);
-    expire(active());
+    const e = active();
+    // The SDK looks in its own project folder; if the transcript is still on disk the cause may be a moved folder, so keep the id.
+    if (await transcriptGone(e)) expire(e);
+    else suspect(e);
     await j().append({ kind: "error", message: EXPIRED_MESSAGE });
     await setState("idle");
     try {
@@ -302,7 +305,9 @@ export function createChief(deps: ChiefDeps): Chief {
       for (const [id, e] of before) reg.convs[id] = e;
       throw err;
     }
-    for (const id of purge) await discard(id);
+    for (const id of purge) {
+      await discard(id).catch((err) => console.error(`chief conversations: could not delete ${id}:`, err instanceof Error ? err.message : err));
+    }
     if (archive.length > 0 || purge.length > 0) console.log(`chief conversations: archived ${archive.length}, deleted ${purge.length}`);
     notify();
   }
@@ -322,6 +327,13 @@ export function createChief(deps: ChiefDeps): Chief {
     const current = () => gen === myGen;
     // A real session announces itself (its `init`) before anything else; a resume that never does could not be opened.
     let opened = false;
+    // The SDK reports a missing session as a failed result and then throws. The result is held back until we know which it was.
+    let held: Parameters<Journal["append"]>[0] | null = null;
+    const flushHeld = async (): Promise<void> => {
+      const body = held;
+      held = null;
+      if (body && current()) await j().append(body);
+    };
     // A tool call approved a moment before a stop or reset must not still act.
     const guard = (t: ToolDef): ToolDef => ({
       ...t,
@@ -363,11 +375,14 @@ export function createChief(deps: ChiefDeps): Chief {
           if (!current()) continue;
           if ("sessionId" in item) {
             opened = true;
+            await flushHeld();
             touch({ sessionId: item.sessionId });
             continue;
           }
-          // The SDK reports a missing session as a failed result and then throws; the failure is not a turn of this conversation.
-          if (resume && !opened && item.body.kind === "result" && !item.body.ok) continue;
+          if (resume && !opened && item.body.kind === "result" && !item.body.ok) {
+            held = item.body; // not a turn of this conversation; journalled only if it was not a lost session
+            continue;
+          }
           await j().append(item.body);
           if (!current()) continue;
           if (item.body.kind === "result") {
@@ -376,6 +391,7 @@ export function createChief(deps: ChiefDeps): Chief {
           } else notify(); // a streamed message changes nothing that is saved
         }
         if (!stopping && current()) {
+          await flushHeld();
           session = null;
           await setState("stopped");
         }
@@ -387,6 +403,7 @@ export function createChief(deps: ChiefDeps): Chief {
         }
         console.error("chief session failed:", err instanceof Error ? err.message : err);
         approvals.cancelAgent(CHIEF_ID);
+        await flushHeld();
         await j().append({ kind: "error", message: CHIEF_FAILED_MESSAGE });
         await setState("failed", CHIEF_FAILED_MESSAGE);
         try {
@@ -425,6 +442,7 @@ export function createChief(deps: ChiefDeps): Chief {
       if (loaded) await adoptEntries(dir, loaded.convs); // a rebuilt registry has adopted them already
       reg = loaded ?? (await rebuildRegistry(dir, new Date().toISOString()));
       for (const c of Object.values(reg.convs)) await recheck(c);
+      if (peek() && (await transcriptGone(peek()!))) suspect(peek()!); // before choosing, so a lost one is not kept as the active conversation
       if (!peek() || peek()?.readOnly) {
         // The pointer to the active conversation was lost, or names one that cannot be continued: take the newest one that can still be continued.
         const live = pickContinuable(reg.convs);
@@ -435,7 +453,6 @@ export function createChief(deps: ChiefDeps): Chief {
       // Empty conversations other than the active one are leftovers of an interrupted switch.
       const leftovers = Object.values(reg.convs).filter((c) => c.id !== reg.active && isEmptyConv(c));
       for (const c of leftovers) delete reg.convs[c.id];
-      if (await transcriptGone(active())) suspect(active());
       // No session survives a restart; the conversation is resumed from its id on the next message.
       await activate(reg.active);
       await saveRegistry(dir, reg, Object.keys(reg.convs), memo);

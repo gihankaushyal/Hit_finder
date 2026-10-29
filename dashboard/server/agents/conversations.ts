@@ -331,13 +331,19 @@ export function selectSweep(convs: ConvEntry[], activeId: string, nowMs: number,
   const archive: string[] = [];
   const purge: string[] = [];
   const stamp: string[] = [];
+  // A conversation that another, still unsent one was seeded from is its only copy of that context.
+  const seedSources = new Set(convs.filter((c) => c.seededFrom && c.turns === 0).map((c) => c.seededFrom));
+  const age = (iso: string | null, nowMs: number): number => (iso === null ? NaN : nowMs - Date.parse(iso));
   for (const c of convs) {
     if (c.id === activeId) continue;
     if (!c.archived) {
-      if (archiveDays > 0 && nowMs - Date.parse(c.updatedAt) > archiveDays * DAY_MS) archive.push(c.id);
+      // An unreadable date counts as old: archiving is undone with one click, and the entry is never swept otherwise.
+      const idle = age(c.updatedAt, nowMs);
+      if (archiveDays > 0 && (Number.isNaN(idle) || idle > archiveDays * DAY_MS)) archive.push(c.id);
     } else if (purgeDays > 0) {
-      if (c.archivedAt === null) stamp.push(c.id);
-      else if (nowMs - Date.parse(c.archivedAt) > purgeDays * DAY_MS) purge.push(c.id);
+      const archivedFor = age(c.archivedAt, nowMs);
+      if (Number.isNaN(archivedFor)) stamp.push(c.id); // no usable date: start the clock now
+      else if (archivedFor > purgeDays * DAY_MS && !seedSources.has(c.id)) purge.push(c.id);
     }
   }
   return { archive, purge, stamp };

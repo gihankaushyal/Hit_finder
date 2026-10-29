@@ -109,6 +109,7 @@ function shutdown(): void {
   force.unref();
   // Exit only after pytest's process group is gone, or the bound above elapses.
   const testsStopped = Promise.all([terminal.closeAll(STOP_TERMINAL_TIMEOUT_MS), stopTests(), agentsReady.then(() => Promise.all([chief.stop(), agents.stopAll(STOP_AGENTS_TIMEOUT_MS)]))]);
+  chief.dispose();
   void triggers.close().finally(() => {
     server.close(() => void testsStopped.finally(() => process.exit(0)));
     server.closeAllConnections?.();

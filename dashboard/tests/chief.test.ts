@@ -804,9 +804,12 @@ describe("a conversation whose session is gone", () => {
     const id = chief.summary().conversationId;
     const again = build({ stepMs: 0 }, undefined, gone);
     await again.init();
-    expect(again.summary()).toMatchObject({ conversationId: id, readOnly: "expired", sessionId: expect.any(String) }); // only the probe said so: the id is kept
-    await expect(again.send("hello?")).rejects.toMatchObject({ code: "state" });
-    expect((await again.events(0, 100)).events.filter((e) => e.kind === "user")).toHaveLength(1); // the refused message was not journalled
+    // only the probe said so: the id is kept, and the chief starts on a conversation that can be continued instead
+    expect(again.conversations().find((c) => c.id === id)).toMatchObject({ readOnly: "expired" });
+    expect(again.summary()).toMatchObject({ readOnly: null });
+    expect(again.summary().conversationId).not.toBe(id);
+    await expect(again.resume(id)).rejects.toMatchObject({ code: "state" });
+    expect((await again.events(0, 100)).events.filter((e) => e.kind === "user")).toHaveLength(0); // the lost conversation's message is not in the new one
   });
 
   it("refuses to resume a parked conversation whose transcript vanished, and says so in the list", async () => {
@@ -838,12 +841,49 @@ describe("a conversation whose session is gone", () => {
         send() {}, interrupt: async () => {}, close() {},
       }),
     };
-    const again = build({}, failing);
+    let present = true;
+    const again = build({}, failing, { transcriptExists: async () => present });
     await again.init();
+    present = false; // the transcript is really gone by the time the SDK is asked
     await again.send("are you there?");
     await until(() => (again.summary().readOnly && again.summary().state === "idle") || undefined);
     expect(again.summary()).toMatchObject({ conversationId: id, state: "idle", readOnly: "expired", sessionId: null, error: null });
     expect((await again.events(0, 100)).events.some((e) => e.kind === "error")).toBe(true);
+  });
+
+  it("keeps the session id when the SDK cannot find a transcript the disk still has", async () => {
+    await chief.send("topic");
+    await waitState("idle");
+    const id = chief.summary().conversationId;
+    const failing: AgentDriver = {
+      start: () => ({
+        events: (async function* () { throw new Error("No conversation found with session ID"); })(),
+        send() {}, interrupt: async () => {}, close() {},
+      }),
+    };
+    const again = build({}, failing); // the default rig probe says the transcript exists
+    await again.init();
+    await again.send("are you there?");
+    await until(() => (again.summary().readOnly && again.summary().state === "idle") || undefined);
+    expect(again.summary()).toMatchObject({ conversationId: id, readOnly: "expired", sessionId: expect.any(String) });
+  });
+
+  it("journals a failed result that is not followed by a lost session", async () => {
+    await chief.send("topic");
+    await waitState("idle");
+    const failing: AgentDriver = {
+      start: () => ({
+        events: (async function* () { yield { body: { kind: "result" as const, ok: false, text: "rate limited", turns: 0, costUsd: null } }; })(),
+        send() {}, interrupt: async () => {}, close() {},
+      }),
+    };
+    const again = build({}, failing);
+    await again.init();
+    await again.send("are you there?");
+    await until(() => (again.summary().state === "stopped" ? true : undefined));
+    const results = (await again.events(0, 100)).events.filter((e) => e.kind === "result");
+    expect(results.at(-1)).toMatchObject({ ok: false, text: "rate limited" });
+    expect(again.summary().turns).toBe(1); // still not counted as a turn
   });
 
   it("handles the way the real SDK reports a missing session: a failed result, then an error", async () => {

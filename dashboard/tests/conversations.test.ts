@@ -337,8 +337,18 @@ describe("selectSweep", () => {
     expect(selectSweep([e("c-a", 500, 0), { ...e("c-b", 500, 0), archivedAt: null }], "c-x", NOW, 0, 90)).toEqual({ ...none, stamp: ["c-b"] });
   });
 
-  it("does nothing when both limits are off, or when a date is unreadable", () => {
+  it("does nothing when both limits are off", () => {
     expect(selectSweep([e("c-a", 999)], "c-x", NOW, 0, 0)).toEqual(none);
-    expect(selectSweep([{ ...e("c-a", 1), updatedAt: "garbage" }], "c-x", NOW, 30, 90)).toEqual(none);
+  });
+
+  it("archives a conversation whose last-message date is unreadable, and restarts the purge clock on an unreadable archive date", () => {
+    expect(selectSweep([{ ...e("c-a", 1), updatedAt: "garbage" }], "c-x", NOW, 30, 90)).toEqual({ ...none, archive: ["c-a"] });
+    expect(selectSweep([{ ...e("c-a", 500, 0), archivedAt: "garbage" }], "c-x", NOW, 0, 90)).toEqual({ ...none, stamp: ["c-a"] });
+  });
+
+  it("keeps an archived conversation that an unsent conversation was seeded from", () => {
+    const seeded = { ...e("c-new", 1), turns: 0, seededFrom: "c-a" };
+    expect(selectSweep([e("c-a", 100, 95), seeded], "c-x", NOW, 0, 90).purge).toEqual([]);
+    expect(selectSweep([e("c-a", 100, 95), { ...seeded, turns: 2 }], "c-x", NOW, 0, 90).purge).toEqual(["c-a"]);
   });
 });
