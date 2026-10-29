@@ -332,7 +332,11 @@ export function createChief(deps: ChiefDeps): Chief {
     const flushHeld = async (): Promise<void> => {
       const body = held;
       held = null;
-      if (body && current()) await j().append(body);
+      if (!body || !current()) return;
+      await j().append(body);
+      // It ends the turn like any other result.
+      touch({ turns: meta.turns + 1, costUsd: body.kind === "result" && body.costUsd !== null ? Math.max(meta.costUsd ?? 0, body.costUsd) : meta.costUsd });
+      if (!stopping) await setState("idle");
     };
     // A tool call approved a moment before a stop or reset must not still act.
     const guard = (t: ToolDef): ToolDef => ({
@@ -550,7 +554,7 @@ export function createChief(deps: ChiefDeps): Chief {
           throw new AgentError("invalid", `The title must be 1 to ${TITLE_EDIT_MAX} characters.`);
         }
         if (change.archived === true && id === reg.active) throw new AgentError("state", "Start a new conversation before archiving this one.");
-        const before = { title: target.title, titleManual: target.titleManual, archived: target.archived, archivedAt: target.archivedAt };
+        const before = { title: target.title, titleManual: target.titleManual, archived: target.archived, archivedAt: target.archivedAt, updatedAt: target.updatedAt };
         if (title !== undefined) {
           target.title = title;
           target.titleManual = true;
@@ -558,9 +562,11 @@ export function createChief(deps: ChiefDeps): Chief {
         if (change.archived !== undefined && change.archived !== target.archived) {
           target.archived = change.archived;
           target.archivedAt = change.archived ? new Date().toISOString() : null;
+          // Restoring is a decision to keep it: without this the next sweep would archive it again for its old last message.
+          if (!change.archived) target.updatedAt = new Date().toISOString();
         }
         try {
-          // Housekeeping, not activity: it must not reorder the list by bumping `updatedAt`.
+          // Renaming and archiving are housekeeping: they must not reorder the list by bumping `updatedAt`.
           await save(false, id);
         } catch (err) {
           Object.assign(target, before); // what the owner is told matches what is on disk

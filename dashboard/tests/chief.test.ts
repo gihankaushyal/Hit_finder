@@ -474,6 +474,18 @@ describe("conversations", () => {
     expect(chief.conversations().map((c) => [c.id, c.updatedAt])).toEqual(before);
   });
 
+  it("restoring an archived conversation counts as activity, so the sweep does not archive it again", async () => {
+    await chief.send("alpha");
+    await waitState("idle");
+    const alpha = chief.summary().conversationId;
+    await chief.reset();
+    await chief.patch(alpha, { archived: true });
+    const archivedAt = chief.conversations().find((c) => c.id === alpha)!.updatedAt;
+    await new Promise((r) => setTimeout(r, 15));
+    await chief.patch(alpha, { archived: false });
+    expect(chief.conversations().find((c) => c.id === alpha)!.updatedAt > archivedAt).toBe(true);
+  });
+
   it("never matches an id against Object.prototype members", async () => {
     for (const id of ["constructor", "toString", "__proto__"]) {
       await expect(chief.resume(id)).rejects.toMatchObject({ code: "not-found" });
@@ -883,7 +895,7 @@ describe("a conversation whose session is gone", () => {
     await until(() => (again.summary().state === "stopped" ? true : undefined));
     const results = (await again.events(0, 100)).events.filter((e) => e.kind === "result");
     expect(results.at(-1)).toMatchObject({ ok: false, text: "rate limited" });
-    expect(again.summary().turns).toBe(1); // still not counted as a turn
+    expect(again.summary().turns).toBe(2); // it ends the turn like any other result
   });
 
   it("handles the way the real SDK reports a missing session: a failed result, then an error", async () => {
