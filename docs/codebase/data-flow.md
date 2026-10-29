@@ -116,7 +116,7 @@ canvas → gcn() → fill_gaps_after_gcn() → patch_grid(stride=224) → list o
 
 The cache stores, per CXI file, `frames.npy` (`(N, H, W)` **float16**, memory-mapped), `centroids.npz` and a per-detector `valid_mask.npy`, under a manifest `cache_manifest.json` that records the preprocessing parameters (hitfinder keys, GCN/LCN constants, geometry digests). `verify_cache_or_raise()` raises `CacheStaleError` when the manifest no longer matches the config; a missing entry raises `CacheMissError`, which `_load_gcn_frame` treats as a normal miss and recomputes live. A two-tier layout lets `scripts/stage_frame_cache.sh` copy a fold's entries to node-local NVMe.
 
-Cached frames are cast back to float32 on read and match the live path up to float16 storage rounding; masks and centroids match exactly (`tests/test_frame_cache.py::TestBitExactnessAgainstRealData`). A change to *how* a detector's assembler is chosen is not covered by the manifest and needs a full cache rebuild.
+Cached frames are cast back to float32 on read and match the live path up to float16 storage rounding; masks and centroids match exactly (`tests/test_frame_cache.py::TestBitExactnessAgainstRealData`). A change to *how* a detector's assembler is chosen is not covered by the manifest and needs a full cache rebuild. Geometry bundled inside Reborn (the Eiger4M, Jungfrau, AGIPD and ePix10k loaders) is likewise invisible to the geometry digest, which hashes only the `.geom` and `.json` files under `src/preprocessing/data/`.
 
 ---
 

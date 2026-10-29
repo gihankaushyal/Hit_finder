@@ -145,6 +145,7 @@ Hitfinder-guided cropping (Path A: centroid-centred, label=1 / Path B: hard-nega
 | **Mean** | | **0.839 ± 0.024** | | | **+0.027** |
 
 - **AGIPD generalization gap largely closed:** 0.565 → 0.807 (+0.242). Hitfinder-guided crops eliminated the spurious panel-edge signal the model previously relied on.
+- **Re-evaluation note:** these are the original 2026-08 evaluation numbers. The `results.json` files now on disk for the same four `best.pt` checkpoints were rewritten on 2026-10-05/06 by a later evaluation and give a slightly different picture: fold 1 0.8075, fold 2 0.8616, fold 3 0.8585, fold 4 0.8595, mean cross AP 0.847 ± 0.026 (`scripts/aggregate_lodo_results.py`, prefix `resnet18-asymmetric`). The Δ AP and variance figures below are computed from the original numbers; with the October values the mean is 0.847 ± 0.026 and the variance reduction is about 6× instead of 7×. The AGIPD result (0.565 → about 0.81) is the same either way.
 - **Variance collapsed ~7×:** ±0.167 → ±0.024 — the pipeline is now consistently effective across all four detector types.
 - All "±" values in this README are the sample standard deviation (n−1) over the four folds, as reported by `scripts/aggregate_lodo_results.py`.
 - **AP is the primary metric.** Cross F1 is the F1 at the best threshold on the held-out detector itself, so it is a best-case operating point; AP and AUC need no threshold. See [docs/eval_protocol.md](docs/eval_protocol.md).
@@ -174,6 +175,9 @@ MAE pretraining (400 epochs) on pooled unlabeled frames, then either full fine-t
 | ResNet18 asymmetric, v1 (Track 1) | 0.839 | 0.024 | 4/4 |
 | ViT-S/16 MAE fine-tune (Track 2) | 0.836 | 0.058 | 4/4 |
 | ViT-S/16 MAE linear probe (Track 2) | 0.829 | 0.084 | 3/4 — fold 2 (JUNGFRAU 4M) probe cancelled at epoch 79 |
+| ResNet18 asymmetric, v2 (Track 1, cached) | 0.900 | 0.090 | 4/4 |
+| ViT-S/16 MAE fine-tune, v2 (Track 2, cached) | 0.858 | 0.060 | 4/4 |
+| ViT-S/16 MAE linear probe, v2 (Track 2, cached) | 0.962 | 0.024 | 4/4 |
 
 | Fold | Held-out | Fine-tune AP | Linear-probe AP |
 |------|----------|--------------|-----------------|
@@ -184,7 +188,17 @@ MAE pretraining (400 epochs) on pooled unlabeled frames, then either full fine-t
 
 - **Caveat — mixed encoder generations:** the fold 1 and 2 MAE encoders were written on 2026-09-07, before the crop-diversity fix (PR #34, merged 2026-09-08); the fold 3 and 4 encoders (2026-09-10) include it. Fold 1 (AGIPD) is also the weakest fine-tune fold, so that gap may partly reflect the older encoder (n = 2, not proven).
 - **Comparable to Track 1 v1, with higher variance:** the fine-tuned ViT-S matches the supervised ResNet18 on mean cross AP (0.836 vs 0.839) but is less consistent across held-out detectors.
-- **Not yet compared against Track 1 v2 (0.900):** these SSL numbers come from the September 2026 generation (pretrain checkpoints `mae-vits16-fold*`), run on uncached preprocessing like Track 1 v1, so that pair is like-for-like. The SSL rerun under the current run-naming standard (`mae-vits16-v2`, `vits16-mae-finetune-v2`, `vits16-mae-probe-v2`) is still in progress (1 of 4 folds finished), so a like-for-like comparison with v2 is pending.
+- **Generations:** the first three rows above come from the September 2026 generation (pretrain checkpoints `mae-vits16-fold*`), run on uncached preprocessing like Track 1 v1, so that pair is like-for-like. The `-v2` rows (`mae-vits16-v2`, `vits16-mae-finetune-v2`, `vits16-mae-probe-v2`) use the current run-naming standard and the frame cache, like Track 1 v2.
+- **SSL rerun (`-v2`, cached preprocessing), per fold — mean cross AP:**
+
+| Fold | Held-out | Fine-tune v2 AP | Linear-probe v2 AP |
+|------|----------|-----------------|--------------------|
+| 1 | AGIPD | 0.7728 | 0.9425 |
+| 2 | JUNGFRAU 4M | 0.8589 | 0.9420 |
+| 3 | ePix10k | 0.9087 | 0.9916 |
+| 4 | Eiger4M | 0.8913 | 0.9707 |
+
+- **v2 comparison:** the three `-v2` arms ran on the frame cache like Track 1 v2. The linear probe (0.962) is the best arm and its spread across detectors is the smallest (±0.024); the fine-tune (0.858) trails the supervised ResNet18 v2 (0.900) on the mean. The `-v2` encoders were pretrained in October 2026, after the crop-diversity fix (PR #34).
 - Per-fold detail → [docs/detailed_notes.md#track-2--self-supervised-mae-vit-s16](docs/detailed_notes.md#track-2--self-supervised-mae-vit-s16)
 
 ## Setup
@@ -257,7 +271,7 @@ SLURM submit scripts live in `scripts/` (start from `scripts/templates/slurm_gpu
 | [Codebase Reference](docs/codebase/index.md) | Module map, data flow, extension guide, testing |
 | [Evaluation Protocol](docs/eval_protocol.md) | LODO benchmark design, metrics, result files |
 | [Data Spec](docs/data_spec.md) | HDF5 key reference and shapes per detector type |
-| [Dashboard](dashboard/README.md) | Local repository dashboard (runs, kanban, agents) |
+| [Dashboard](dashboard/README.md) | Local repository dashboard (runs, kanban, agents, saved chief-of-staff conversations) |
 
 ## Citation
 

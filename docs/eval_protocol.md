@@ -1,6 +1,6 @@
 # Cross-Detector Leave-One-Detector-Out Benchmark Protocol
 
-**Version:** 2.0 — Phase 5 update (2026-10-22); originally 1.0, Phase 1 finalization
+**Version:** 2.1 — Phase 5 update (2026-10-29); originally 1.0, Phase 1 finalization
 **Original design:** `docs/superpowers/plans/2026-05-13-benchmark-protocol.md` (the design spec file is no longer in the repo)
 **Implementation:** `src/evaluation/benchmark.py` (splits, patch aggregation, metrics), `src/training/lodo.py` (fold loop, sessions), `src/training/inference_results.py` (result files)
 
@@ -118,9 +118,10 @@ Frames are scored by tiling, not by a single crop (`run_patch_agg` in
 4. The deployable decision threshold is the F1-optimal threshold chosen on the **validation set** and stored as `inference_threshold` (0.5 if absent). The `f1` / `threshold` pair reported under `cross` and `in_domain` is instead the optimum on the evaluated split, as described under Metrics.
 
 `min_hit_patches` (default 3) is accepted and recorded in result files but is
-reserved: it does not currently change the frame score. Defaults come from the
-`benchmark:` block of the configs (`aggregation: vote`, `min_hit_patches: 3`,
-`patch_stride: 224`).
+reserved: it does not currently change the frame score. The run configs
+(`configs/supervised/*.yaml`, `configs/ssl/mae_finetune.yaml`) set these in their
+`benchmark:` block (`aggregation: vote`, `min_hit_patches: 3`, `patch_stride: 224`);
+`configs/base.yaml` only holds the split settings there.
 
 ## Result Files and Re-evaluation
 
