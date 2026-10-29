@@ -24,7 +24,7 @@ Auto-generated from the live codebase. Thicker clusters are tighter communities;
 
 ![Module Dependency Graph](../assets/module-graph-curated.svg)
 
-> **For function-level exploration with pan/zoom/search** — open `graphify-out/graph.html` (generated locally by `graphify update .`, not tracked in git) in a browser (3326 nodes, 6756 edges, 240 communities as of 2026-10-29; the graph also covers `dashboard/` and `tests/`, so counts are larger than for `src/` alone). The static image above is a curated older snapshot.
+> **For function-level exploration with pan/zoom/search** — open `graphify-out/graph.html` (generated locally by `graphify update .`, not tracked in git) in a browser (3326 nodes, 6757 edges, 236 communities as of 2026-10-29; the graph also covers `dashboard/` and `tests/`, so counts are larger than for `src/` alone). The static image above is a curated older snapshot.
 
 ---
 
