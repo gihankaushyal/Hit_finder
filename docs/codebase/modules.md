@@ -60,7 +60,7 @@ class Hitfinder(Protocol):
 **Multiprocessing note:** PF8 and NumPy backends are fork-safe. GPU backend requires `num_workers=0` (CUDA/OpenCL context is not fork-safe). The guard is an `isinstance(hitfinder, GPUHitfinder)` check in `asymmetric_loader()` and `ssl_crop_loader()`, so a new hitfinder that holds a GPU context is not protected unless it handles this itself.
 
 **Imports from:** `reborn`, `pyFAI`, `pyopencl` (gpu backends only)
-**Imported by:** `src/data/dataset.py` and `src/data/dataloader.py` (the `Hitfinder` type from `hitfinders.base`), `src/training/lodo.py` (`Hitfinder` type), `get_hitfinder()` callers `src/training/train_asymmetric.py`, `train_ssl_pretrain.py`, `train_ssl_finetune.py`, `scripts/build_frame_cache.py` and `scripts/diagnose_crop_shortcut.py`
+**Imported by:** `src/data/dataset.py` and `src/data/dataloader.py` (the `Hitfinder` type from `hitfinders.base`), `src/training/lodo.py` (`Hitfinder` type), `get_hitfinder()` callers `src/training/train_asymmetric.py`, `train_ssl_pretrain.py`, `train_ssl_finetune.py`, `scripts/build_frame_cache.py` and `scripts/diagnose_crop_shortcut.py`; `gpu.GPUHitfinder` is also imported by `src/data/dataloader.py` (the `num_workers=0` guard) and `scripts/run_pipeline_debug.py`
 
 ---
 
@@ -164,7 +164,7 @@ Returns `{"ap": float, "auc_roc": float, "f1": float, "threshold": float}`. `min
 
 `load_config` takes a path to the model YAML (e.g. `configs/supervised/resnet18_asymmetric.yaml`) and always deep-merges `configs/base.yaml` underneath it; the model YAML's values win. Do not add `defaults: [base]` to model YAMLs.
 
-**Imported by:** `src/training/` entry points and the scripts `build_frame_cache.py`, `diagnose_crop_shortcut.py`, `plan_cache_staging.py`, `run_pipeline_debug.py` and `visualize_mae_recon.py` (the other scripts do not use it).
+**Imported by (at least):** `src/training/` entry points and the scripts `build_frame_cache.py`, `diagnose_crop_shortcut.py`, `plan_cache_staging.py`, `run_pipeline_debug.py` and `visualize_mae_recon.py` (the other scripts do not use it).
 
 ---
 

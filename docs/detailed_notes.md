@@ -80,7 +80,7 @@ Full 4-fold 100-epoch results. Config: `configs/supervised/resnet18_asymmetric.y
 | 4 | Eiger4M | 0.8330 | 0.8596 | 0.8138 | −0.098 |
 | **Mean** | | **0.839 ± 0.024** | | | **+0.027** |
 
-**Provenance.** The table above is the original 2026-08 evaluation. The `results.json` files now under `checkpoints/resnet18-asymmetric-fold*-seed42/` were rewritten on 2026-10-05/06 (the `best.pt` files date from August) and `scripts/aggregate_lodo_results.py` reports different values for the same models: cross AP 0.8075 / 0.8616 / 0.8585 / 0.8595 (mean 0.8468 ± 0.0262, AUC 0.9159, F1 0.8196) and in-domain AP 0.8648 / 0.9441 / 0.8551 / 0.8877. Folds 2 and 4 differ most. The August record is kept here because the Δ columns and the v1 → v2 comparisons in this repo are built on it; both sets agree that the asymmetric pipeline closed the AGIPD gap.
+**Provenance.** The table above is the original 2026-08 evaluation. The `results.json` files now under `checkpoints/resnet18-asymmetric-fold*-seed42/` were rewritten on 2026-10-05/06 (the `best.pt` files date from August) and `scripts/aggregate_lodo_results.py` reports different values for the same models: cross AP 0.8075 / 0.8616 / 0.8585 / 0.8595 (mean 0.8468 ± 0.0262, AUC 0.9159, F1 0.8196) and in-domain AP 0.8648 / 0.9441 / 0.8551 / 0.8877. Folds 2 and 4 differ most. The cause is not recorded in the repository. By AP the change is largest on fold 4 (0.8330 → 0.8595); fold 2 differs mainly in AUC (0.9639 → 1.0000). The August record is kept here because the Δ columns and the v1 → v2 comparisons in this repo are built on it; they would shift if the October values were used (for example fold 4 vs naive −0.072 instead of −0.098, v1 mean 0.847 ± 0.026). Both sets agree that the asymmetric pipeline closed the AGIPD gap.
 
 ### In-domain results (training-detector test set — sanity check)
 
@@ -166,7 +166,7 @@ The fold-2 probe was cancelled at about epoch 79 of 100 (SLURM job 63035721) and
 | *ViT-S/16 MAE fine-tune v2 (Track 2, cached) — see [SSL rerun (v2)](#track-2--ssl-rerun-v2)* | *0.8579* | *0.0604* | *4/4* |
 | *ViT-S/16 MAE linear probe v2 (Track 2, cached) — see [SSL rerun (v2)](#track-2--ssl-rerun-v2)* | *0.9617* | *0.0240* | *4/4* |
 
-The fine-tuned ViT-S matches the supervised ResNet18 on mean cross AP but is less consistent across held-out detectors (AGIPD is the weakest fold: 0.752). The frozen-encoder probe is the best single result on ePix10k (0.906) and the worst on Eiger4M (0.740).
+The fine-tuned ViT-S matches the supervised ResNet18 on mean cross AP but is less consistent across held-out detectors (AGIPD is the weakest fold: 0.752). In the September generation the frozen-encoder probe is the best single result on ePix10k (0.906) and the worst on Eiger4M (0.740); the `-v2` probe is higher on both (0.992 and 0.971).
 
 ---
 
@@ -193,7 +193,7 @@ Runs `mae-vits16-v2` (pretrain), `vits16-mae-finetune-v2` and `vits16-mae-probe-
 | 3 | 0.8796 | 0.9951 | 0.7804 | 0.9701 | 0.9912 | 0.9190 |
 | 4 | 0.8698 | 0.9987 | 0.7616 | 0.9542 | 0.9933 | 0.9117 |
 
-The linear probe is the best arm of every generation on mean cross AP and has the smallest fold-to-fold spread, while full fine-tuning (0.858) stays below the supervised ResNet18 v2 (0.900). Cross F1 is the optimum on the evaluated split (see Inference Thresholds); AP and AUC are threshold-free.
+In this `-v2` generation the linear probe has the highest mean cross AP (0.962 vs 0.900 for ResNet18 v2 and 0.858 for the fine-tune) and a spread (±0.024) smaller than the other two arms; full fine-tuning stays below the supervised ResNet18 v2. This does not hold for the September generation, where the probe (0.829, 3/4 folds) is below the fine-tune and ResNet18 v1. Cross F1 is the optimum on the evaluated split (see Inference Thresholds); AP and AUC are threshold-free.
 
 ---
 
