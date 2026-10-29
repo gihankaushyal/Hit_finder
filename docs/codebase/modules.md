@@ -25,14 +25,14 @@ Stateless functions. No class state. All functions are safe to call from multipl
 
 | File | Purpose | Key exports |
 |------|---------|-------------|
-| `io.py` | Read CXI/HDF5/CBF frames and metadata | `read_frame()` ⚡, `read_embedded_labels()` ⚡, `read_detector_description()`, `count_frames()` |
+| `io.py` | Read CXI/HDF5/CBF frames and metadata | `read_frame()` ⚡, `read_embedded_labels()` ⚡, `read_detector_description()`, `count_frames()`, `read_image()` |
 | `geometry.py` | Detector panel geometry and assembly. `DETECTOR_LOADERS` maps short names (`AGIPD`, `JUNGFRAU_4M`, `ePix10k`, `Eiger4M`, `EigerRESoNeT`) to Reborn geometry-list functions; `_DESC_LOADERS` does the same for CXI description strings | `get_geometry(detector_desc)` ⚡, `get_assembler(detector_desc)`, `assemble_image()`, `load_pad_geometry(detector_type, detector_distance)`, `extract_panels_from_canvas()`, `jungfrau_8_pad_geometry_list()`, `eiger4m_64_pad_geometry_list()`, `eiger_resonet_pad_geometry_list()` |
 | `normalize.py` | Global (GCN) and local (LCN) contrast normalization | `gcn()` ⚡, `lcn()` ⚡, `lcn_torch()` (batched torch LCN used by `run_patch_agg`; must match the masked NumPy `lcn` within float32 tolerance) |
 | `augment.py` | Spatial augmentation and patch utilities | `pad_border()`, `random_rot90()`, `random_flip()`, `patch_grid()`, `random_cutout()` (defaults: 3 holes, `CUTOUT_HOLE_SIZE_DEFAULT=24`, `CUTOUT_AVOID_MARGIN_DEFAULT=8`, `CUTOUT_MAX_TRIES=20`) |
 | `pipeline.py` | Assembled multi-step preprocessing | `assemble_only(frame, pads, detector_desc, assembler)`, `valid_pixel_mask()`, `get_valid_mask_for_frame()`, `fill_gaps_after_gcn()`, `preprocess_eval_patches()`, `preprocess_eval_patches_from_gcn()` |
 
 **Imports from:** `reborn` (geometry assembly), `h5py`/`fabio` (file I/O), `scipy.ndimage` (LCN convolution)
-**Imported by:** `src/data/dataset.py`, `src/evaluation/benchmark.py`, `scripts/`
+**Imported by:** `src/data/dataset.py`, `src/data/frame_cache.py` (the GCN/LCN constants and `EDGE_EROSION_PX`), `src/evaluation/benchmark.py`, `scripts/`
 
 ---
 
@@ -60,7 +60,7 @@ class Hitfinder(Protocol):
 **Multiprocessing note:** PF8 and NumPy backends are fork-safe. GPU backend requires `num_workers=0` (CUDA/OpenCL context is not fork-safe). The guard is an `isinstance(hitfinder, GPUHitfinder)` check in `asymmetric_loader()` and `ssl_crop_loader()`, so a new hitfinder that holds a GPU context is not protected unless it handles this itself.
 
 **Imports from:** `reborn`, `pyFAI`, `pyopencl` (gpu backends only)
-**Imported by:** `src/data/dataset.py`, `src/data/dataloader.py`, `src/training/lodo.py` (`Hitfinder` type), `src/training/train_asymmetric.py`
+**Imported by:** `src/data/dataset.py` and `src/data/dataloader.py` (the `Hitfinder` type from `hitfinders.base`), `src/training/lodo.py` (`Hitfinder` type), `get_hitfinder()` callers `src/training/train_asymmetric.py`, `train_ssl_pretrain.py`, `train_ssl_finetune.py`, `scripts/build_frame_cache.py` and `scripts/diagnose_crop_shortcut.py`
 
 ---
 
@@ -141,7 +141,7 @@ Metric functions and LODO orchestration. `benchmark.py` is the highest-level ent
 | File | Purpose | Key exports |
 |------|---------|-------------|
 | `metrics.py` | Standalone metric functions | `average_precision()`, `auc_roc()`, `f1_at_optimal_threshold()` |
-| `benchmark.py` | LODO fold orchestration + vote aggregation | `run_patch_agg()` ⚡, `build_lodo_folds()`, `build_session_stratified_split()`, `run_fold()`, `run_benchmark()`, `format_results_table()` |
+| `benchmark.py` | LODO fold orchestration + vote aggregation | `run_patch_agg()` ⚡, `build_lodo_folds()`, `build_session_stratified_split()`, `run_fold()`, `run_benchmark()`, `run_on_loader()`, `save_split_artifact()`, `load_split_artifact()`, `format_results_table()` |
 
 **`run_patch_agg` signature:**
 ```python
@@ -149,7 +149,7 @@ def run_patch_agg(model, session_map, session_ids, label_key, patch_size=224, pa
                   min_hit_patches=3, device="cpu", inference_batch_size=64,
                   aggregation="vote", frame_cache=None) -> dict
 ```
-Returns `{"ap": float, "auc_roc": float, "f1": float, "threshold": float}`. `min_hit_patches` is accepted but reserved; the vote score is `hit_count / n_patches` with a patch counted as a hit above 0.5. `f1` / `threshold` are the optimum on the evaluated frames.
+Returns `{"ap": float, "auc_roc": float, "f1": float, "threshold": float}`. `min_hit_patches` is accepted and recorded in the result files but reserved: it does not change the score; the vote score is `hit_count / n_patches` with a patch counted as a hit above 0.5. `f1` / `threshold` are the optimum on the evaluated frames.
 
 **Imports from:** `src/preprocessing/{geometry,io,pipeline}`, `src/evaluation/metrics`, `src/data/frame_cache`
 **Imported by:** `src/training/lodo.py`, `src/training/train_asymmetric.py`, `src/training/train_ssl_finetune.py`, `src/training/train_ssl_pretrain.py` (`build_lodo_folds`), and `scripts/{plan_cache_staging,diagnose_crop_shortcut,visualize_mae_recon}.py`. (`scripts/aggregate_lodo_results.py` reads `results.json` files and does not import `benchmark`.)
@@ -164,7 +164,7 @@ Returns `{"ap": float, "auc_roc": float, "f1": float, "threshold": float}`. `min
 
 `load_config` takes a path to the model YAML (e.g. `configs/supervised/resnet18_asymmetric.yaml`) and always deep-merges `configs/base.yaml` underneath it; the model YAML's values win. Do not add `defaults: [base]` to model YAMLs.
 
-**Imported by:** All scripts.
+**Imported by:** `src/training/` entry points and the scripts `build_frame_cache.py`, `diagnose_crop_shortcut.py`, `plan_cache_staging.py`, `run_pipeline_debug.py` and `visualize_mae_recon.py` (the other scripts do not use it).
 
 ---
 
@@ -186,7 +186,7 @@ Python utilities (files here that import from `src/` carry a `sys.path.insert` h
 | `plan_cache_staging.py` | Emit one fold's cache entry directories in NVMe staging priority order (train, then val, then test sessions) | `evaluation.benchmark`, `training.lodo`, `utils.config` |
 | `plot_hit_frac.py` | Plot realized `train/realized_hit_frac` against the configured value from W&B (`wandb.Api()`) | `wandb`, `matplotlib`, `training.wandb_identity` |
 | `diagnose_crop_shortcut.py` | Measure how much a trained classifier relies on crop-construction shortcuts (peak-centred positives vs. clearance negatives) | `data.dataset`, `models.ssl`, `evaluation.benchmark` |
-| `verify_eiger4m_geometry_match.py` | One-off check that Reborn's bundled `eiger4m_64_pad_geometry_list()` matches the former local `eiger4m.geom` geometry (that file has since been deleted); run manually, not part of pytest | `preprocessing.geometry`, `reborn` |
+| `verify_eiger4m_geometry_match.py` | One-off check that Reborn's bundled `eiger4m_64_pad_geometry_list()` matches the former local `eiger4m.geom` geometry (that file has since been deleted, so the script can no longer run: it raises `FileNotFoundError` on the missing local Eiger4M `.geom` file); kept as a record, not part of pytest | `preprocessing.geometry`, `reborn` |
 
 SLURM wrappers (start from `scripts/templates/slurm_gpu_job.sh`; the training wrappers request one `h100` on node `scg020` and `source .secrets/wandb.env` before the training command):
 

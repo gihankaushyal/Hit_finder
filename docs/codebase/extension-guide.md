@@ -284,7 +284,7 @@ The frame cache (`src/data/frame_cache.py`) holds the read → assemble → hitf
 
 Start from `scripts/templates/slurm_gpu_job.sh` (partition `general`, QOS `grp_cxfel`, `gpu:h100:1`, node `scg020`) and `source .secrets/wandb.env` before the training command.
 
-- The SSL orchestrators re-implement two Python rules in bash so a typo fails at submit time: the run-name prefix regexes and the top-level seed lookup. If you change `run_naming.SSL_PRETRAIN_PREFIX_RE`, `SSL_FINETUNE_PREFIX_RE` or the seed lookup in `load_config()`, update `submit_ssl_pretrain_all.sh` / `submit_ssl_finetune_all.sh`; `tests/test_submit_script_parity.py` fails if the copies drift.
+- The SSL orchestrators re-implement two Python rules in bash so a typo fails at submit time: the run-name prefix regexes and the top-level seed lookup. If you change `run_naming.SSL_PRETRAIN_PREFIX_RE`, `SSL_FINETUNE_PREFIX_RE` or the top-level `seed:` key in the configs (the scripts grep it from the config and `configs/base.yaml`; the test compares it with `load_config(...)["seed"]`), update `submit_ssl_pretrain_all.sh` / `submit_ssl_finetune_all.sh`; `tests/test_submit_script_parity.py` fails if the copies drift.
 - Retired scripts must exit immediately and name their replacement; add them to the table in `tests/test_deprecated_scripts.py`.
 - Queued SLURM jobs read the **live checkout** when they start. Do not leave the main checkout on an older branch while jobs are pending.
 

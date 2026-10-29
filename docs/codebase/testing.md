@@ -24,11 +24,12 @@ There is no pytest configuration file and **no custom markers** — the only mar
 
 `.github/workflows/ci.yml` runs on pushes to `main` and `phase-NN` branches and on pull requests to `main` and `phase-**`, on Python 3.11 with `ubuntu-latest`:
 
+0. `apt-get install libgl1 libglib2.0-0` (system libraries for the Qt/plotting dependencies); a `concurrency` group cancels a superseded run on the same ref
 1. `pip install -r requirements-ci.txt` — CPU-only torch/torchvision, h5py, numpy, pyyaml, timm, wandb, fabio, black, pytest, PyQt5, pyqtgraph, scipy, matplotlib, scikit-image, pyFAI, and Reborn from the `gihan` branch of the Kirian Lab GitLab repo
 2. `black --check src/ tests/`
 3. `pytest tests/ -v`
 
-So **run `black src/ tests/` before pushing** or CI fails before the tests start. A separate workflow, `.github/workflows/dashboard.yml`, runs only for changes under `dashboard/**`; the Python suite does not depend on the dashboard.
+So **run `black src/ tests/` before pushing** or CI fails before the tests start. A separate workflow, `.github/workflows/dashboard.yml`, runs only for changes under `dashboard/**` (or to the workflow file itself) on pushes to `main` and `phase-NN` and on pull requests to `main` and `phase-**`: Node 24, then `npm ci`, `npm run typecheck`, `npm test` and `npm run build` in `dashboard/`. The dashboard has its own suites (about 1440 vitest tests in 80 files, plus 60 Playwright end-to-end tests run locally with `npm run e2e`); the Python suite does not depend on it.
 
 Local setup without the full environment:
 
@@ -85,7 +86,7 @@ Some files test behaviour that spans modules or scripts rather than mirroring on
 **`tests/conftest.py`** defines shared fixtures, two of them `autouse`:
 
 - `wandb_disabled` (autouse) — sets `WANDB_MODE=disabled` for every test and calls `wandb.teardown()` afterwards, so W&B's process-wide singleton cannot freeze settings for later tests (CI has no API key); a test that needs another mode sets or deletes `WANDB_MODE` itself
-- `fake_jungfrau_assembly_via_dataset` (autouse) — monkeypatches `src.data.dataset.assemble_only` to a `_to_2d()` passthrough, because many tests use undersized synthetic Jungfrau frames that real assembly would reject
+- `fake_jungfrau_assembly_via_dataset` (autouse) — monkeypatches `src.data.dataset.assemble_only` so that Jungfrau frames whose shape is not (2164, 2068) go through a `_to_2d()` passthrough (many tests use undersized synthetic Jungfrau frames that real assembly would reject); every other frame still goes to the real `assemble_only`
 - `fake_jungfrau_assembly_via_pipeline` (opt-in) — the same patch applied to `src.preprocessing.pipeline.assemble_only`
 
 Other than these, each test file builds its own synthetic data.

@@ -24,7 +24,7 @@ Auto-generated from the live codebase. Thicker clusters are tighter communities;
 
 ![Module Dependency Graph](../assets/module-graph-curated.svg)
 
-> **For function-level exploration with pan/zoom/search** — open [`graphify-out/graph.html`](../../graphify-out/graph.html) in a browser (3110 nodes, 6297 edges, 221 communities as of 2026-10-22; the graph also covers `dashboard/` and `tests/`, so counts are larger than for `src/` alone). The static image above is a curated older snapshot.
+> **For function-level exploration with pan/zoom/search** — open `graphify-out/graph.html` (generated locally by `graphify update .`, not tracked in git) in a browser (3326 nodes, 6756 edges, 240 communities as of 2026-10-29; the graph also covers `dashboard/` and `tests/`, so counts are larger than for `src/` alone). The static image above is a curated older snapshot.
 
 ---
 
@@ -43,7 +43,7 @@ Run naming, the resume/override gate, W&B run identity and the frame cache are c
 
 ## God Nodes (most-connected — highest blast radius)
 
-If you touch these, run the full test suite. Edge counts are from the graph rebuilt on 2026-10-22 (`graphify-out/GRAPH_REPORT.md`) and include test and script usages.
+If you touch these, run the full test suite. Edge counts are from the graph rebuilt on 2026-10-29 (`graphify-out/GRAPH_REPORT.md`) and include test and script usages. The table lists `src/` symbols only; the whole-graph top 10 also contains `_make_run_dir()` (a test helper in `tests/test_run_naming.py`, 38 edges) and the dashboard's `EventBus` (33), `Config` (31) and `useResource()` (30).
 
 | Symbol | File | Edges |
 |--------|------|-------|
