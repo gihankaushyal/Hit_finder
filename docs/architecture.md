@@ -6,7 +6,7 @@ Hit_finder is a deep learning system for per-frame hit classification in Serial 
 
 The system is designed around two core challenges: (1) **detector diversity** — models must generalize across four distinct detector geometries from different facilities without retraining, and (2) **label quality** — frame-level labels from a classical peak-finder are noisy, so patch-level supervision guided by Bragg peak locations produces more reliable training signal.
 
-Two pipeline tracks exist. **Track 1 (primary, production)** is an asymmetric supervised pipeline using a ResNet18 classifier trained on hitfinder-guided 224×224 patches. **Track 2 (implemented; full-LODO runs complete for the September 2026 generation, rerun in progress)** is a self-supervised (MAE, ViT-S/16) pretraining stage followed by supervised fine-tuning or a linear probe, exploiting the large corpus of unlabeled CXI frames. Both tracks share one preprocessing pipeline (the same code path up to the crop step; Track 2 uses MAE masking instead of cutout).
+Two pipeline tracks exist. **Track 1 (primary, production)** is an asymmetric supervised pipeline using a ResNet18 classifier trained on hitfinder-guided 224×224 patches. **Track 2 (implemented; full-LODO runs complete for the September 2026 generation and for the `-v2` rerun)** is a self-supervised (MAE, ViT-S/16) pretraining stage followed by supervised fine-tuning or a linear probe, exploiting the large corpus of unlabeled CXI frames. Both tracks share one preprocessing pipeline (the same code path up to the crop step; Track 2 uses MAE masking instead of cutout).
 
 A self-contained local web dashboard for the repository lives in `dashboard/` (see [Dashboard](#dashboard)); it is not imported by `src/`.
 
@@ -39,7 +39,7 @@ Global Contrast Normalization (GCN) ──────────────�
 
 **Frame cache.** Everything from the CXI read through GCN is deterministic per frame, so it can be cached (`src/data/frame_cache.py`, enabled by the `cache:` block in a run config; off by default in `configs/base.yaml`, on in the production LODO configs). The cache is two-tier — a shared on-disk root plus an optional per-node NVMe copy staged by `scripts/stage_frame_cache.sh` — and guarded by a manifest (`verify_cache_or_raise`) that raises `CacheStaleError` / `CacheMissError` when the geometry, hitfinder settings or files have changed. On a miss the dataset falls back to computing the prefix directly (`_compute_gcn_frame`). Frames are stored as float16 (`frames.npy`, memory-mapped) and cast back to float32 on read, so cached frames match the live path up to float16 rounding; valid-pixel masks and centroids match exactly. `TestBitExactnessAgainstRealData` in `tests/test_frame_cache.py` checks this against real data and is skipped wherever no real cache has been built. Crops are still drawn fresh every epoch (epoch-varying crops), with `asymmetric.crops_per_frame` independent crops per cached frame.
 
-**Metadata gating.** The hitfinder only runs on frames whose embedded label (`entry_1/labels/hit`) is HIT. For a HIT frame with centroids, a 50/50 coin toss picks Path A (centred on a random peak, label 1) or Path B (50 px clearance, label 0; falls back to Path A if no clear position is found). A HIT frame with no centroids, or any NON-HIT frame (hitfinder skipped, centroids empty), yields a random crop with label 0.
+**Metadata gating.** The hitfinder only runs on frames whose embedded label (`entry_1/labels/hit`) is HIT. For a HIT frame with centroids, a coin toss (`hit_frac`, 0.5 by default) picks Path A (centred on a random peak, label 1) or Path B (50 px clearance, label 0; falls back to Path A if no clear position is found). A HIT frame with no centroids, or any NON-HIT frame (hitfinder skipped, centroids empty), yields a random crop with label 0.
 
 ---
 
@@ -73,8 +73,8 @@ All preprocessing runs on CPU in DataLoader workers (GPU hitfinder is the except
 | **GCN** | `(H, W)` frame | `(H, W)` float64, mean=0, std≈1 | `(I − μ) / (σ + ε)` global |
 | **Gap Fill** | GCN'd frame + invalid-pixel mask | GCN'd frame with invalid pixels zeroed | Prevents inter-module gaps from corrupting LCN windows |
 | **Pad** *(train only)* | `(H, W)` frame | `(H+224, W+224)` | 112px border; enables centered crops at panel edges |
-| **LCN** | `(224, 224)` patch + mask | `(224, 224)` float64 | `(I − μ_W) / sqrt(σ²_W + ε)`, 9×9 sliding window |
 | **Augmentation, geometric** *(train only, before LCN)* | `(224, 224)` crop | Rotated/flipped crop | `random_rot90` (uniform), `random_flip` (50% each axis) |
+| **LCN** | `(224, 224)` patch + mask | `(224, 224)` float64 | `(I − μ_W) / sqrt(σ²_W + ε)`, 9×9 sliding window |
 | **Augmentation, cutout** *(train only, after LCN)* | `(224, 224)` LCN'd crop | Crop with holes | `random_cutout`: 3 holes of 24×24, exact 0 in LCN space, 8 px margin from every centroid, hole skipped after 20 failed draws |
 
 > **Why hitfinder before GCN?** PF8 threshold parameters are calibrated in raw ADU units, so it must run on the unmodified assembled frame. GCN runs after peak extraction.
@@ -146,7 +146,7 @@ Track 2 adds a self-supervised pretraining stage to initialize representations f
 
 **Orchestration:** `scripts/submit_ssl_pretrain_all.sh` and `scripts/submit_ssl_finetune_all.sh` stage the CXI files on local NVMe, train each fold, then clean up (`stage_ssl_data.sh`, `cleanup_ssl_stage.sh`).
 
-> **Status (2026-10-22):** The September 2026 generation completed fine-tune on 4/4 folds (mean cross AP 0.836) and linear probe on 3/4 folds (0.829; the fold-2 probe was cancelled). A rerun under the current run-naming standard (`mae-vits16-v2`) is in progress. Results and caveats → [detailed_notes.md](detailed_notes.md).
+> **Status (2026-10-29):** The September 2026 generation completed fine-tune on 4/4 folds (mean cross AP 0.836) and linear probe on 3/4 folds (0.829; the fold-2 probe was cancelled). The rerun under the current run-naming standard (`mae-vits16-v2`) has finished 4/4 folds for both heads: fine-tune 0.858 ± 0.060 and linear probe 0.962 ± 0.024 mean cross AP. Results and caveats → [detailed_notes.md](detailed_notes.md).
 
 ---
 
@@ -220,4 +220,4 @@ AP uses sklearn-compatible stable sort with pessimistic ordering (tied positives
 
 ## Dashboard
 
-`dashboard/` is a local, self-contained repository dashboard (TypeScript: a Hono API plus a React/Vite front end). It shows the latest pull request, open issues, the Phase-5 kanban (synced with GitHub issues labelled `task`), CI and local test status, and a runs-and-checkpoints table (its Epochs column reads the `training` block of `results.json`). It also hosts worker agents with approval cards, a chief-of-staff chat and a terminal. It runs on Sol, binds to `127.0.0.1` only, and is reached through an SSH tunnel. Nothing in `src/` imports it and it is not needed for training or evaluation; see [dashboard/README.md](../dashboard/README.md).
+`dashboard/` is a local, self-contained repository dashboard (TypeScript: a Hono API plus a React/Vite front end). It shows the latest pull request, open issues, the Phase-5 kanban (synced with GitHub issues labelled `task`), CI and local test status, and a runs-and-checkpoints table (its Epochs column reads the `training` block of `results.json`). It also hosts worker agents with approval cards, a chief-of-staff chat and a terminal. The chief's conversations are saved: they survive a restart and can be listed, resumed, renamed, archived (automatically after `DASH_CHIEF_ARCHIVE_DAYS`, 30 by default) and continued in a new conversation once the underlying SDK session has expired. It runs on Sol, binds to `127.0.0.1` only, and is reached through an SSH tunnel. Nothing in `src/` imports it and it is not needed for training or evaluation; see [dashboard/README.md](../dashboard/README.md).
