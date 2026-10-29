@@ -186,7 +186,6 @@ Python utilities (files here that import from `src/` carry a `sys.path.insert` h
 | `plan_cache_staging.py` | Emit one fold's cache entry directories in NVMe staging priority order (train, then val, then test sessions) | `evaluation.benchmark`, `training.lodo`, `utils.config` |
 | `plot_hit_frac.py` | Plot realized `train/realized_hit_frac` against the configured value from W&B (`wandb.Api()`) | `wandb`, `matplotlib`, `training.wandb_identity` |
 | `diagnose_crop_shortcut.py` | Measure how much a trained classifier relies on crop-construction shortcuts (peak-centred positives vs. clearance negatives) | `data.dataset`, `models.ssl`, `evaluation.benchmark` |
-| `verify_eiger4m_geometry_match.py` | One-off check that Reborn's bundled `eiger4m_64_pad_geometry_list()` matches the former local `eiger4m.geom` geometry (that file has since been deleted, so the script can no longer run: it raises `FileNotFoundError` on the missing local Eiger4M `.geom` file); kept as a record, not part of pytest | `preprocessing.geometry`, `reborn` |
 
 SLURM wrappers (start from `scripts/templates/slurm_gpu_job.sh`; the training wrappers request one `h100` on node `scg020` and `source .secrets/wandb.env` before the training command):
 

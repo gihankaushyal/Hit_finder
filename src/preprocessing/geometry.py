@@ -12,8 +12,7 @@ from reborn.external.crystfel import geometry_file_to_pad_geometry_list
 _EIGER_RESONET_GEOM = Path(__file__).parent / "data" / "eiger_resonet.geom"
 
 # clen(0.300) + coffset(-0.1860225), summed per CrystFEL convention — see
-# eiger4m_64_pad_geometry_list() docstring. Shared with
-# scripts/verify_eiger4m_geometry_match.py so the two never drift apart.
+# eiger4m_64_pad_geometry_list() docstring.
 EIGER4M_EFFECTIVE_DISTANCE_M = 0.1139775
 
 _GEOM_CACHE: dict[str, detector.PADGeometryList] = {}
@@ -42,8 +41,8 @@ def eiger4m_64_pad_geometry_list(
 
     Delegates to Reborn's bundled `detector.eiger4m_64_pad_geometry_list()`
     (added upstream to match our own eiger4m.geom-derived geometry, confirmed
-    numerically equivalent — max panel-position difference < 1e-6 m, see
-    scripts/verify_eiger4m_geometry_match.py). The default 0.1139775 m
+    numerically equivalent — max panel-position difference < 1e-6 m, checked
+    once by a since-removed script). The default 0.1139775 m
     reproduces our geom file's clen=0.300 combined with its per-panel
     coffset=-0.1860225 (CrystFEL sums these: 0.300 - 0.1860225 = 0.1139775).
     Our Eiger4M data is stored as a stacked LCLS canvas (5632x384); the
