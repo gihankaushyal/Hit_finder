@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { createChief, CHIEF_ID, CHIEF_NAME, type Chief } from "../server/agents/chief";
+import { createChief, CHIEF_ID, CHIEF_NAME, type Chief, type ChiefDeps } from "../server/agents/chief";
 import { AgentError } from "../server/agents/supervisor";
 import { createFakeDriver, type FakeDriverOptions } from "../server/agents/fakeDriver";
 import { createApprovals, type Approvals } from "../server/agents/approvals";
@@ -19,17 +19,21 @@ let events: DashEvent[];
 let chief: Chief;
 let ran: Record<string, unknown>[];
 let starts: SessionStart[];
+let built: Chief[];
 
 const tools: ToolDef[] = [
   { name: "spawn_worker", description: "d", schema: {}, handler: async (a) => (ran.push(a), { text: `started ${a.name}` }) },
   { name: "list_workers", description: "d", schema: {}, handler: async () => ({ text: "none" }) },
 ];
 
-function build(fake: FakeDriverOptions = { stepMs: 0 }, driver?: AgentDriver): Chief {
+function build(fake: FakeDriverOptions = { stepMs: 0 }, driver?: AgentDriver, extra: Partial<ChiefDeps> = {}): Chief {
   const inner = driver ?? createFakeDriver(fake);
   const recording: AgentDriver = { start: (s) => (starts.push(s), inner.start(s)) };
   approvals = createApprovals({ bus, auditPath: path.join(root, "audit.jsonl") });
-  return createChief({ cfg, bus, driver: recording, approvals, tools, env: { PATH: process.env.PATH ?? "" }, notifyMs: 5 });
+  // The fake driver's session ids are not on disk: tests get a probe that finds every transcript unless they ask otherwise.
+  const made = createChief({ cfg, bus, driver: recording, approvals, tools, env: { PATH: process.env.PATH ?? "" }, notifyMs: 5, transcriptExists: async () => true, ...extra });
+  built.push(made);
+  return made;
 }
 async function until<T>(f: () => T | undefined | false, ms = 3000): Promise<T> {
   const end = Date.now() + ms;
@@ -51,11 +55,13 @@ beforeEach(async () => {
   bus.subscribe((e) => events.push(e));
   ran = [];
   starts = [];
+  built = [];
   chief = build();
   await chief.init();
 });
 afterEach(async () => {
   await chief.stop();
+  for (const c of built) c.dispose(); // no sweep timer outlives its test
   fs.rmSync(root, { recursive: true, force: true });
 });
 
@@ -468,6 +474,18 @@ describe("conversations", () => {
     expect(chief.conversations().map((c) => [c.id, c.updatedAt])).toEqual(before);
   });
 
+  it("restoring an archived conversation counts as activity, so the sweep does not archive it again", async () => {
+    await chief.send("alpha");
+    await waitState("idle");
+    const alpha = chief.summary().conversationId;
+    await chief.reset();
+    await chief.patch(alpha, { archived: true });
+    const archivedAt = chief.conversations().find((c) => c.id === alpha)!.updatedAt;
+    await new Promise((r) => setTimeout(r, 15));
+    await chief.patch(alpha, { archived: false });
+    expect(chief.conversations().find((c) => c.id === alpha)!.updatedAt > archivedAt).toBe(true);
+  });
+
   it("never matches an id against Object.prototype members", async () => {
     for (const id of ["constructor", "toString", "__proto__"]) {
       await expect(chief.resume(id)).rejects.toMatchObject({ code: "not-found" });
@@ -570,7 +588,7 @@ describe("conversations", () => {
   it("does not start on a read-only conversation that the index names as active", async () => {
     const file = path.join(cfg.stateDir, "chief", "index.json");
     const index = JSON.parse(fs.readFileSync(file, "utf8"));
-    index.convs["c-old"] = { id: "c-old", title: "old", titleManual: false, createdAt: "2026-10-01T00:00:00.000Z", updatedAt: "2026-10-01T00:00:00.000Z", turns: 1, costUsd: null, sessionId: "s", archived: false, readOnly: "expired", seededFrom: null };
+    index.convs["c-old"] = { id: "c-old", title: "old", titleManual: false, createdAt: "2026-10-01T00:00:00.000Z", updatedAt: "2026-10-01T00:00:00.000Z", turns: 1, costUsd: null, sessionId: null, archived: false, readOnly: "expired", seededFrom: null };
     index.active = "c-old";
     fs.writeFileSync(file, JSON.stringify(index));
     const again = build();
@@ -686,5 +704,272 @@ describe("conversations", () => {
     await again.init();
     expect(fs.existsSync(path.join(dir, "index.json.99999.tmp"))).toBe(false);
     expect(fs.existsSync(path.join(dir, "conv", id, "entry.json.99999.tmp"))).toBe(false);
+  });
+});
+
+describe("retention", () => {
+  const seedRegistry = (rows: Record<string, object>) => {
+    const file = path.join(cfg.stateDir, "chief", "index.json");
+    const index = JSON.parse(fs.readFileSync(file, "utf8"));
+    Object.assign(index.convs, rows);
+    fs.writeFileSync(file, JSON.stringify(index));
+  };
+  const aged = (id: string, days: number, archived: boolean) => ({
+    id, title: id, titleManual: false, createdAt: "2026-01-01T00:00:00.000Z", updatedAt: new Date(Date.now() - days * 86_400_000).toISOString(),
+    turns: 1, costUsd: null, sessionId: null, archived, archivedAt: archived ? new Date(Date.now() - days * 86_400_000).toISOString() : null, readOnly: null, seededFrom: null,
+  });
+
+  it("archives idle conversations when it starts", async () => {
+    seedRegistry({ "c-stale": aged("c-stale", 45, false), "c-fresh": aged("c-fresh", 2, false) });
+    const again = build();
+    await again.init();
+    const rows = again.conversations();
+    expect(rows.find((c) => c.id === "c-stale")).toMatchObject({ archived: true });
+    expect(rows.find((c) => c.id === "c-fresh")).toMatchObject({ archived: false });
+  });
+
+  it("purges old archived conversations only when a purge limit is set", async () => {
+    seedRegistry({ "c-ancient": aged("c-ancient", 200, true) });
+    fs.mkdirSync(path.join(cfg.stateDir, "chief", "conv", "c-ancient"), { recursive: true });
+    fs.writeFileSync(path.join(cfg.stateDir, "chief", "conv", "c-ancient", "journal.jsonl"), "");
+    const off = build();
+    await off.init();
+    expect(off.conversations().some((c) => c.id === "c-ancient")).toBe(true);
+    const on = createChief({ cfg: { ...cfg, chiefPurgeDays: 90 }, bus, driver: createFakeDriver({ stepMs: 0 }), approvals, tools, env: {}, transcriptExists: async () => true });
+    await on.init();
+    expect(on.conversations().some((c) => c.id === "c-ancient")).toBe(false);
+    expect(fs.existsSync(path.join(cfg.stateDir, "chief", "conv", "c-ancient"))).toBe(false);
+  });
+});
+
+describe("retention of archives", () => {
+  const seed = (rows: Record<string, object>) => {
+    const file = path.join(cfg.stateDir, "chief", "index.json");
+    const index = JSON.parse(fs.readFileSync(file, "utf8"));
+    Object.assign(index.convs, rows);
+    fs.writeFileSync(file, JSON.stringify(index));
+  };
+  const row = (id: string, updatedDaysAgo: number, archivedAt: string | null) => ({
+    id, title: id, titleManual: false, createdAt: "2026-01-01T00:00:00.000Z", updatedAt: new Date(Date.now() - updatedDaysAgo * 86_400_000).toISOString(),
+    turns: 1, costUsd: null, sessionId: null, archived: true, archivedAt, readOnly: null, seededFrom: null,
+  });
+  const purging = (): Chief => createChief({ cfg: { ...cfg, chiefPurgeDays: 30 }, bus, driver: createFakeDriver({ stepMs: 0 }), approvals, tools, env: {}, transcriptExists: async () => true });
+
+  it("counts the purge limit from when a conversation was archived, not from its last message", async () => {
+    await chief.stop();
+    seed({ "c-old-news": row("c-old-news", 200, null) }); // archived long after its last message, date unknown
+    fs.mkdirSync(path.join(cfg.stateDir, "chief", "conv", "c-old-news"), { recursive: true });
+    const again = purging();
+    await again.init();
+    expect(again.conversations().some((c) => c.id === "c-old-news")).toBe(true); // stamped today, not deleted
+    again.dispose();
+    const saved = JSON.parse(fs.readFileSync(path.join(cfg.stateDir, "chief", "index.json"), "utf8"));
+    expect(saved.convs["c-old-news"].archivedAt).toEqual(expect.any(String));
+  });
+
+  it("puts the sweep back as it was when the registry cannot be saved", async () => {
+    await chief.stop();
+    seed({ "c-gone": row("c-gone", 200, new Date(Date.now() - 100 * 86_400_000).toISOString()) });
+    const file = path.join(cfg.stateDir, "chief", "index.json");
+    const again = purging();
+    fs.rmSync(file);
+    fs.mkdirSync(file); // every save fails
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    await again.init().catch(() => undefined);
+    log.mockRestore();
+    again.dispose();
+    expect(fs.existsSync(path.join(cfg.stateDir, "chief", "conv", "c-gone"))).toBe(false); // it never existed on disk here
+  });
+});
+
+describe("continuing in a new conversation", () => {
+  it("continues in a new conversation: the first prompt carries what was said, once", async () => {
+    await chief.send("we agreed on Tuesday");
+    await waitState("idle");
+    const src = chief.summary().conversationId;
+    await chief.continueFrom(src);
+    expect(chief.summary()).toMatchObject({ turns: 0, sessionId: null, title: null });
+    expect(chief.conversations().find((c) => c.active)).toMatchObject({ seededFrom: src });
+    const before = starts.length;
+    await chief.send("what did we agree?");
+    await waitState("idle");
+    expect(starts[before].prompt).toContain("we agreed on Tuesday");
+    expect(starts[before].prompt).toContain("The owner says:\nwhat did we agree?");
+    expect(starts[before].resume).toBeUndefined();
+    await chief.send("and next?");
+    await waitState("idle");
+    expect(starts).toHaveLength(before + 1); // later messages go to the live session, not a new prompt
+  });
+
+  it("refuses to continue from an unknown or empty conversation", async () => {
+    await expect(chief.continueFrom("c-nope")).rejects.toMatchObject({ code: "not-found" });
+    await expect(chief.continueFrom(chief.summary().conversationId)).rejects.toMatchObject({ code: "invalid" });
+  });
+});
+
+describe("a conversation whose session is gone", () => {
+  const gone = { transcriptExists: async () => false };
+
+  it("is read-only after a restart when its saved transcript has vanished", async () => {
+    await chief.send("remember this");
+    await waitState("idle");
+    const id = chief.summary().conversationId;
+    const again = build({ stepMs: 0 }, undefined, gone);
+    await again.init();
+    // only the probe said so: the id is kept, and the chief starts on a conversation that can be continued instead
+    expect(again.conversations().find((c) => c.id === id)).toMatchObject({ readOnly: "expired" });
+    expect(again.summary()).toMatchObject({ readOnly: null });
+    expect(again.summary().conversationId).not.toBe(id);
+    await expect(again.resume(id)).rejects.toMatchObject({ code: "state" });
+    expect((await again.events(0, 100)).events.filter((e) => e.kind === "user")).toHaveLength(0); // the lost conversation's message is not in the new one
+  });
+
+  it("refuses to resume a parked conversation whose transcript vanished, and says so in the list", async () => {
+    await chief.send("topic");
+    await waitState("idle");
+    const first = chief.summary().conversationId;
+    await chief.reset();
+    const later = build({ stepMs: 0 }, undefined, gone);
+    await later.init();
+    await expect(later.resume(first)).rejects.toMatchObject({ code: "state" });
+    expect(later.conversations().find((c) => c.id === first)).toMatchObject({ readOnly: "expired" });
+    // the probe's word is not final: once the transcript is found again the conversation is released
+    const third = build();
+    await third.init();
+    expect(third.conversations().find((c) => c.id === first)).toMatchObject({ readOnly: null });
+    const fourth = build({ stepMs: 0 }, undefined, gone);
+    await fourth.init();
+    await expect(fourth.resume(first)).rejects.toMatchObject({ code: "state" }); // a parked conversation is probed when it is resumed
+    expect(fourth.conversations().find((c) => c.id === first)).toMatchObject({ readOnly: "expired" });
+  });
+
+  it("turns a resume that fails before saying anything into a read-only conversation, not a failed one", async () => {
+    await chief.send("topic");
+    await waitState("idle");
+    const id = chief.summary().conversationId;
+    const failing: AgentDriver = {
+      start: () => ({
+        events: (async function* () { throw new Error("No conversation found with session ID"); })(),
+        send() {}, interrupt: async () => {}, close() {},
+      }),
+    };
+    let present = true;
+    const again = build({}, failing, { transcriptExists: async () => present });
+    await again.init();
+    present = false; // the transcript is really gone by the time the SDK is asked
+    await again.send("are you there?");
+    await until(() => (again.summary().readOnly && again.summary().state === "idle") || undefined);
+    expect(again.summary()).toMatchObject({ conversationId: id, state: "idle", readOnly: "expired", sessionId: null, error: null });
+    expect((await again.events(0, 100)).events.some((e) => e.kind === "error")).toBe(true);
+  });
+
+  it("keeps the session id when the SDK cannot find a transcript the disk still has", async () => {
+    await chief.send("topic");
+    await waitState("idle");
+    const id = chief.summary().conversationId;
+    const failing: AgentDriver = {
+      start: () => ({
+        events: (async function* () { throw new Error("No conversation found with session ID"); })(),
+        send() {}, interrupt: async () => {}, close() {},
+      }),
+    };
+    const again = build({}, failing); // the default rig probe says the transcript exists
+    await again.init();
+    await again.send("are you there?");
+    await until(() => (again.summary().readOnly && again.summary().state === "idle") || undefined);
+    expect(again.summary()).toMatchObject({ conversationId: id, readOnly: "expired", sessionId: expect.any(String) });
+  });
+
+  it("journals a failed result that is not followed by a lost session", async () => {
+    await chief.send("topic");
+    await waitState("idle");
+    const failing: AgentDriver = {
+      start: () => ({
+        events: (async function* () { yield { body: { kind: "result" as const, ok: false, text: "rate limited", turns: 0, costUsd: null } }; })(),
+        send() {}, interrupt: async () => {}, close() {},
+      }),
+    };
+    const again = build({}, failing);
+    await again.init();
+    await again.send("are you there?");
+    await until(() => (again.summary().state === "stopped" ? true : undefined));
+    const results = (await again.events(0, 100)).events.filter((e) => e.kind === "result");
+    expect(results.at(-1)).toMatchObject({ ok: false, text: "rate limited" });
+    expect(again.summary().turns).toBe(2); // it ends the turn like any other result
+  });
+
+  it("handles the way the real SDK reports a missing session: a failed result, then an error", async () => {
+    await chief.send("topic");
+    await waitState("idle");
+    const id = chief.summary().conversationId;
+    const real: AgentDriver = {
+      start: () => ({
+        events: (async function* () {
+          yield { body: { kind: "result" as const, ok: false, text: "error_during_execution", turns: 0, costUsd: null } };
+          throw new Error("Claude Code returned an error result: No conversation found with session ID: s-1");
+        })(),
+        send() {}, interrupt: async () => {}, close() {},
+      }),
+    };
+    const again = build({}, real);
+    await again.init();
+    await again.send("are you there?");
+    await until(() => (again.summary().readOnly && again.summary().state === "idle") || undefined);
+    expect(again.summary()).toMatchObject({ conversationId: id, readOnly: "expired", turns: 1, error: null });
+    const kinds = (await again.events(0, 100)).events.map((e) => e.kind);
+    expect(kinds.filter((k) => k === "result")).toHaveLength(1); // only the real turn from before; the failed attempt is not one
+  });
+
+  it("does not expire a conversation because a resume failed for another reason", async () => {
+    await chief.send("topic");
+    await waitState("idle");
+    const flaky: AgentDriver = {
+      start: () => ({ events: (async function* () { throw new Error("socket hang up"); })(), send() {}, interrupt: async () => {}, close() {} }),
+    };
+    const again = build({}, flaky);
+    await again.init();
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    await again.send("hello?");
+    await until(() => again.summary().state === "failed" || undefined);
+    log.mockRestore();
+    expect(again.summary().readOnly).toBeNull();
+    expect(again.summary().sessionId).not.toBeNull(); // still resumable once the network is back
+  });
+
+  it("does not lock a conversation just because a resume reports another session id", async () => {
+    await chief.send("topic");
+    await waitState("idle");
+    const other: AgentDriver = {
+      start: () => ({
+        events: (async function* () { yield { sessionId: "a-new-id-for-the-same-history" }; await new Promise(() => undefined); })(),
+        send() {}, interrupt: async () => {}, close() {},
+      }),
+    };
+    const again = build({}, other);
+    await again.init();
+    await again.send("are you there?");
+    await until(() => again.summary().sessionId === "a-new-id-for-the-same-history" || undefined);
+    expect(again.summary().readOnly).toBeNull();
+  });
+
+  it("does not treat an ordinary failure of a brand-new conversation as expiry", async () => {
+    const failing: AgentDriver = {
+      start: () => ({ events: (async function* () { throw new Error("boom"); })(), send() {}, interrupt: async () => {}, close() {} }),
+    };
+    chief = build({}, failing);
+    await chief.init();
+    await chief.reset();
+    await chief.send("first words");
+    await until(() => chief.summary().state === "failed" || undefined);
+    expect(chief.summary().readOnly).toBeNull();
+  });
+});
+
+describe("dispose", () => {
+  it("stops the daily sweep", async () => {
+    const clear = vi.spyOn(globalThis, "clearInterval");
+    chief.dispose();
+    expect(clear).toHaveBeenCalled();
+    clear.mockRestore();
   });
 });

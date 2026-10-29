@@ -68,6 +68,11 @@ export function chiefRoutes(api: Hono, d: { chief: Chief }): void {
     return done(c, () => d.chief.patch(id, { title: title as string | undefined, archived: archived as boolean | undefined }));
   });
 
+  api.post("/chief/conversations/:id/continue", (c) => {
+    const id = convId(c);
+    return typeof id === "string" ? done(c, () => d.chief.continueFrom(id)) : id;
+  });
+
   api.get("/chief/conversations/:id/events", async (c) => {
     const id = convId(c);
     if (typeof id !== "string") return id;

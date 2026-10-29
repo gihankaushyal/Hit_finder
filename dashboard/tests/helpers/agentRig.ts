@@ -63,6 +63,7 @@ export async function makeAgentRig(env: Record<string, string> = {}, driver: Fak
     tools: createChiefTools({ supervisor: sup, kanban: kanbanStub as never }),
     env: { PATH: process.env.PATH },
     notifyMs: 5,
+    transcriptExists: async () => true, // the fake driver's sessions are not on disk
   });
   await chief.init();
   const gh = { json: vi.fn(), text: vi.fn() } as unknown as Gh;

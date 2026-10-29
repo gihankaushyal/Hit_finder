@@ -102,4 +102,12 @@ describe("loadConfig", () => {
       expect(() => loadConfig({ [key]: value })).toThrow(new RegExp(key));
     });
   });
+
+  it("reads the chief retention settings, where 0 means off", () => {
+    expect(loadConfig({})).toMatchObject({ chiefArchiveDays: 30, chiefPurgeDays: 0 });
+    expect(loadConfig({ DASH_CHIEF_ARCHIVE_DAYS: "7", DASH_CHIEF_PURGE_DAYS: "90" })).toMatchObject({ chiefArchiveDays: 7, chiefPurgeDays: 90 });
+    expect(loadConfig({ DASH_CHIEF_ARCHIVE_DAYS: "0" }).chiefArchiveDays).toBe(0);
+    expect(() => loadConfig({ DASH_CHIEF_ARCHIVE_DAYS: "-1" })).toThrow(/DASH_CHIEF_ARCHIVE_DAYS/);
+    expect(() => loadConfig({ DASH_CHIEF_PURGE_DAYS: "soon" })).toThrow(/DASH_CHIEF_PURGE_DAYS/);
+  });
 });

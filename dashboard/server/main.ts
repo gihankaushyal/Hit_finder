@@ -78,6 +78,8 @@ const chief = createChief({
   approvals,
   tools: createChiefTools({ supervisor: agents, kanban }),
   env: process.env,
+  // The fake driver's sessions have no transcript on disk, so they must not be mistaken for expired ones.
+  transcriptExists: config.agentDriver === "fake" ? async () => true : undefined,
 });
 const terminal = createTerminal({ cfg: config, env: process.env });
 const app = buildServer({ config, token, bus, gh, tests, kanban, runner: execRunner, runs, agents, approvals, chief, terminal });
@@ -107,6 +109,7 @@ function shutdown(): void {
   force.unref();
   // Exit only after pytest's process group is gone, or the bound above elapses.
   const testsStopped = Promise.all([terminal.closeAll(STOP_TERMINAL_TIMEOUT_MS), stopTests(), agentsReady.then(() => Promise.all([chief.stop(), agents.stopAll(STOP_AGENTS_TIMEOUT_MS)]))]);
+  chief.dispose();
   void triggers.close().finally(() => {
     server.close(() => void testsStopped.finally(() => process.exit(0)));
     server.closeAllConnections?.();

@@ -440,7 +440,7 @@ describe("file watcher trigger", () => {
 const NO_RUNS = { scan: async () => ({ runs: [], scannedAt: "", checkpointsDirExists: false, truncated: false, error: null }) };
 
 const NO_AGENTS = { list: () => [], get: () => undefined, spawn: async () => ({}) as never, message: async () => {}, stop: async () => {}, resume: async () => {}, events: async () => ({ events: [], lastSeq: 0 }), init: async () => {}, stopAll: async () => {} };
-const NO_CHIEF = { summary: () => ({}) as never, send: async () => {}, stop: async () => {}, reset: async () => {}, events: async () => ({ events: [], lastSeq: 0 }), conversations: () => [], resume: async () => {}, patch: async () => {}, eventsFor: async () => ({ events: [], lastSeq: 0 }), init: async () => {} };
+const NO_CHIEF = { summary: () => ({}) as never, send: async () => {}, stop: async () => {}, reset: async () => {}, events: async () => ({ events: [], lastSeq: 0 }), conversations: () => [], resume: async () => {}, continueFrom: async () => {}, dispose: () => {}, patch: async () => {}, eventsFor: async () => ({ events: [], lastSeq: 0 }), init: async () => {} };
 const NO_TERMINAL = { enabled: true, open: () => ({ id: "t" }), attach: () => ({ output: null as never }), input: () => {}, resize: () => {}, close: async () => {}, closeAll: async () => {}, count: () => 0 };
 const NO_APPROVALS = { pending: () => [], decide: () => {}, request: async () => ({ decision: "deny" as const }), cancelAgent: () => {}, count: () => 0, countFor: () => 0 };
 

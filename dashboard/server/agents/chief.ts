@@ -6,8 +6,9 @@ import type { Config } from "../config";
 import type { EventBus } from "../events";
 import type { Approvals } from "./approvals";
 import type { AgentDriver, Session, SessionStart, ToolDef } from "./driver";
-import { adoptEntries, autoTitle, blankEntry, cleanTitle, convDir, isEmptyConv, journalPath, loadRegistry, newConvId, pickContinuable, rebuildRegistry, saveRegistry, sweepTempFiles, TITLE_EDIT_MAX, type ConvEntry, type Registry, type WriteMemo } from "./conversations";
+import { adoptEntries, autoTitle, blankEntry, buildDigest, cleanTitle, convDir, isEmptyConv, journalPath, loadRegistry, newConvId, pickContinuable, rebuildRegistry, saveRegistry, selectSweep, sweepTempFiles, TITLE_EDIT_MAX, type ConvEntry, type Registry, type WriteMemo } from "./conversations";
 import { eventsAfter, openJournal, readJournalFile, type Journal } from "./journal";
+import { createTranscriptProbe, type TranscriptProbe } from "./transcripts";
 import { chiefOptions } from "./policy";
 import { chiefPrompt } from "./rolePrompts";
 import { AgentError, MESSAGE_MAX_CHARS } from "./supervisor";
@@ -17,12 +18,17 @@ export const CHIEF_NAME = "Chief of staff";
 export const CHIEF_FAILED_MESSAGE = "The chief of staff session ended with an error.";
 const NOTIFY_MS = 150;
 const STOP_WAIT_MS = 3000;
+const SWEEP_EVERY_MS = 24 * 60 * 60 * 1000;
 const INTERRUPT_WAIT_MS = 2000;
 const ACTIVE: AgentState[] = ["running", "waiting-approval", "idle"];
 const STARTING_MESSAGE = "The chief of staff is still starting. Try again in a moment.";
 const NO_ACTIVE_MESSAGE = "There is no active conversation. Start a new one.";
 const SAVE_FAILED_MESSAGE = "The change could not be saved. Check the disk and try again.";
+const SEED_INTRO = "Context from an earlier conversation with the owner (a digest, not the full record):";
 const NOT_FOUND_MESSAGE = "That conversation does not exist.";
+export const EXPIRED_MESSAGE = "The saved session for this conversation has expired. You can read it, or continue in a new conversation.";
+/** What the SDK says when asked to resume a session it no longer has (checked by hand against the real SDK). */
+const SESSION_GONE = /no conversation found/i;
 export const READONLY_MESSAGE = "This conversation can no longer be continued. Read it, or continue in a new conversation.";
 
 interface Meta {
@@ -40,6 +46,10 @@ export interface Chief {
   stop(): Promise<void>;
   /** Park the conversation and start a new one. The parked one stays on disk, with its session id. */
   reset(): Promise<void>;
+  /** Start a new conversation whose first prompt carries what an earlier one said. */
+  continueFrom(id: string): Promise<void>;
+  /** Stops the background sweep. */
+  dispose(): void;
   events(after: number, limit: number): Promise<AgentEventsResponse>;
   /** Every conversation, newest first. */
   conversations(): ConversationInfo[];
@@ -59,6 +69,8 @@ export interface ChiefDeps {
   env: Record<string, string | undefined>;
   notifyMs?: number;
   interruptWaitMs?: number;
+  /** Whether the SDK still has a session's transcript; the real one looks in `~/.claude/projects`. */
+  transcriptExists?: TranscriptProbe;
 }
 
 /**
@@ -72,6 +84,7 @@ export function createChief(deps: ChiefDeps): Chief {
   const sandboxDir = path.join(cfg.agentsDir, ".chief");
   const notifyMs = deps.notifyMs ?? NOTIFY_MS;
   const interruptWaitMs = deps.interruptWaitMs ?? INTERRUPT_WAIT_MS;
+  const transcriptExists = deps.transcriptExists ?? createTranscriptProbe();
   const meta: Meta = { state: "idle", turns: 0, costUsd: null, sessionId: null, error: null };
   // `meta` is the live state of the active conversation; `reg` holds every conversation, the active one included.
   let reg: Registry = { v: 1, active: "", convs: {} };
@@ -81,6 +94,7 @@ export function createChief(deps: ChiefDeps): Chief {
   let stopping = false;
   let gen = 0;
   let timer: NodeJS.Timeout | null = null;
+  let sweepTimer: NodeJS.Timeout | null = null;
   let writes: Promise<void> = Promise.resolve();
   let lock: Promise<unknown> = Promise.resolve();
   let ready = false;
@@ -196,6 +210,25 @@ export function createChief(deps: ChiefDeps): Chief {
     const e = peek();
     return e && isEmptyConv(e) ? e.id : null;
   }
+  /** Park the active conversation and open a new one, optionally seeded from another. The caller holds `serial`. */
+  async function startNew(seededFrom: string | null): Promise<void> {
+    const dropped = await park();
+    try {
+      const id = newConvId(Date.now());
+      reg.convs[id] = blankEntry(id, new Date().toISOString(), seededFrom);
+      try {
+        await activate(id, dropped);
+      } catch (err) {
+        delete reg.convs[id]; // never became active: no blank entry is left behind
+        throw err;
+      }
+      const from = seededFrom ? find(seededFrom)?.title : null;
+      await j().append({ kind: "state", state: "idle", detail: seededFrom ? `Continued from “${from ?? "an earlier conversation"}”` : "New conversation" });
+    } finally {
+      await settle(dropped);
+    }
+    notify();
+  }
   const discard = async (id: string | null): Promise<void> => {
     if (id) await fs.rm(convDir(dir, id), { recursive: true, force: true });
   };
@@ -213,17 +246,105 @@ export function createChief(deps: ChiefDeps): Chief {
     return { events: await jr.read(after, limit), lastSeq: jr.lastSeq(), conversationId };
   };
 
+  /**
+   * The SDK itself said the session is gone: the conversation is read-only for good and the dead session id is dropped.
+   */
+  const expire = (e: ConvEntry) => {
+    e.readOnly = "expired";
+    e.sessionId = null;
+    if (e.id === reg.active) meta.sessionId = null;
+  };
+  /**
+   * Only the probe (a look at the disk) says the transcript is missing: read-only, but the session id is kept and the
+   * probe is asked again later, so a wrong answer costs nothing permanent.
+   */
+  const suspect = (e: ConvEntry) => {
+    e.readOnly = "expired";
+  };
+  const transcriptGone = async (e: ConvEntry): Promise<boolean> => e.sessionId !== null && !(await transcriptExists(e.sessionId));
+  /** A conversation marked expired by the probe alone is released again once its transcript is found. */
+  const recheck = async (e: ConvEntry): Promise<void> => {
+    if (e.readOnly === "expired" && e.sessionId !== null && (await transcriptExists(e.sessionId))) e.readOnly = null;
+  };
+
+  /** A session that was asked to resume could not: say so in the log and leave the conversation read-only, not failed. */
+  async function lostSession(s: Session): Promise<void> {
+    gen++; // anything this session still yields belongs to no one
+    approvals.cancelAgent(CHIEF_ID);
+    const e = active();
+    // The SDK looks in its own project folder; if the transcript is still on disk the cause may be a moved folder, so keep the id.
+    if (await transcriptGone(e)) expire(e);
+    else suspect(e);
+    await j().append({ kind: "error", message: EXPIRED_MESSAGE });
+    await setState("idle");
+    try {
+      s.close();
+    } catch {
+      /* already closed */
+    }
+    if (session === s) session = null;
+  }
+
+  /**
+   * Archive conversations idle for too long and, when enabled, delete long-archived ones. Only the changed
+   * conversations are written to disk (their own entry files too), and a folder goes only after the registry no longer lists it.
+   */
+  async function sweep(): Promise<void> {
+    const now = Date.now();
+    const { archive, purge, stamp } = selectSweep(Object.values(reg.convs), reg.active, now, cfg.chiefArchiveDays, cfg.chiefPurgeDays);
+    if (archive.length === 0 && purge.length === 0 && stamp.length === 0) return;
+    const stampedAt = new Date(now).toISOString();
+    const before = new Map([...archive, ...stamp, ...purge].map((id) => [id, { ...reg.convs[id] }]));
+    for (const id of archive) Object.assign(reg.convs[id], { archived: true, archivedAt: stampedAt });
+    for (const id of stamp) reg.convs[id].archivedAt = stampedAt;
+    for (const id of purge) delete reg.convs[id];
+    try {
+      await save(false, ...archive, ...stamp);
+    } catch (err) {
+      // What the owner is told and what is on disk must agree: nothing was swept.
+      for (const [id, e] of before) reg.convs[id] = e;
+      throw err;
+    }
+    for (const id of purge) {
+      await discard(id).catch((err) => console.error(`chief conversations: could not delete ${id}:`, err instanceof Error ? err.message : err));
+    }
+    if (archive.length > 0 || purge.length > 0) console.log(`chief conversations: archived ${archive.length}, deleted ${purge.length}`);
+    notify();
+  }
+
+  /** The digest to put before the first prompt of a conversation that was started from another one. */
+  const seedText = async (): Promise<string> => {
+    const from = active().seededFrom;
+    if (!from || !find(from) || meta.turns > 0) return "";
+    const digest = buildDigest(await readJournalFile(journalPath(dir, from)));
+    return digest ? `${SEED_INTRO}\n${digest}\n\n` : "";
+  };
+
   async function startSession(prompt: string): Promise<void> {
     const resume = meta.sessionId ?? undefined;
+    const seed = resume ? "" : await seedText();
     const myGen = ++gen;
     const current = () => gen === myGen;
+    // A real session announces itself (its `init`) before anything else; a resume that never does could not be opened.
+    let opened = false;
+    // The SDK reports a missing session as a failed result and then throws. The result is held back until we know which it was.
+    let held: Parameters<Journal["append"]>[0] | null = null;
+    const flushHeld = async (): Promise<void> => {
+      const body = held;
+      held = null;
+      if (!body || !current()) return;
+      await j().append(body);
+      // It ends the turn like any other result.
+      touch({ turns: meta.turns + 1, costUsd: body.kind === "result" && body.costUsd !== null ? Math.max(meta.costUsd ?? 0, body.costUsd) : meta.costUsd });
+      if (!stopping) await setState("idle");
+    };
     // A tool call approved a moment before a stop or reset must not still act.
     const guard = (t: ToolDef): ToolDef => ({
       ...t,
       handler: async (a) => (stopping || !current() ? { text: "Cancelled: the chief of staff was stopped.", isError: true } : t.handler(a)),
     });
     const start: SessionStart = {
-      prompt: resume ? prompt : `${chiefPrompt(cfg.repoRoot)}\n\nThe owner says:\n${prompt}`,
+      prompt: resume ? prompt : `${chiefPrompt(cfg.repoRoot)}\n\n${seed}The owner says:\n${prompt}`,
       resume,
       claudeBin: cfg.claudeBin,
       options: chiefOptions(cfg, { cwd: sandboxDir, env: deps.env }),
@@ -257,7 +378,13 @@ export function createChief(deps: ChiefDeps): Chief {
         for await (const item of s.events) {
           if (!current()) continue;
           if ("sessionId" in item) {
+            opened = true;
+            await flushHeld();
             touch({ sessionId: item.sessionId });
+            continue;
+          }
+          if (resume && !opened && item.body.kind === "result" && !item.body.ok) {
+            held = item.body; // not a turn of this conversation; journalled only if it was not a lost session
             continue;
           }
           await j().append(item.body);
@@ -268,13 +395,19 @@ export function createChief(deps: ChiefDeps): Chief {
           } else notify(); // a streamed message changes nothing that is saved
         }
         if (!stopping && current()) {
+          await flushHeld();
           session = null;
           await setState("stopped");
         }
       } catch (err) {
         if (stopping || !current()) return;
+        if (resume && !opened && SESSION_GONE.test(err instanceof Error ? err.message : "")) {
+          await lostSession(s);
+          return;
+        }
         console.error("chief session failed:", err instanceof Error ? err.message : err);
         approvals.cancelAgent(CHIEF_ID);
+        await flushHeld();
         await j().append({ kind: "error", message: CHIEF_FAILED_MESSAGE });
         await setState("failed", CHIEF_FAILED_MESSAGE);
         try {
@@ -312,6 +445,8 @@ export function createChief(deps: ChiefDeps): Chief {
       const loaded = await loadRegistry(dir);
       if (loaded) await adoptEntries(dir, loaded.convs); // a rebuilt registry has adopted them already
       reg = loaded ?? (await rebuildRegistry(dir, new Date().toISOString()));
+      for (const c of Object.values(reg.convs)) await recheck(c);
+      if (peek() && (await transcriptGone(peek()!))) suspect(peek()!); // before choosing, so a lost one is not kept as the active conversation
       if (!peek() || peek()?.readOnly) {
         // The pointer to the active conversation was lost, or names one that cannot be continued: take the newest one that can still be continued.
         const live = pickContinuable(reg.convs);
@@ -326,6 +461,8 @@ export function createChief(deps: ChiefDeps): Chief {
       await activate(reg.active);
       await saveRegistry(dir, reg, Object.keys(reg.convs), memo);
       for (const c of leftovers) await discard(c.id);
+      await sweep().catch((err) => console.error("chief sweep failed:", err instanceof Error ? err.message : err));
+      sweepTimer ??= setInterval(() => void serial(sweep).catch((err) => console.error("chief sweep failed:", err instanceof Error ? err.message : err)), SWEEP_EVERY_MS).unref();
       ready = true;
     },
 
@@ -364,23 +501,13 @@ export function createChief(deps: ChiefDeps): Chief {
         await writes; // once stopped, what was counted is on disk
       }),
 
-    reset: () =>
+    reset: () => serial(() => startNew(null)),
+
+    continueFrom: (id) =>
       serial(async () => {
-        const dropped = await park();
-        try {
-          const id = newConvId(Date.now());
-          reg.convs[id] = blankEntry(id, new Date().toISOString());
-          try {
-            await activate(id, dropped);
-          } catch (err) {
-            delete reg.convs[id]; // never became active: no blank entry is left behind
-            throw err;
-          }
-          await j().append({ kind: "state", state: "idle", detail: "New conversation" });
-        } finally {
-          await settle(dropped);
-        }
-        notify();
+        if (!find(id)) throw new AgentError("not-found", NOT_FOUND_MESSAGE);
+        if (!buildDigest(await readJournalFile(journalPath(dir, id)))) throw new AgentError("invalid", "That conversation has nothing to continue from.");
+        await startNew(id);
       }),
 
     conversations() {
@@ -399,11 +526,19 @@ export function createChief(deps: ChiefDeps): Chief {
         const target = find(id);
         if (!target) throw new AgentError("not-found", NOT_FOUND_MESSAGE);
         if (id === reg.active) return;
+        await recheck(target);
         if (target.readOnly) throw new AgentError("state", READONLY_MESSAGE);
+        if (await transcriptGone(target)) {
+          suspect(target);
+          await save(false, id); // remembered, so it is not probed again
+          notify();
+          throw new AgentError("state", EXPIRED_MESSAGE);
+        }
         const dropped = await park();
         try {
           await activate(id, dropped);
-          target.archived = false; // continuing an archived conversation brings it back; only once it is really active
+          target.archived = false;
+          target.archivedAt = null; // continuing an archived conversation brings it back; only once it is really active
         } finally {
           await settle(dropped);
         }
@@ -419,14 +554,19 @@ export function createChief(deps: ChiefDeps): Chief {
           throw new AgentError("invalid", `The title must be 1 to ${TITLE_EDIT_MAX} characters.`);
         }
         if (change.archived === true && id === reg.active) throw new AgentError("state", "Start a new conversation before archiving this one.");
-        const before = { title: target.title, titleManual: target.titleManual, archived: target.archived };
+        const before = { title: target.title, titleManual: target.titleManual, archived: target.archived, archivedAt: target.archivedAt, updatedAt: target.updatedAt };
         if (title !== undefined) {
           target.title = title;
           target.titleManual = true;
         }
-        if (change.archived !== undefined) target.archived = change.archived;
+        if (change.archived !== undefined && change.archived !== target.archived) {
+          target.archived = change.archived;
+          target.archivedAt = change.archived ? new Date().toISOString() : null;
+          // Restoring is a decision to keep it: without this the next sweep would archive it again for its old last message.
+          if (!change.archived) target.updatedAt = new Date().toISOString();
+        }
         try {
-          // Housekeeping, not activity: it must not reorder the list by bumping `updatedAt`.
+          // Renaming and archiving are housekeeping: they must not reorder the list by bumping `updatedAt`.
           await save(false, id);
         } catch (err) {
           Object.assign(target, before); // what the owner is told matches what is on disk
@@ -446,6 +586,11 @@ export function createChief(deps: ChiefDeps): Chief {
       if (parked?.id !== id || parked.key !== key) parked = { id, key, all: await readJournalFile(file) };
       const all = parked.all;
       return { events: eventsAfter(all, after, limit), lastSeq: all.length > 0 ? all[all.length - 1].seq : 0, conversationId: id };
+    },
+
+    dispose() {
+      if (sweepTimer) clearInterval(sweepTimer);
+      sweepTimer = null;
     },
 
     events: activeEvents,

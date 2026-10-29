@@ -26,6 +26,8 @@ export interface ConvEntry {
   /** The SDK session to resume; null once it is known to be gone. */
   sessionId: string | null;
   archived: boolean;
+  /** When it was archived, so the purge limit counts from then and not from the last message; null if unknown. */
+  archivedAt: string | null;
   readOnly: ConversationReadOnly | null;
   seededFrom: string | null;
 }
@@ -48,7 +50,7 @@ export const newConvId = (nowMs: number, rand: () => number = Math.random): stri
   `c-${nowMs.toString(36)}${Math.floor(rand() * RAND_RANGE).toString(36).padStart(RAND_DIGITS, "0")}`;
 
 export const blankEntry = (id: string, at: string, seededFrom: string | null = null): ConvEntry => ({
-  id, title: null, titleManual: false, createdAt: at, updatedAt: at, turns: 0, costUsd: null, sessionId: null, archived: false, readOnly: null, seededFrom,
+  id, title: null, titleManual: false, createdAt: at, updatedAt: at, turns: 0, costUsd: null, sessionId: null, archived: false, archivedAt: null, readOnly: null, seededFrom,
 });
 
 export const convDir = (dir: string, id: string): string => path.join(dir, "conv", id);
@@ -101,7 +103,7 @@ const toEntry = (id: string, v: unknown): ConvEntry | null => {
   const readOnly = e.readOnly == null ? null : READ_ONLY_VALUES.includes(e.readOnly as ConversationReadOnly) ? (e.readOnly as ConversationReadOnly) : "legacy";
   return {
     id, title: text(e.title), titleManual: e.titleManual === true, createdAt: e.createdAt, updatedAt: e.updatedAt, turns: count(e.turns) ?? 0,
-    costUsd: count(e.costUsd), sessionId: text(e.sessionId), archived: e.archived === true, readOnly, seededFrom: text(e.seededFrom),
+    costUsd: count(e.costUsd), sessionId: text(e.sessionId), archived: e.archived === true, archivedAt: e.archived === true ? text(e.archivedAt) : null, readOnly, seededFrom: text(e.seededFrom),
   };
 };
 
@@ -291,4 +293,58 @@ export async function rebuildRegistry(dir: string, nowIso: string): Promise<Regi
   await saveRegistry(dir, reg, Object.keys(convs));
   await fs.rename(oldMeta, `${oldMeta}.migrated`).catch(() => undefined);
   return reg;
+}
+
+export const DIGEST_MAX_CHARS = 8000;
+
+/**
+ * What an earlier conversation said, as plain text for the first prompt of a new one: the owner's messages and
+ * the chief's replies only (never tool output), newest kept when it is too long.
+ */
+export function buildDigest(events: AgentEvent[], maxChars: number = DIGEST_MAX_CHARS): string {
+  const lines: string[] = [];
+  for (const e of events) {
+    if (e.kind === "user") lines.push(`Owner: ${e.text}`);
+    else if (e.kind === "text") lines.push(`Chief: ${e.text}`);
+  }
+  let out = "";
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const next = out ? `${lines[i]}\n${out}` : lines[i];
+    if (next.length > maxChars) {
+      if (!out) out = lines[i].slice(-maxChars);
+      break;
+    }
+    out = next;
+  }
+  return out;
+}
+
+const DAY_MS = 86_400_000;
+
+/**
+ * What the daily sweep does: archive conversations idle past `archiveDays`; delete archived ones past `purgeDays`
+ * counted from when they were archived (`stamp` lists archived ones whose date is not known yet: they get today's, so
+ * a conversation archived by hand long after its last message is not deleted at once). 0 turns a step off; the active
+ * conversation is never touched.
+ */
+export function selectSweep(convs: ConvEntry[], activeId: string, nowMs: number, archiveDays: number, purgeDays: number): { archive: string[]; purge: string[]; stamp: string[] } {
+  const archive: string[] = [];
+  const purge: string[] = [];
+  const stamp: string[] = [];
+  // A conversation that another, still unsent one was seeded from is its only copy of that context.
+  const seedSources = new Set(convs.filter((c) => c.seededFrom && c.turns === 0).map((c) => c.seededFrom));
+  const age = (iso: string | null, nowMs: number): number => (iso === null ? NaN : nowMs - Date.parse(iso));
+  for (const c of convs) {
+    if (c.id === activeId) continue;
+    if (!c.archived) {
+      // An unreadable date counts as old: archiving is undone with one click, and the entry is never swept otherwise.
+      const idle = age(c.updatedAt, nowMs);
+      if (archiveDays > 0 && (Number.isNaN(idle) || idle > archiveDays * DAY_MS)) archive.push(c.id);
+    } else if (purgeDays > 0) {
+      const archivedFor = age(c.archivedAt, nowMs);
+      if (Number.isNaN(archivedFor)) stamp.push(c.id); // no usable date: start the clock now
+      else if (archivedFor > purgeDays * DAY_MS && !seedSources.has(c.id)) purge.push(c.id);
+    }
+  }
+  return { archive, purge, stamp };
 }
