@@ -30,6 +30,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import re
 from collections.abc import Callable
 from pathlib import Path
 
@@ -60,6 +61,19 @@ from src.training.wandb_identity import override_hook_from_cfg
 from src.utils.config import load_config
 
 SPLIT_DIR = Path("checkpoints") / "asymmetric_splits"
+RUN_SUFFIX_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
+
+
+def check_head_checkpoint(path: str | Path) -> None:
+    """Fail before any setup (and before --override-training deletes a run) on a bad head file."""
+    from src.models.ssl import HEAD_KEYS
+
+    if not Path(path).exists():
+        raise SystemExit(f"--head-checkpoint not found: {path}")
+    sd = torch.load(path, map_location="cpu", weights_only=True, mmap=True)
+    keys = {k for k in sd.get("model_state_dict", {}) if k.startswith("head.")}
+    if keys != HEAD_KEYS:
+        raise SystemExit(f"{path}: head keys {sorted(keys)} != {sorted(HEAD_KEYS)}")
 
 
 def build_finetune_model_builder(
@@ -234,19 +248,36 @@ def main() -> None:
     )
     args = p.parse_args()
     if args.random_init:
+        if args.pretrain_checkpoint is not None:
+            print(
+                "[random-init] ignoring --pretrain-checkpoint: the encoder keeps its random init"
+            )
+        if not args.linear_probe:
+            print(
+                "[random-init] WARNING: without --linear-probe this is a full fine-tune from scratch"
+            )
         args.pretrain_checkpoint = None
     elif not args.inference_only and args.pretrain_checkpoint is None:
         p.error(
             "--pretrain-checkpoint is required unless --inference-only or --random-init"
         )
-    if args.random_init and not args.run_suffix:
-        p.error("--random-init needs --run-suffix so it cannot collide with a real run")
+    if args.run_suffix is not None and not RUN_SUFFIX_RE.fullmatch(
+        args.run_suffix.lstrip("-")
+    ):
+        p.error(f"--run-suffix {args.run_suffix!r} must match {RUN_SUFFIX_RE.pattern}")
+    if (args.random_init or args.head_checkpoint) and not args.run_suffix:
+        p.error(
+            "--random-init / --head-checkpoint need --run-suffix so the run cannot "
+            "collide with (or override) a real v2 run"
+        )
+    if args.head_checkpoint and not args.inference_only:
+        check_head_checkpoint(args.head_checkpoint)
 
     cfg = load_config(args.config)
     if args.run_suffix is not None:
         # argparse reads a value starting with "-" as a flag, so accept "lpft" and add the dash.
         suffix = args.run_suffix.lstrip("-")
-        cfg.setdefault("wandb", {})["run_suffix"] = f"-{suffix}" if suffix else ""
+        cfg.setdefault("wandb", {})["run_suffix"] = f"-{suffix}"
 
     validate_run_name_prefix(
         args.run_name_prefix,
@@ -272,9 +303,12 @@ def main() -> None:
     )
     if not args.inference_only:
         # _train_fold passes cfg to wandb.init(config=...), so these land in the run config.
-        cfg["pretrain_checkpoint"] = str(args.pretrain_checkpoint)
+        cfg["pretrain_checkpoint"] = (
+            None if args.pretrain_checkpoint is None else str(args.pretrain_checkpoint)
+        )
         cfg["pretrain_epoch"] = pretrain_epoch
         cfg["head_checkpoint"] = args.head_checkpoint
+        cfg["random_init"] = args.random_init
 
     cache_cfg = cfg.setdefault("cache", {})
     if args.cache_root is not None:
@@ -339,7 +373,11 @@ def main() -> None:
                 {}
                 if args.inference_only
                 else {
-                    "pretrain_checkpoint": str(args.pretrain_checkpoint),
+                    "pretrain_checkpoint": (
+                        None
+                        if args.pretrain_checkpoint is None
+                        else str(args.pretrain_checkpoint)
+                    ),
                     "pretrain_epoch": pretrain_epoch,
                     "head_checkpoint": args.head_checkpoint,
                     "random_init": args.random_init,

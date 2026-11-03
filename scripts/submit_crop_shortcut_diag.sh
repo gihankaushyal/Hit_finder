@@ -40,6 +40,7 @@ mkdir -p logs "${OUT_DIR}"
 
 # FOLDS env var overrides the default (fold 4 = largest fine-tune gap, fold 1 = hardest detector).
 FOLDS="${FOLDS:-4 1}"
+N_OK=0; N_SKIP=0
 
 for FOLD in ${FOLDS}; do
     for ARM in finetune probe resnet; do
@@ -54,6 +55,7 @@ for FOLD in ${FOLDS}; do
         fi
         if [ ! -f "${CKPT}" ]; then
             echo "[skip] fold ${FOLD} ${ARM}: no checkpoint at ${CKPT}"
+            N_SKIP=$((N_SKIP + 1))
             continue
         fi
         echo "=============== fold ${FOLD} / ${ARM} ==============="
@@ -65,7 +67,12 @@ for FOLD in ${FOLDS}; do
             --split cross_detector_eval \
             --max-frames "${MAX_FRAMES}" \
             --out "${OUT_DIR}/fold${FOLD}_${ARM}_${RUN_VERSION}_cross.json"
+        N_OK=$((N_OK + 1))
     done
 done
 
-echo "[done] results in ${OUT_DIR}/"
+echo "[done] ran=${N_OK} skipped=${N_SKIP}; results in ${OUT_DIR}/"
+# A job that skipped every arm must not show up as COMPLETED.
+if [ "${N_OK}" -eq 0 ]; then
+    exit 1
+fi

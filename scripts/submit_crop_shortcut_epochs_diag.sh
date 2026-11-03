@@ -32,6 +32,7 @@ OUT_DIR="docs/figures/crop_shortcut"
 module load mamba/latest
 source activate sfx-hitfinder
 mkdir -p logs "${OUT_DIR}"
+N_OK=0; N_SKIP=0; N_FAIL=0
 
 for FOLD in ${FOLDS}; do
     RUN_DIR="checkpoints/vits16-mae-finetune-${RUN_VERSION}-fold${FOLD}-seed42-${SUFFIX}"
@@ -39,19 +40,29 @@ for FOLD in ${FOLDS}; do
         CKPT="${RUN_DIR}/epoch${EP}.pt"
         if [ ! -f "${CKPT}" ]; then
             echo "[skip] fold ${FOLD} epoch ${EP}: no checkpoint at ${CKPT}"
+            N_SKIP=$((N_SKIP + 1))
             continue
         fi
         echo "=============== fold ${FOLD} / ${SUFFIX} / epoch ${EP} ==============="
-        python -u scripts/diagnose_crop_shortcut.py \
+        # One failing arm must not abort the rest, but it is counted and fails the job at the end.
+        if python -u scripts/diagnose_crop_shortcut.py \
             --arch vit \
             --config configs/ssl/mae_finetune.yaml \
             --checkpoint "${CKPT}" \
             --fold "${FOLD}" \
             --split cross_detector_eval \
             --max-frames "${MAX_FRAMES}" \
-            --out "${OUT_DIR}/fold${FOLD}_finetune-${SUFFIX}_epoch${EP}_${RUN_VERSION}_cross.json" \
-            || echo "[FAILED] fold ${FOLD} epoch ${EP}"
+            --out "${OUT_DIR}/fold${FOLD}_finetune-${SUFFIX}_epoch${EP}_${RUN_VERSION}_cross.json"; then
+            N_OK=$((N_OK + 1))
+        else
+            echo "[FAILED] fold ${FOLD} epoch ${EP}"
+            N_FAIL=$((N_FAIL + 1))
+        fi
     done
 done
 
-echo "[done] results in ${OUT_DIR}/"
+echo "[done] ran=${N_OK} skipped=${N_SKIP} failed=${N_FAIL}; results in ${OUT_DIR}/"
+# A job that did nothing, or lost an arm, must not show up as COMPLETED.
+if [ "${N_OK}" -eq 0 ] || [ "${N_FAIL}" -gt 0 ]; then
+    exit 1
+fi

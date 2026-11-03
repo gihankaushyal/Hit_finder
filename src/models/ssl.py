@@ -7,6 +7,8 @@ and "peak_aware" (hitfinder-centroid-biased).
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import torch
 import torch.nn as nn
@@ -310,6 +312,9 @@ HEAD_INIT_DEFAULT = "default"  # nn.Linear's own init (the v2 runs)
 HEAD_INIT_TRUNC_NORMAL = "trunc_normal"  # MAE fine-tune convention
 HEAD_INITS = (HEAD_INIT_DEFAULT, HEAD_INIT_TRUNC_NORMAL)
 HEAD_INIT_STD = 2e-5  # MAE reference fine-tune head init
+HEAD_KEYS = frozenset(
+    {"head.weight", "head.bias"}
+)  # state-dict keys of the linear head
 
 
 class ViTClassifier(nn.Module):
@@ -374,9 +379,9 @@ _ENCODER_PREFIXES = ("patch_embed.", "cls_token", "pos_embed", "blocks.", "norm.
 
 def build_ssl_classifier(
     cfg: dict,
-    mae_checkpoint=None,
+    mae_checkpoint: "str | Path | None" = None,
     freeze_encoder: bool = False,
-    head_checkpoint=None,
+    head_checkpoint: "str | Path | None" = None,
 ) -> ViTClassifier:
     """ViT-S classifier, optionally initialised from an MAE pretrain checkpoint.
 
@@ -414,8 +419,10 @@ def build_ssl_classifier(
             "model_state_dict"
         ]
         head_sd = {k: v for k, v in head_sd.items() if k.startswith("head.")}
-        if not head_sd:
-            raise RuntimeError(f"{head_path} has no head.* weights")
+        if set(head_sd) != HEAD_KEYS:
+            raise RuntimeError(
+                f"{head_path} head keys {sorted(head_sd)} != {sorted(HEAD_KEYS)}"
+            )
         _, unexpected = clf.load_state_dict(head_sd, strict=False)
         if unexpected:
             raise RuntimeError(f"Unexpected keys loading head: {unexpected}")

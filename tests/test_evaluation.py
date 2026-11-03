@@ -503,3 +503,16 @@ class TestBreakdownMetrics:
         assert _tie_aware_auc(y, s) == pytest.approx(0.75)
         # AP: threshold 1.0 -> P=1,R=0.5; threshold 0.0 -> P=0.5,R=1 => 0.5*1 + 0.5*0.5
         assert _tie_aware_ap(y, s) == pytest.approx(0.75)
+
+
+def test_tie_aware_auc_matches_pairwise_count_on_heavily_tied_scores():
+    from src.evaluation.benchmark import _tie_aware_auc
+
+    rng = np.random.default_rng(0)
+    y = (rng.random(400) < 0.3).astype(float)
+    s = rng.integers(0, 6, 400) / 5.0  # vote-like: few distinct values
+    pos, neg = s[y == 1], s[y == 0]
+    brute = (
+        (pos[:, None] > neg[None, :]).sum() + 0.5 * (pos[:, None] == neg[None, :]).sum()
+    ) / (len(pos) * len(neg))
+    assert _tie_aware_auc(y, s) == pytest.approx(brute)

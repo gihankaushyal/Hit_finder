@@ -229,7 +229,6 @@ def run_patch_agg(
         frame_cache: Optional FrameCache. On a hit, the read/assembly/GCN prefix
             is skipped and the cached GCN'd frame is tiled directly. A miss
             falls back to the live path, so a partially built cache is safe.
-
         return_breakdown: Also return diagnostics for why the frame score moves
             (see `_breakdown_metrics`). Off by default so callers and results.json
             are unchanged.
@@ -423,10 +422,16 @@ def _tie_aware_ap(y_true: np.ndarray, y_score: np.ndarray) -> float:
 
 def _tie_aware_auc(y_true: np.ndarray, y_score: np.ndarray) -> float:
     """ROC AUC where tied pos/neg pairs count 0.5 (Mann-Whitney)."""
-    pos, neg = y_score[y_true == 1], y_score[y_true == 0]
-    greater = (pos[:, None] > neg[None, :]).sum()
-    ties = (pos[:, None] == neg[None, :]).sum()
-    return float((greater + 0.5 * ties) / (len(pos) * len(neg)))
+    n_pos = int((y_true == 1).sum())
+    n_neg = len(y_true) - n_pos
+    # Midranks (tied scores share their average rank) give the Mann-Whitney U in
+    # O(n log n) memory-flat time, equal to counting tied pairs as 0.5.
+    _, inverse, counts = np.unique(y_score, return_inverse=True, return_counts=True)
+    ends = np.cumsum(counts)
+    midrank = (ends - counts + 1 + ends) / 2.0
+    ranks = midrank[inverse]
+    u = ranks[y_true == 1].sum() - n_pos * (n_pos + 1) / 2.0
+    return float(u / (n_pos * n_neg))
 
 
 def _breakdown_metrics(

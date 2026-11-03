@@ -32,6 +32,7 @@ module load mamba/latest
 # with no conda env active.
 source activate sfx-hitfinder
 mkdir -p logs "${OUT_DIR}"
+N_OK=0; N_SKIP=0; N_FAIL=0
 
 for ARM in finetune probe resnet; do
     if [ "${ARM}" = "resnet" ]; then
@@ -45,19 +46,28 @@ for ARM in finetune probe resnet; do
     fi
     if [ ! -f "${CKPT}" ]; then
         echo "[skip] fold ${FOLD} ${ARM}: no checkpoint at ${CKPT}"
+        N_SKIP=$((N_SKIP + 1))
         continue
     fi
     echo "=============== trial: fold ${FOLD} / ${ARM} (${MAX_FRAMES} frames) ==============="
-    # No `set -e` abort on one arm failing: report it and carry on to the next arm.
-    python -u scripts/diagnose_crop_shortcut.py \
+    # One failing arm must not abort the rest, but it is counted and fails the job at the end.
+    if python -u scripts/diagnose_crop_shortcut.py \
         --arch "${ARCH}" \
         --config "${CONFIG}" \
         --checkpoint "${CKPT}" \
         --fold "${FOLD}" \
         --split cross_detector_eval \
         --max-frames "${MAX_FRAMES}" \
-        --out "${OUT_DIR}/trial_fold${FOLD}_${ARM}_${RUN_VERSION}.json" \
-        || echo "[FAILED] fold ${FOLD} ${ARM}"
+        --out "${OUT_DIR}/trial_fold${FOLD}_${ARM}_${RUN_VERSION}.json"; then
+        N_OK=$((N_OK + 1))
+    else
+        echo "[FAILED] fold ${FOLD} ${ARM}"
+        N_FAIL=$((N_FAIL + 1))
+    fi
 done
 
-echo "[done] trial outputs in ${OUT_DIR}/trial_fold${FOLD}_*"
+echo "[done] ran=${N_OK} skipped=${N_SKIP} failed=${N_FAIL}; trial outputs in ${OUT_DIR}/trial_fold${FOLD}_*"
+# A job that did nothing, or lost an arm, must not show up as COMPLETED.
+if [ "${N_OK}" -eq 0 ] || [ "${N_FAIL}" -gt 0 ]; then
+    exit 1
+fi

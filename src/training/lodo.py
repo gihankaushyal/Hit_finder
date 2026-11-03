@@ -188,6 +188,19 @@ def _train_fold(
     # saved as epoch<N>.pt at the listed epochs, independent of best.pt.
     log_val_breakdown = cfg["training"].get("log_val_breakdown", False)
     save_epochs = set(cfg["training"].get("save_epochs", []))
+    _tr, _ssl = cfg["training"], cfg.get("ssl", {})
+    print(
+        "  recipe: "
+        f"lr={_tr.get('learning_rate')} wd={_tr.get('weight_decay')} epochs={epochs} "
+        f"patience={patience} warmup_epochs={_tr.get('warmup_epochs', 0)} "
+        f"lr_schedule={_tr.get('lr_schedule', 'constant')} "
+        f"layer_decay={_tr.get('layer_decay', 1.0)} "
+        f"drop_path_rate={_ssl.get('drop_path_rate', 0.0)} "
+        f"head_init={_ssl.get('head_init', 'default')} "
+        f"log_val_breakdown={log_val_breakdown} save_epochs={sorted(save_epochs)}"
+    )
+    if any(e > epochs for e in save_epochs):
+        print(f"  Warning: save_epochs {sorted(save_epochs)} exceeds epochs={epochs}")
 
     prefix = run_name_prefix or f"{backbone}-asymmetric"
     run_suffix = cfg.get("wandb", {}).get("run_suffix", "")
@@ -378,6 +391,7 @@ def _train_fold(
                         f"val/{k}": v
                         for k, v in val_m.items()
                         if k not in ("ap", "auc_roc", "f1", "threshold")
+                        and not np.isnan(v)  # an empty class is not a measurement
                     },
                 },
                 step=epoch,

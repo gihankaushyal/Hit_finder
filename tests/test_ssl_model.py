@@ -368,3 +368,43 @@ class TestFineTuneRecipe:
         opt = build_optimizer(m, cfg)
         apply_lr_schedule(opt, 7, 100, cfg)
         assert opt.param_groups[0]["lr"] == 1e-4
+
+
+class TestFineTuneCliGuards:
+    """--head-checkpoint / --random-init must not be able to collide with a real v2 run."""
+
+    @staticmethod
+    def _run(monkeypatch, *extra):
+        import sys
+
+        from src.training import train_ssl_finetune
+
+        argv = [
+            "x", "--config", "configs/ssl/mae_finetune.yaml", "--fold", "4",
+            "--run-name-prefix", "vits16-mae-v2", *extra,
+        ]  # fmt: skip
+        monkeypatch.setattr(sys, "argv", argv)
+        with pytest.raises(SystemExit) as e:
+            train_ssl_finetune.main()
+        return e.value.code
+
+    def test_head_checkpoint_requires_run_suffix(self, monkeypatch, tmp_path):
+        assert self._run(monkeypatch, "--head-checkpoint", str(tmp_path / "p.pt"),
+                         "--pretrain-checkpoint", "x.pt") == 2  # fmt: skip
+
+    def test_empty_or_bad_run_suffix_rejected(self, monkeypatch):
+        for bad in ("-", "a/b", "has space"):
+            assert self._run(monkeypatch, "--pretrain-checkpoint", "x.pt",
+                             "--run-suffix", bad) == 2  # fmt: skip
+
+    def test_partial_head_checkpoint_is_rejected(self, tmp_path):
+        from src.models.ssl import build_ssl_classifier
+
+        cfg = {"ssl": {"embed_dim": 64, "depth": 2, "num_heads": 4}}
+        full = build_ssl_classifier(cfg).state_dict()
+        torch.save(
+            {"model_state_dict": {"head.weight": full["head.weight"]}},
+            tmp_path / "h.pt",
+        )
+        with pytest.raises(RuntimeError, match="head keys"):
+            build_ssl_classifier(cfg, head_checkpoint=tmp_path / "h.pt")
