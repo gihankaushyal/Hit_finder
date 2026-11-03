@@ -472,3 +472,34 @@ def test_run_on_loader_empty_returns_nan():
     assert set(result.keys()) == {"ap", "auc_roc", "f1", "threshold"}
     for key in ("ap", "auc_roc", "f1", "threshold"):
         assert np.isnan(result[key]), f"Expected NaN for '{key}', got {result[key]}"
+
+
+class TestBreakdownMetrics:
+    def test_counts_and_tie_gap(self):
+        from src.evaluation.benchmark import _breakdown_metrics
+
+        y = np.array([1, 1, 1, 0, 0, 0])
+        vote = np.array([0.5, 0.0, 0.0, 0.0, 0.0, 0.25])
+        mx = np.array([0.9, 0.4, 0.3, 0.1, 0.05, 0.6])
+        m = _breakdown_metrics(y, vote, mx)
+        assert m["pos_zero_vote_frac"] == pytest.approx(2 / 3)
+        assert m["neg_any_vote_frac"] == pytest.approx(1 / 3)
+        assert m["pos_vote_mean"] == pytest.approx(0.5 / 3)
+        assert m["neg_max_mean"] == pytest.approx((0.1 + 0.05 + 0.6) / 3)
+        assert 0.0 <= m["ap_vote_tieaware"] <= 1.0 and 0.0 <= m["ap_max"] <= 1.0
+
+    def test_single_class_gives_nan_not_error(self):
+        from src.evaluation.benchmark import _breakdown_metrics
+
+        m = _breakdown_metrics(np.zeros(3), np.zeros(3), np.zeros(3))
+        assert np.isnan(m["ap_vote_tieaware"]) and np.isnan(m["pos_zero_vote_frac"])
+
+    def test_tie_aware_metrics_hand_values(self):
+        from src.evaluation.benchmark import _tie_aware_ap, _tie_aware_auc
+
+        y = np.array([1, 0, 1, 0])
+        s = np.array([1.0, 0.0, 0.0, 0.0])  # one positive tied with both negatives
+        # AUC: pos1 beats both negs (2) + pos2 ties both (2*0.5) = 3 of 4 pairs
+        assert _tie_aware_auc(y, s) == pytest.approx(0.75)
+        # AP: threshold 1.0 -> P=1,R=0.5; threshold 0.0 -> P=0.5,R=1 => 0.5*1 + 0.5*0.5
+        assert _tie_aware_ap(y, s) == pytest.approx(0.75)

@@ -306,6 +306,12 @@ def build_mae_model(cfg: dict) -> MAEViT:
     )
 
 
+HEAD_INIT_DEFAULT = "default"  # nn.Linear's own init (the v2 runs)
+HEAD_INIT_TRUNC_NORMAL = "trunc_normal"  # MAE fine-tune convention
+HEAD_INITS = (HEAD_INIT_DEFAULT, HEAD_INIT_TRUNC_NORMAL)
+HEAD_INIT_STD = 2e-5  # MAE reference fine-tune head init
+
+
 class ViTClassifier(nn.Module):
     """MAE encoder + mean-pool classification head (MAE fine-tune convention)."""
 
@@ -319,22 +325,33 @@ class ViTClassifier(nn.Module):
         num_heads: int = VIT_SMALL["num_heads"],
         mlp_ratio: float = 4.0,
         num_classes: int = 2,
+        drop_path_rate: float = 0.0,
+        head_init: str = HEAD_INIT_DEFAULT,
     ) -> None:
         super().__init__()
+        if head_init not in HEAD_INITS:
+            raise ValueError(
+                f"head_init must be one of {HEAD_INITS}, got {head_init!r}"
+            )
         self.patch_embed = PatchEmbed(img_size, patch_size, in_chans, embed_dim)
         num_patches = self.patch_embed.num_patches
         self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
         self.pos_embed = nn.Parameter(
             torch.zeros(1, num_patches + 1, embed_dim), requires_grad=False
         )
+        # Stochastic depth grows linearly with block index (DeiT/MAE convention).
+        dpr = torch.linspace(0, drop_path_rate, depth).tolist()
         self.blocks = nn.ModuleList(
             [
-                Block(embed_dim, num_heads, mlp_ratio, qkv_bias=True)
-                for _ in range(depth)
+                Block(embed_dim, num_heads, mlp_ratio, qkv_bias=True, drop_path=dpr[i])
+                for i in range(depth)
             ]
         )
         self.norm = nn.LayerNorm(embed_dim)
         self.head = nn.Linear(embed_dim, num_classes)
+        if head_init == HEAD_INIT_TRUNC_NORMAL:
+            nn.init.trunc_normal_(self.head.weight, std=HEAD_INIT_STD)
+            nn.init.zeros_(self.head.bias)
         grid = int(num_patches**0.5)
         pe = get_2d_sincos_pos_embed(embed_dim, grid, cls_token=True)
         self.pos_embed.data.copy_(torch.from_numpy(pe).float().unsqueeze(0))
@@ -359,8 +376,13 @@ def build_ssl_classifier(
     cfg: dict,
     mae_checkpoint=None,
     freeze_encoder: bool = False,
+    head_checkpoint=None,
 ) -> ViTClassifier:
-    """ViT-S classifier, optionally initialised from an MAE pretrain checkpoint."""
+    """ViT-S classifier, optionally initialised from an MAE pretrain checkpoint.
+
+    `head_checkpoint`: a finished classifier checkpoint (e.g. a linear-probe best.pt);
+    only its `head.*` weights are copied in (LP-FT: probe the head, then fine-tune).
+    """
     from pathlib import Path as _Path
 
     ssl_cfg = cfg.get("ssl", {})
@@ -369,6 +391,8 @@ def build_ssl_classifier(
         depth=ssl_cfg.get("depth", VIT_SMALL["depth"]),
         num_heads=ssl_cfg.get("num_heads", VIT_SMALL["num_heads"]),
         num_classes=cfg.get("model", {}).get("num_classes", 2),
+        drop_path_rate=ssl_cfg.get("drop_path_rate", 0.0),
+        head_init=ssl_cfg.get("head_init", HEAD_INIT_DEFAULT),
     )
     if mae_checkpoint is not None:
         ckpt_path = _Path(mae_checkpoint)
@@ -382,6 +406,19 @@ def build_ssl_classifier(
             raise RuntimeError(f"MAE checkpoint missing encoder weights: {missing}")
         if unexpected:
             raise RuntimeError(f"Unexpected keys loading MAE encoder: {unexpected}")
+    if head_checkpoint is not None:
+        head_path = _Path(head_checkpoint)
+        if not head_path.exists():
+            raise FileNotFoundError(f"Head checkpoint not found: {head_path}")
+        head_sd = torch.load(head_path, map_location="cpu", weights_only=True)[
+            "model_state_dict"
+        ]
+        head_sd = {k: v for k, v in head_sd.items() if k.startswith("head.")}
+        if not head_sd:
+            raise RuntimeError(f"{head_path} has no head.* weights")
+        _, unexpected = clf.load_state_dict(head_sd, strict=False)
+        if unexpected:
+            raise RuntimeError(f"Unexpected keys loading head: {unexpected}")
     if freeze_encoder:
         for name, p in clf.named_parameters():
             if not name.startswith("head."):

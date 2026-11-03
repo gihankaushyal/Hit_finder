@@ -18,6 +18,10 @@ Usage:
         --fold 1 --run-name-prefix vits16-mae-v2 \
         --pretrain-checkpoint checkpoints/mae-vits16-v2-fold1-seed42/last.pt
     # add --linear-probe to freeze the encoder
+    # recipe experiments (tag the run with --run-suffix <name>; recipe knobs live in the config):
+    #   --config configs/ssl/mae_finetune_careful.yaml --run-suffix careful
+    #   --head-checkpoint checkpoints/vits16-mae-probe-v2-fold4-seed42/best.pt --run-suffix lpft
+    #   --linear-probe --random-init --run-suffix randinit
     # re-evaluate a finished run (no --pretrain-checkpoint needed):
     python -m src.training.train_ssl_finetune --config configs/ssl/mae_finetune.yaml \
         --fold 1 --run-name-prefix vits16-mae-v2 --inference-only
@@ -62,6 +66,7 @@ def build_finetune_model_builder(
     cfg: dict,
     pretrain_checkpoint: str | Path | None,
     linear_probe: bool = False,
+    head_checkpoint: str | Path | None = None,
 ) -> Callable[[], nn.Module]:
     """Return a zero-argument callable that builds a ViTClassifier from the MAE checkpoint.
 
@@ -71,7 +76,10 @@ def build_finetune_model_builder(
 
     def _builder() -> nn.Module:
         return build_ssl_classifier(
-            cfg, mae_checkpoint=pretrain_checkpoint, freeze_encoder=linear_probe
+            cfg,
+            mae_checkpoint=pretrain_checkpoint,
+            freeze_encoder=linear_probe,
+            head_checkpoint=head_checkpoint,
         )
 
     return _builder
@@ -152,6 +160,25 @@ def main() -> None:
         ),
     )
     p.add_argument("--linear-probe", action="store_true")
+    p.add_argument(
+        "--head-checkpoint",
+        default=None,
+        help="Copy head.* weights from this classifier checkpoint (e.g. a probe best.pt) "
+        "before training: LP-FT. Name the run with --run-suffix.",
+    )
+    p.add_argument(
+        "--random-init",
+        action="store_true",
+        help="Skip loading MAE weights: the encoder keeps its random init (control for "
+        "'does pretraining help?'; use with --linear-probe and --run-suffix).",
+    )
+    p.add_argument(
+        "--run-suffix",
+        default=None,
+        help="Appended to the run name as '-<suffix>' (e.g. lpft -> ...-seed42-lpft), "
+        "overriding wandb.run_suffix. "
+        "Keeps the vN prefix convention while tagging the experimental factor.",
+    )
     p.add_argument("--device", default=None)
     p.add_argument(
         "--run-name-prefix",
@@ -206,10 +233,20 @@ def main() -> None:
         help="Disable the frame cache and recompute assembly/hitfinder/GCN live.",
     )
     args = p.parse_args()
-    if not args.inference_only and args.pretrain_checkpoint is None:
-        p.error("--pretrain-checkpoint is required unless --inference-only is given")
+    if args.random_init:
+        args.pretrain_checkpoint = None
+    elif not args.inference_only and args.pretrain_checkpoint is None:
+        p.error(
+            "--pretrain-checkpoint is required unless --inference-only or --random-init"
+        )
+    if args.random_init and not args.run_suffix:
+        p.error("--random-init needs --run-suffix so it cannot collide with a real run")
 
     cfg = load_config(args.config)
+    if args.run_suffix is not None:
+        # argparse reads a value starting with "-" as a flag, so accept "lpft" and add the dash.
+        suffix = args.run_suffix.lstrip("-")
+        cfg.setdefault("wandb", {})["run_suffix"] = f"-{suffix}" if suffix else ""
 
     validate_run_name_prefix(
         args.run_name_prefix,
@@ -219,7 +256,7 @@ def main() -> None:
     )
     probe = args.linear_probe
     pretrain_epoch = None
-    if not args.inference_only:
+    if not args.inference_only and not args.random_init:
         # Read the pretrain checkpoint early so a bad path fails before any setup.
         pretrain_epoch = read_pretrain_epoch(args.pretrain_checkpoint)
         print(f"[pretrain] {args.pretrain_checkpoint} — stored epoch {pretrain_epoch}")
@@ -237,6 +274,7 @@ def main() -> None:
         # _train_fold passes cfg to wandb.init(config=...), so these land in the run config.
         cfg["pretrain_checkpoint"] = str(args.pretrain_checkpoint)
         cfg["pretrain_epoch"] = pretrain_epoch
+        cfg["head_checkpoint"] = args.head_checkpoint
 
     cache_cfg = cfg.setdefault("cache", {})
     if args.cache_root is not None:
@@ -291,6 +329,7 @@ def main() -> None:
             cfg,
             None if args.inference_only else args.pretrain_checkpoint,
             linear_probe=probe,
+            head_checkpoint=None if args.inference_only else args.head_checkpoint,
         ),
         run_name_prefix=prefix,
         extra_results={
@@ -302,6 +341,8 @@ def main() -> None:
                 else {
                     "pretrain_checkpoint": str(args.pretrain_checkpoint),
                     "pretrain_epoch": pretrain_epoch,
+                    "head_checkpoint": args.head_checkpoint,
+                    "random_init": args.random_init,
                 }
             ),
         },

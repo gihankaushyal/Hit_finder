@@ -268,3 +268,103 @@ class TestSSLConfigs:
         cfg = load_config("configs/ssl/mae_pretrain.yaml")
         model = build_mae_model(cfg)
         assert isinstance(model, MAEViT)
+
+
+class TestFineTuneRecipe:
+    """Opt-in recipe knobs: drop_path, head init, LP-FT head copy, layer decay, schedule."""
+
+    @staticmethod
+    def _cfg(**ssl):
+        return {"ssl": {"embed_dim": 64, "depth": 4, "num_heads": 4, **ssl}}
+
+    def test_defaults_leave_state_dict_and_optimizer_unchanged(self):
+        from src.models.ssl import build_ssl_classifier
+        from src.training.recipe import build_optimizer
+
+        m = build_ssl_classifier(self._cfg())
+        assert not any("drop_path" in k for k in m.state_dict())
+        opt = build_optimizer(m, {"learning_rate": 1e-4, "weight_decay": 1e-4})
+        assert len(opt.param_groups) == 1
+        assert opt.param_groups[0]["weight_decay"] == 1e-4
+
+    def test_drop_path_grows_with_depth_and_is_off_in_eval(self):
+        from timm.layers import DropPath
+
+        from src.models.ssl import build_ssl_classifier
+
+        m = build_ssl_classifier(self._cfg(drop_path_rate=0.3))
+        # rate 0.0 collapses to Identity in timm, so block 0 has no DropPath at all
+        assert not isinstance(m.blocks[0].drop_path1, DropPath)
+        rates = [b.drop_path1.drop_prob for b in m.blocks[1:]]
+        assert rates == sorted(rates) and rates[-1] == pytest.approx(0.3)
+        m.eval()
+        x = torch.randn(2, 1, 224, 224)
+        assert torch.equal(m(x), m(x))
+
+    def test_trunc_normal_head_init_is_near_zero(self):
+        from src.models.ssl import build_ssl_classifier
+
+        m = build_ssl_classifier(self._cfg(head_init="trunc_normal"))
+        assert m.head.weight.abs().max() < 1e-3
+        assert torch.all(m.head.bias == 0)
+
+    def test_head_checkpoint_copies_only_head(self, tmp_path):
+        from src.models.ssl import build_ssl_classifier
+
+        src = build_ssl_classifier(self._cfg())
+        torch.save({"model_state_dict": src.state_dict()}, tmp_path / "probe.pt")
+        dst = build_ssl_classifier(self._cfg(), head_checkpoint=tmp_path / "probe.pt")
+        assert torch.equal(dst.head.weight, src.head.weight)
+        assert not torch.equal(
+            dst.blocks[0].attn.qkv.weight, src.blocks[0].attn.qkv.weight
+        )
+
+    def test_layer_decay_groups_cover_each_param_once_and_scale_by_depth(self):
+        from src.models.ssl import build_ssl_classifier
+        from src.training.recipe import build_optimizer
+
+        m = build_ssl_classifier(self._cfg())
+        cfg = {"learning_rate": 1.0, "weight_decay": 0.05, "layer_decay": 0.5}
+        opt = build_optimizer(m, cfg)
+        grouped = [p for g in opt.param_groups for p in g["params"]]
+        trainable = [p for p in m.parameters() if p.requires_grad]
+        assert len(grouped) == len(trainable) == len({id(p) for p in grouped})
+        lrs = {g["lr"] for g in opt.param_groups}
+        assert max(lrs) == 1.0 and min(lrs) == pytest.approx(
+            0.5**5
+        )  # depth 4 -> 5 steps
+        for g in opt.param_groups:
+            if g["weight_decay"] == 0.0:
+                assert all(p.ndim == 1 or p is m.cls_token for p in g["params"])
+
+    def test_frozen_params_are_excluded_from_groups(self):
+        from src.models.ssl import build_ssl_classifier
+        from src.training.recipe import build_optimizer
+
+        m = build_ssl_classifier(self._cfg(), freeze_encoder=True)
+        opt = build_optimizer(
+            m, {"learning_rate": 1.0, "weight_decay": 0.05, "layer_decay": 0.75}
+        )
+        assert (
+            sum(len(g["params"]) for g in opt.param_groups) == 2
+        )  # head weight + bias
+
+    def test_warmup_then_cosine_shape(self):
+        from src.training.recipe import lr_factor
+
+        cfg = {"warmup_epochs": 5, "lr_schedule": "cosine"}
+        f = [lr_factor(e, 50, cfg) for e in range(1, 51)]
+        assert f[0] == pytest.approx(0.2) and f[4] == pytest.approx(1.0)
+        assert f[5] == pytest.approx(1.0)
+        assert all(a >= b for a, b in zip(f[5:], f[6:]))
+        assert 0.0 < f[-1] < 0.01
+
+    def test_default_schedule_is_noop(self):
+        from src.models.ssl import build_ssl_classifier
+        from src.training.recipe import apply_lr_schedule, build_optimizer
+
+        m = build_ssl_classifier(self._cfg())
+        cfg = {"learning_rate": 1e-4, "weight_decay": 1e-4}
+        opt = build_optimizer(m, cfg)
+        apply_lr_schedule(opt, 7, 100, cfg)
+        assert opt.param_groups[0]["lr"] == 1e-4

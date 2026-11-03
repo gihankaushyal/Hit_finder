@@ -1,32 +1,38 @@
 """Measure how much a trained classifier relies on crop-construction shortcuts.
 
-The asymmetric training pipeline (src/data/dataset.py:380) builds a positive crop
-by centring it on a randomly chosen Bragg peak, and a negative crop by taking a
-random window from a frame whose hitfinder returned *zero* peaks. Two shortcuts
-are therefore available to the model and neither is diffraction physics:
+The asymmetric training pipeline (src/data/dataset.py, AsymmetricCXIDataset)
+builds a positive crop (label 1) by centring it on a randomly chosen Bragg peak.
+Negatives (label 0) come from two places: a 50 px-clear window of a hit frame's
+own background (hard negative), and a 50 px-clear random window of a frame with
+no peaks (blank). Two shortcuts are available to the model and neither is
+diffraction physics:
 
   1. Positional — every positive has a peak at the centre pixel. rot90 and flip
      both map the centre to itself, so augmentation does not break it.
-  2. Frame-level — negatives only ever come from blank frames, so global
-     background statistics separate the classes without looking at a peak.
+  2. Frame-level — blank-frame negatives differ from hit-frame crops in global
+     background statistics, so the classes separate without looking at a peak.
 
-This script scores one checkpoint under three crop distributions:
+Positives are scored in two geometries (centred / jittered: the peak sits at a
+random off-centre position) and negatives from two pools (blank / hard). The
+result is a 2x2 grid of AP/AUC plus the training-like control (centred
+positives against both negative pools pooled). Cells share one frame pool and
+differ only in crop geometry, so deltas come from crop construction, not
+sampling. An offset sweep (peak at a fixed distance from the crop centre) shows
+how steeply the score depends on position.
 
-  A (control)   positives centred on a peak, negatives from peak-free frames
-                — the training distribution; reproduces the reported val AP.
-  B (jitter)    positives contain a peak at a random off-centre offset,
-                negatives as in A. AP drop relative to A isolates shortcut 1.
-  C (hard-neg)  positives as in A, negatives drawn from peak-free *regions of
-                hit frames* with 50 px clearance. Drop isolates shortcut 2.
-
-Conditions share their frame pool and differ only in crop geometry, so the
-deltas are attributable to the crop construction rather than to sampling.
+Scores are crop-level, not the frame-level tile-vote AP reported in results.json,
+so they are not expected to equal the reported cross-detector AP.
 
 Usage:
     python -m scripts.diagnose_crop_shortcut \
         --config configs/ssl/mae_finetune.yaml \
         --checkpoint checkpoints/vits16-mae-finetune-v2-fold4-seed42/best.pt \
         --fold 4 --max-frames 400
+    # Track 1 ResNet baseline (same crops, same metrics):
+    python -m scripts.diagnose_crop_shortcut --arch resnet \
+        --config configs/supervised/resnet18_asymmetric.yaml \
+        --checkpoint checkpoints/resnet18-asymmetric-v2-fold4-seed42/best.pt \
+        --fold 4
 """
 
 from __future__ import annotations
@@ -52,6 +58,7 @@ from src.evaluation.benchmark import (  # noqa: E402
 from src.evaluation.metrics import average_precision, auc_roc  # noqa: E402
 from src.hitfinders import get_hitfinder  # noqa: E402
 from src.models.ssl import build_ssl_classifier  # noqa: E402
+from src.models.supervised import build_supervised_model  # noqa: E402
 from src.preprocessing.augment import PAD_BORDER_DEFAULT, pad_border  # noqa: E402
 from src.preprocessing.io import read_detector_description  # noqa: E402
 from src.preprocessing.normalize import lcn  # noqa: E402
@@ -60,6 +67,9 @@ from src.utils.config import load_config  # noqa: E402
 
 CROP = 224
 HARD_NEG_MARGIN = 50
+# Peak distance from the crop centre (px) for the offset sweep; the largest
+# value is the most the JITTER_EDGE_PAD clip allows along an axis (80 px).
+OFFSET_SWEEP_PX = (0, 20, 40, 60, 80)
 # Keep the peak clear of the crop border so condition B still shows a whole
 # peak; only its position changes. 32 px each side leaves a 160 px jitter box.
 JITTER_EDGE_PAD = 32
@@ -91,6 +101,21 @@ def _jittered_crop(
     # Offset of the peak within the crop, drawn away from the crop border.
     off_x = int(rng.integers(JITTER_EDGE_PAD, CROP - JITTER_EDGE_PAD))
     off_y = int(rng.integers(JITTER_EDGE_PAD, CROP - JITTER_EDGE_PAD))
+    left = int(np.clip(px - off_x, 0, pw - CROP))
+    top = int(np.clip(py - off_y, 0, ph - CROP))
+    return padded[top : top + CROP, left : left + CROP]
+
+
+def _offset_crop(
+    padded: np.ndarray, peak: np.ndarray, dist: int, rng: np.random.Generator
+) -> np.ndarray:
+    """Crop with the peak ``dist`` px from the crop centre, random direction."""
+    ph, pw = padded.shape[:2]
+    px, py = int(round(float(peak[0]))), int(round(float(peak[1])))
+    angle = float(rng.uniform(0.0, 2.0 * np.pi))
+    lo, hi = JITTER_EDGE_PAD, CROP - JITTER_EDGE_PAD - 1
+    off_x = int(np.clip(CROP // 2 + round(dist * np.cos(angle)), lo, hi))
+    off_y = int(np.clip(CROP // 2 + round(dist * np.sin(angle)), lo, hi))
     left = int(np.clip(px - off_x, 0, pw - CROP))
     top = int(np.clip(py - off_y, 0, ph - CROP))
     return padded[top : top + CROP, left : left + CROP]
@@ -140,6 +165,13 @@ def main() -> None:
         "(cross_detector_eval, the default) is where AP has headroom and a "
         "shortcut would show; in-domain splits are near-saturated.",
     )
+    p.add_argument(
+        "--arch",
+        default="vit",
+        choices=["vit", "resnet"],
+        help="vit: Track 2 MAE ViT classifier (fine-tune or probe checkpoint). "
+        "resnet: Track 1 supervised baseline; pass a supervised --config.",
+    )
     p.add_argument("--max-frames", type=int, default=400)
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--device", default=None)
@@ -167,7 +199,12 @@ def main() -> None:
         f"held out {fold['test_detector']}"
     )
 
-    model = build_ssl_classifier(cfg, mae_checkpoint=None)
+    if args.arch == "resnet":
+        model = build_supervised_model(
+            cfg["model"]["backbone"], pretrained=False, num_classes=2
+        )
+    else:
+        model = build_ssl_classifier(cfg, mae_checkpoint=None)
     # weights_only=True is sufficient: we read only model_state_dict and epoch.
     ckpt = torch.load(args.checkpoint, map_location="cpu", weights_only=True)
     model.load_state_dict(ckpt["model_state_dict"])
@@ -195,6 +232,7 @@ def main() -> None:
     holder: list = [None]
 
     centred, jittered, blank_neg, hard_neg = [], [], [], []
+    sweep: dict[int, list[np.ndarray]] = {d: [] for d in OFFSET_SWEEP_PX}
     n_hit = n_blank = 0
 
     for k, (path, idx, desc) in enumerate(frames):
@@ -211,6 +249,8 @@ def main() -> None:
             peak = shifted[int(rng.integers(0, len(shifted)))]
             centred.append(_finalise(_centred_crop(padded, peak)))
             jittered.append(_finalise(_jittered_crop(padded, peak, rng)))
+            for d in OFFSET_SWEEP_PX:
+                sweep[d].append(_finalise(_offset_crop(padded, peak, d, rng)))
             neg = _random_crop(padded, shifted, rng, margin=HARD_NEG_MARGIN)
             if neg is not None:
                 hard_neg.append(_finalise(neg))
@@ -224,15 +264,19 @@ def main() -> None:
         f"pools: centred={len(centred)} jittered={len(jittered)} "
         f"blank_neg={len(blank_neg)} hard_neg={len(hard_neg)}"
     )
-    if not centred or not blank_neg:
+    if not centred or not (blank_neg or hard_neg):
         raise SystemExit("empty positive or negative pool — raise --max-frames")
 
     s_centred = _score(model, centred, device)
     s_jittered = _score(model, jittered, device)
-    s_blank = _score(model, blank_neg, device)
+    s_blank = _score(model, blank_neg, device) if blank_neg else np.empty(0)
     s_hard = _score(model, hard_neg, device) if hard_neg else np.empty(0)
+    s_sweep = {d: _score(model, crops, device) for d, crops in sweep.items()}
+    s_neg_all = np.concatenate([s_blank, s_hard])
 
-    def metrics(pos: np.ndarray, neg: np.ndarray) -> dict:
+    def metrics(pos: np.ndarray, neg: np.ndarray) -> dict | None:
+        if len(pos) == 0 or len(neg) == 0:
+            return None
         y = np.concatenate([np.ones(len(pos)), np.zeros(len(neg))])
         s = np.concatenate([pos, neg])
         return {
@@ -240,43 +284,60 @@ def main() -> None:
             "auc": auc_roc(y, s),
             "n_pos": int(len(pos)),
             "n_neg": int(len(neg)),
-            "mean_pos_score": float(pos.mean()) if len(pos) else float("nan"),
-            "mean_neg_score": float(neg.mean()) if len(neg) else float("nan"),
+            "mean_pos_score": float(pos.mean()),
+            "mean_neg_score": float(neg.mean()),
         }
 
     results = {
         "fold": args.fold,
         "split": args.split,
+        "arch": args.arch,
         "checkpoint": str(args.checkpoint),
         "epoch": ckpt.get("epoch"),
-        "A_control": metrics(s_centred, s_blank),
-        "B_jitter": metrics(s_jittered, s_blank),
-        "C_hard_neg": metrics(s_centred, s_hard) if len(s_hard) else None,
+        "n_hit_frames": n_hit,
+        "n_blank_frames": n_blank,
+        # Training-like control: centred positives vs both negative pools.
+        "control_centred_vs_all_neg": metrics(s_centred, s_neg_all),
+        "grid": {
+            "centred_vs_blank": metrics(s_centred, s_blank),
+            "centred_vs_hard": metrics(s_centred, s_hard),
+            "jittered_vs_blank": metrics(s_jittered, s_blank),
+            "jittered_vs_hard": metrics(s_jittered, s_hard),
+        },
+        "jittered_vs_all_neg": metrics(s_jittered, s_neg_all),
+        "offset_sweep_vs_all_neg": {
+            str(d): metrics(s, s_neg_all) for d, s in s_sweep.items()
+        },
     }
-    results["delta_B_positional"] = (
-        results["B_jitter"]["ap"] - results["A_control"]["ap"]
+    ctrl, jit = results["control_centred_vs_all_neg"], results["jittered_vs_all_neg"]
+    results["delta_positional_ap"] = (
+        jit["ap"] - ctrl["ap"] if ctrl and jit else float("nan")
     )
-    if results["C_hard_neg"]:
-        results["delta_C_frame_level"] = (
-            results["C_hard_neg"]["ap"] - results["A_control"]["ap"]
-        )
+    cb, ch = results["grid"]["centred_vs_blank"], results["grid"]["centred_vs_hard"]
+    results["delta_frame_level_ap"] = ch["ap"] - cb["ap"] if cb and ch else float("nan")
 
     print("\n=== crop shortcut ablation ===")
-    for key in ("A_control", "B_jitter", "C_hard_neg"):
-        r = results[key]
+    rows = [("control (centred vs all neg)", ctrl), ("jittered vs all neg", jit)]
+    rows += [(k, v) for k, v in results["grid"].items()]
+    rows += [
+        (f"sweep {d}px vs all neg", results["offset_sweep_vs_all_neg"][str(d)])
+        for d in OFFSET_SWEEP_PX
+    ]
+    for name, r in rows:
         if r is None:
-            print(f"{key:12s}  (no samples)")
+            print(f"{name:30s}  (no samples)")
             continue
         print(
-            f"{key:12s}  AP={r['ap']:.4f}  AUC={r['auc']:.4f}  "
+            f"{name:30s}  AP={r['ap']:.4f}  AUC={r['auc']:.4f}  "
             f"pos={r['n_pos']:4d} neg={r['n_neg']:4d}  "
             f"mean(pos)={r['mean_pos_score']:.3f} mean(neg)={r['mean_neg_score']:.3f}"
         )
-    print(f"\ndelta B (positional shortcut) : {results['delta_B_positional']:+.4f} AP")
-    if "delta_C_frame_level" in results:
-        print(
-            f"delta C (frame-level shortcut): {results['delta_C_frame_level']:+.4f} AP"
-        )
+    print(
+        f"\ndelta positional (jitter - control): {results['delta_positional_ap']:+.4f} AP"
+    )
+    print(
+        f"delta frame-level (hard - blank)   : {results['delta_frame_level_ap']:+.4f} AP"
+    )
 
     if args.out:
         Path(args.out).parent.mkdir(parents=True, exist_ok=True)

@@ -1,0 +1,69 @@
+# Careful recipe + per-epoch diagnostics (log_val_breakdown, save_epochs).
+# Identical training recipe to mae_finetune_careful.yaml; only the two diagnostic keys are added.
+# Run with --run-suffix careful-ep. Used to explain why validation peaks at epoch 1.
+# "Careful" fine-tune recipe (MAE reference fine-tune settings, scaled for batch 32).
+# Differences from mae_finetune.yaml (the v2 recipe), all optimiser/model-side:
+#   warmup 5 ep + cosine, layer-wise LR decay 0.75, drop_path 0.1, wd 0.05 (not on norm/bias),
+#   trunc-normal head init, peak LR 1.25e-4 (= 1e-3 * 32/256 for the head/last block).
+# The data pipeline is untouched. Run with --run-suffix careful.
+# Fine-tune MAE-pretrained ViT-S/16 through the unchanged asymmetric pipeline.
+model:
+  backbone: mae_vit_small_patch16
+  pretrained: false        # no ImageNet weights — encoder comes from ssl.pretrain_checkpoint
+  num_classes: 2
+
+ssl:
+  embed_dim: 384
+  depth: 12
+  num_heads: 6
+  drop_path_rate: 0.1
+  head_init: trunc_normal
+  # pretrain_checkpoint is fold-dependent — supplied via --pretrain-checkpoint CLI arg
+  pretrain_checkpoint: null
+
+training:
+  epochs: 50               # cosine decays to ~0 over this horizon
+  learning_rate: 1.25e-4   # peak LR (head/last block); earlier blocks scaled by layer_decay^depth
+  weight_decay: 0.05
+  warmup_epochs: 5
+  lr_schedule: cosine
+  layer_decay: 0.75
+  early_stopping_patience: 15
+  log_val_breakdown: true
+  save_epochs: [1, 2, 3, 5, 10]
+  num_workers: 32
+
+lodo:
+  detector_dirs:
+    AGIPD:       /data/bioxfel/user/gihan/Resonet/production/agipd_20k
+    JUNGFRAU_4M: /data/bioxfel/user/gihan/Resonet/production/jungfrau_20k
+    ePix10k:     /data/bioxfel/user/gihan/Resonet/production/epix10k_20k
+    Eiger4M:     /data/bioxfel/user/gihan/Resonet/production/eiger4m_20k
+  cxi_pattern: "compressed*.cxi"
+  label_key: entry_1/labels/hit
+
+hitfinder:
+  backend: pf8
+  pf8_threshold: 800.0
+  pf8_min_snr: 5.0
+  pf8_min_pix_count: 2
+  pf8_max_pix_count: 200
+  pf8_local_bg_radius: 3
+  pf8_min_res: 0
+  pf8_max_res: 0
+  pf8_use_saturated: false
+  gpu_script_path: ""
+  gpu_device: cuda
+
+benchmark:
+  aggregation: vote
+  min_hit_patches: 3
+  patch_stride: 224
+
+wandb:
+  tags: [ssl-finetune]
+
+# SSL fine-tuning relies on the frame cache for throughput; override the
+# (now-false) base.yaml default explicitly rather than depending on it.
+cache:
+  enabled: true

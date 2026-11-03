@@ -39,6 +39,7 @@ from src.training.inference_results import (
     training_block,
     wandb_enabled,
 )
+from src.training.recipe import apply_lr_schedule, build_optimizer
 from src.training.train_supervised import _set_seeds, train_one_epoch
 from src.training.wandb_identity import resolve_wandb_id, wandb_id_for_training
 
@@ -183,6 +184,10 @@ def _train_fold(
     )
     epochs = cfg["training"]["epochs"]
     patience = cfg["training"].get("early_stopping_patience", 10)
+    # Opt-in diagnostics (default off): extra val metrics per epoch, and weights
+    # saved as epoch<N>.pt at the listed epochs, independent of best.pt.
+    log_val_breakdown = cfg["training"].get("log_val_breakdown", False)
+    save_epochs = set(cfg["training"].get("save_epochs", []))
 
     prefix = run_name_prefix or f"{backbone}-asymmetric"
     run_suffix = cfg.get("wandb", {}).get("run_suffix", "")
@@ -305,11 +310,7 @@ def _train_fold(
     if inference_only:
         print(f"  --inference-only: evaluating {ckpt_path}; no training.")
     else:
-        optimizer = torch.optim.AdamW(
-            model.parameters(),
-            lr=cfg["training"]["learning_rate"],
-            weight_decay=cfg["training"]["weight_decay"],
-        )
+        optimizer = build_optimizer(model, cfg["training"])
         criterion = nn.CrossEntropyLoss()
 
         best_f1 = -1.0
@@ -343,6 +344,7 @@ def _train_fold(
         last_epoch = start_epoch - 1
         for epoch in range(start_epoch, epochs + 1):
             train_dl.dataset.set_epoch(epoch)
+            apply_lr_schedule(optimizer, epoch, epochs, cfg["training"])
             train_m = train_one_epoch(model, train_dl, optimizer, criterion, device)
             val_m = run_patch_agg(
                 model,
@@ -354,6 +356,7 @@ def _train_fold(
                 device=device,
                 aggregation=aggregation,
                 frame_cache=frame_cache,
+                return_breakdown=log_val_breakdown,
             )
 
             last_epoch = epoch
@@ -371,9 +374,34 @@ def _train_fold(
                     "val/auc": val_m["auc_roc"],
                     "val/f1": val_m["f1"],
                     "hitfinder/n_peaks_mean": float("nan"),
+                    **{
+                        f"val/{k}": v
+                        for k, v in val_m.items()
+                        if k not in ("ap", "auc_roc", "f1", "threshold")
+                    },
                 },
                 step=epoch,
             )
+            if log_val_breakdown:
+                print(
+                    "    val breakdown: "
+                    + "  ".join(
+                        f"{k}={v:.4f}"
+                        for k, v in val_m.items()
+                        if k not in ("ap", "auc_roc", "f1", "threshold")
+                    )
+                )
+            if epoch in save_epochs:
+                torch.save(
+                    {
+                        "epoch": epoch,
+                        "model_state_dict": model.state_dict(),
+                        "val_f1": val_m["f1"],
+                        "backbone": backbone,
+                        "num_classes": cfg["model"]["num_classes"],
+                    },
+                    ckpt_path.parent / f"epoch{epoch}.pt",
+                )
 
             if not np.isnan(val_m["f1"]) and val_m["f1"] > best_f1:
                 best_f1 = val_m["f1"]
