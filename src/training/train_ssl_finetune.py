@@ -44,7 +44,12 @@ from src.evaluation.benchmark import (
     save_split_artifact,
 )
 from src.hitfinders import get_hitfinder
-from src.models.ssl import build_ssl_classifier
+from src.models.ssl import (
+    DROP_PATH_RATE_DEFAULT,
+    HEAD_INIT_DEFAULT,
+    build_ssl_classifier,
+)
+from src.training.recipe import DEFAULT_LAYER_DECAY, DEFAULT_WARMUP_EPOCHS, LR_CONSTANT
 from src.training.lodo import _train_fold, build_sessions
 from src.training.run_naming import (
     SSL_FINETUNE_CONVENTION,
@@ -72,24 +77,37 @@ def non_default_recipe_keys(cfg: dict) -> list[str]:
     """
     training, ssl = cfg.get("training", {}), cfg.get("ssl", {})
     checks = {
-        "warmup_epochs": training.get("warmup_epochs", 0) != 0,
-        "lr_schedule": training.get("lr_schedule", "constant") != "constant",
-        "layer_decay": training.get("layer_decay", 1.0) != 1.0,
+        "warmup_epochs": training.get("warmup_epochs", DEFAULT_WARMUP_EPOCHS)
+        != DEFAULT_WARMUP_EPOCHS,
+        "lr_schedule": training.get("lr_schedule", LR_CONSTANT) != LR_CONSTANT,
+        "layer_decay": training.get("layer_decay", DEFAULT_LAYER_DECAY)
+        != DEFAULT_LAYER_DECAY,
         "wd_skip_norm_bias": bool(training.get("wd_skip_norm_bias", False)),
         "log_val_breakdown": bool(training.get("log_val_breakdown", False)),
         "save_epochs": bool(training.get("save_epochs")),
-        "drop_path_rate": ssl.get("drop_path_rate", 0.0) != 0.0,
-        "head_init": ssl.get("head_init", "default") != "default",
+        "drop_path_rate": ssl.get("drop_path_rate", DROP_PATH_RATE_DEFAULT)
+        != DROP_PATH_RATE_DEFAULT,
+        "head_init": ssl.get("head_init", HEAD_INIT_DEFAULT) != HEAD_INIT_DEFAULT,
     }
     return [k for k, differs in checks.items() if differs]
 
 
-def check_head_checkpoint(path: str | Path) -> None:
-    """Fail before any setup (and before --override-training deletes a run) on a bad head file."""
+def check_head_checkpoint(path: str | Path, fold: int | None = None) -> None:
+    """Fail before any setup (and before --override-training deletes a run) on a bad head file.
+
+    With `fold`, the head must come from the same fold: a probe fitted on another fold saw the
+    held-out detector of this one, which would leak it into the fine-tune init.
+    """
     from src.models.ssl import HEAD_KEYS
 
     if not Path(path).exists():
         raise SystemExit(f"--head-checkpoint not found: {path}")
+    m = re.search(r"-fold(\d+)-", Path(path).parent.name)
+    if fold is not None and m and int(m.group(1)) != fold:
+        raise SystemExit(
+            f"--head-checkpoint {path} comes from fold {m.group(1)} but --fold is {fold}: "
+            "its head was fitted on this fold's held-out detector (cross-detector leak)"
+        )
     sd = torch.load(path, map_location="cpu", weights_only=True, mmap=True)
     keys = {k for k in sd.get("model_state_dict", {}) if k.startswith("head.")}
     if keys != HEAD_KEYS:
@@ -292,7 +310,7 @@ def main() -> None:
             "collide with (or override) a real v2 run"
         )
     if args.head_checkpoint and not args.inference_only:
-        check_head_checkpoint(args.head_checkpoint)
+        check_head_checkpoint(args.head_checkpoint, args.fold)
 
     cfg = load_config(args.config)
     recipe_keys = non_default_recipe_keys(cfg)

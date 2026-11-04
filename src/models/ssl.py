@@ -308,6 +308,7 @@ def build_mae_model(cfg: dict) -> MAEViT:
     )
 
 
+DROP_PATH_RATE_DEFAULT = 0.0
 HEAD_INIT_DEFAULT = "default"  # nn.Linear's own init (the v2 runs)
 HEAD_INIT_TRUNC_NORMAL = "trunc_normal"  # MAE fine-tune convention
 HEAD_INITS = (HEAD_INIT_DEFAULT, HEAD_INIT_TRUNC_NORMAL)
@@ -330,7 +331,7 @@ class ViTClassifier(nn.Module):
         num_heads: int = VIT_SMALL["num_heads"],
         mlp_ratio: float = 4.0,
         num_classes: int = 2,
-        drop_path_rate: float = 0.0,
+        drop_path_rate: float = DROP_PATH_RATE_DEFAULT,
         head_init: str = HEAD_INIT_DEFAULT,
     ) -> None:
         super().__init__()
@@ -396,7 +397,7 @@ def build_ssl_classifier(
         depth=ssl_cfg.get("depth", VIT_SMALL["depth"]),
         num_heads=ssl_cfg.get("num_heads", VIT_SMALL["num_heads"]),
         num_classes=cfg.get("model", {}).get("num_classes", 2),
-        drop_path_rate=ssl_cfg.get("drop_path_rate", 0.0),
+        drop_path_rate=ssl_cfg.get("drop_path_rate", DROP_PATH_RATE_DEFAULT),
         head_init=ssl_cfg.get("head_init", HEAD_INIT_DEFAULT),
     )
     if mae_checkpoint is not None:

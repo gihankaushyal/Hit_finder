@@ -426,6 +426,22 @@ class TestFineTuneCliGuards:
             careful
         )
 
+    def test_head_checkpoint_from_another_fold_is_rejected(self, tmp_path):
+        from src.models.ssl import build_ssl_classifier
+        from src.training.train_ssl_finetune import check_head_checkpoint
+
+        cfg = {"ssl": {"embed_dim": 64, "depth": 2, "num_heads": 4}}
+        full = build_ssl_classifier(cfg).state_dict()
+        run = tmp_path / "vits16-mae-probe-v2-fold4-seed42"
+        run.mkdir()
+        torch.save(
+            {"model_state_dict": {k: full[k] for k in ("head.weight", "head.bias")}},
+            run / "best.pt",
+        )
+        check_head_checkpoint(run / "best.pt", 4)  # same fold: fine
+        with pytest.raises(SystemExit, match="cross-detector leak"):
+            check_head_checkpoint(run / "best.pt", 1)
+
     def test_partial_head_checkpoint_is_rejected(self, tmp_path):
         from src.models.ssl import build_ssl_classifier
 

@@ -54,7 +54,9 @@ def discover_prefixes(checkpoints_dir: Path) -> list[str]:
     A group key is the bare prefix for unsuffixed runs and "<prefix>-fold*-seed*<suffix>"
     for suffixed ones, so the two never share a key.
     """
-    groups = set()
+    groups: set[str] = set()
+    if not checkpoints_dir.is_dir():
+        return []
     for p in checkpoints_dir.iterdir():
         if not p.is_dir():
             continue
@@ -210,7 +212,9 @@ def main():
     if args.run_prefix is not None:
         # Single-variant mode: original behavior, bypasses the menu entirely.
         print(
-            f"Aggregating: {args.checkpoints_dir}/{args.run_prefix}-fold*/results.json\n"
+            f"Aggregating: {args.checkpoints_dir}/{args.run_prefix.replace(_GROUP_SEP, '-fold*-seed*')}"
+            + ("" if _GROUP_SEP in args.run_prefix else "-fold*-seed*")
+            + "/results.json\n"
         )
         results = load_results(args.checkpoints_dir, args.run_prefix)
         if not results:

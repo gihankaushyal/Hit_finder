@@ -40,7 +40,14 @@ from src.training.inference_results import (
     training_block,
     wandb_enabled,
 )
-from src.training.recipe import apply_lr_schedule, build_optimizer
+from src.models.ssl import DROP_PATH_RATE_DEFAULT, HEAD_INIT_DEFAULT
+from src.training.recipe import (
+    DEFAULT_LAYER_DECAY,
+    DEFAULT_WARMUP_EPOCHS,
+    LR_CONSTANT,
+    apply_lr_schedule,
+    build_optimizer,
+)
 from src.training.train_supervised import _set_seeds, train_one_epoch
 from src.training.wandb_identity import resolve_wandb_id, wandb_id_for_training
 
@@ -197,11 +204,11 @@ def _train_fold(
     print(
         "  recipe: "
         f"lr={_tr.get('learning_rate')} wd={_tr.get('weight_decay')} epochs={epochs} "
-        f"patience={patience} warmup_epochs={_tr.get('warmup_epochs', 0)} "
-        f"lr_schedule={_tr.get('lr_schedule', 'constant')} "
-        f"layer_decay={_tr.get('layer_decay', 1.0)} "
-        f"drop_path_rate={_ssl.get('drop_path_rate', 0.0)} "
-        f"head_init={_ssl.get('head_init', 'default')} "
+        f"patience={patience} warmup_epochs={_tr.get('warmup_epochs', DEFAULT_WARMUP_EPOCHS)} "
+        f"lr_schedule={_tr.get('lr_schedule', LR_CONSTANT)} "
+        f"layer_decay={_tr.get('layer_decay', DEFAULT_LAYER_DECAY)} "
+        f"drop_path_rate={_ssl.get('drop_path_rate', DROP_PATH_RATE_DEFAULT)} "
+        f"head_init={_ssl.get('head_init', HEAD_INIT_DEFAULT)} "
         f"log_val_breakdown={log_val_breakdown} save_epochs={sorted(save_epochs)}"
     )
     if any(e > epochs for e in save_epochs):
@@ -391,6 +398,12 @@ def _train_fold(
                 f"train_loss={train_m['loss']:.4f}  "
                 f"val_AP={val_m['ap']:.4f}  val_F1={val_m['f1']:.4f}"
             )
+            # Breakdown metrics beyond the base ones; NaN (an empty class) is not a measurement.
+            val_extra = {
+                k: v
+                for k, v in val_m.items()
+                if k not in _BASE_VAL_KEYS and not np.isnan(v)
+            }
             wandb.log(
                 {
                     "epoch": epoch,
@@ -400,23 +413,14 @@ def _train_fold(
                     "val/auc": val_m["auc_roc"],
                     "val/f1": val_m["f1"],
                     "hitfinder/n_peaks_mean": float("nan"),
-                    **{
-                        f"val/{k}": v
-                        for k, v in val_m.items()
-                        if k not in _BASE_VAL_KEYS
-                        and not np.isnan(v)  # an empty class is not a measurement
-                    },
+                    **{f"val/{k}": v for k, v in val_extra.items()},
                 },
                 step=epoch,
             )
             if log_val_breakdown:
                 print(
                     "    val breakdown: "
-                    + "  ".join(
-                        f"{k}={v:.4f}"
-                        for k, v in val_m.items()
-                        if k not in _BASE_VAL_KEYS
-                    )
+                    + "  ".join(f"{k}={v:.4f}" for k, v in val_extra.items())
                 )
             if epoch in save_epochs:
                 snap_path = ckpt_path.parent / f"epoch{epoch}.pt"

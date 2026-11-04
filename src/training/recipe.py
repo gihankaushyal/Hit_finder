@@ -6,7 +6,8 @@ constant learning rate:
 
     warmup_epochs   linear LR warm-up over this many epochs (default 0)
     lr_schedule     "constant" (default) or "cosine" (decays towards 0 after warm-up; the last
-                    epoch keeps a small residual factor, ~0.0012 for 45 post-warm-up epochs)
+                    epoch keeps a small residual factor, ~0.0012 for 45 post-warm-up epochs;
+                    the peak LR is held for two epochs, `warmup` and `warmup + 1`)
     layer_decay     per-layer LR scale for ViT blocks, e.g. 0.75 (default 1.0 = off)
     wd_skip_norm_bias  no weight decay on biases/norm/cls params (default False; implied by
                     layer_decay, MAE convention)
@@ -21,6 +22,8 @@ import torch
 import torch.nn as nn
 
 LR_CONSTANT = "constant"
+DEFAULT_WARMUP_EPOCHS = 0
+DEFAULT_LAYER_DECAY = 1.0
 LR_COSINE = "cosine"
 _BLOCK_RE = re.compile(r"^blocks\.(\d+)\.")
 _NO_DECAY_NAMES = ("cls_token", "pos_embed")
@@ -40,9 +43,11 @@ def build_optimizer(model: nn.Module, train_cfg: dict) -> torch.optim.Optimizer:
     """AdamW, optionally with layer-wise LR decay and no wd on norm/bias parameters."""
     lr = train_cfg["learning_rate"]
     wd = train_cfg["weight_decay"]
-    layer_decay = train_cfg.get("layer_decay", 1.0)
-    skip_norm_bias = train_cfg.get("wd_skip_norm_bias", False) or layer_decay != 1.0
-    if layer_decay == 1.0 and not skip_norm_bias:
+    layer_decay = train_cfg.get("layer_decay", DEFAULT_LAYER_DECAY)
+    skip_norm_bias = (
+        train_cfg.get("wd_skip_norm_bias", False) or layer_decay != DEFAULT_LAYER_DECAY
+    )
+    if layer_decay == DEFAULT_LAYER_DECAY and not skip_norm_bias:
         return torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=wd)
 
     block_ids = [
@@ -72,7 +77,7 @@ def build_optimizer(model: nn.Module, train_cfg: dict) -> torch.optim.Optimizer:
 
 def lr_factor(epoch: int, total_epochs: int, train_cfg: dict) -> float:
     """LR multiplier for 1-indexed `epoch`: linear warm-up, then constant or cosine."""
-    warmup = train_cfg.get("warmup_epochs", 0)
+    warmup = train_cfg.get("warmup_epochs", DEFAULT_WARMUP_EPOCHS)
     schedule = train_cfg.get("lr_schedule", LR_CONSTANT)
     if schedule not in (LR_CONSTANT, LR_COSINE):
         raise ValueError(
@@ -90,7 +95,7 @@ def apply_lr_schedule(
     optimizer: torch.optim.Optimizer, epoch: int, total_epochs: int, train_cfg: dict
 ) -> float:
     """Set each group's LR to base_lr * lr_factor(epoch). No-op for the default recipe."""
-    if not train_cfg.get("warmup_epochs", 0) and (
+    if not train_cfg.get("warmup_epochs", DEFAULT_WARMUP_EPOCHS) and (
         train_cfg.get("lr_schedule", LR_CONSTANT) == LR_CONSTANT
     ):
         return 1.0

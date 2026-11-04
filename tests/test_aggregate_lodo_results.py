@@ -33,3 +33,7 @@ def test_suffixed_runs_do_not_mix_into_the_baseline(tmp_path):
     assert [r["cross"]["ap"] for r in base] == [0.89]
     careful_key = next(g for g in groups if g.endswith("-careful"))
     assert [r["cross"]["ap"] for r in agg.load_results(tmp_path, careful_key)] == [0.99]
+
+
+def test_missing_checkpoints_dir_gives_no_groups(tmp_path):
+    assert agg.discover_prefixes(tmp_path / "does-not-exist") == []
