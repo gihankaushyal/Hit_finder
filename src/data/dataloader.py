@@ -8,6 +8,8 @@ import torch
 from torch.utils.data import DataLoader
 
 from src.data.dataset import (
+    POSITIVE_JITTER_EDGE_PAD,
+    POSITIVE_JITTER_NONE,
     SSL_MIN_VALID_FRAC_DEFAULT,
     AsymmetricCXIDataset,
     MultiFrameCXIDataset,
@@ -91,6 +93,9 @@ def asymmetric_loader(
     hit_frac: float = 0.5,
     hard_neg_max_attempts: int = 50,
     crops_per_frame: int = 1,
+    positive_jitter: str = POSITIVE_JITTER_NONE,
+    jitter_edge_pad: int = POSITIVE_JITTER_EDGE_PAD,
+    crop_within_frame: bool = False,
 ) -> DataLoader:
     """DataLoader for asymmetric hitfinder-guided training.
 
@@ -124,6 +129,10 @@ def asymmetric_loader(
         crops_per_frame: Number of independently-augmented crops drawn per
             frame per epoch, reusing the same assembled/GCN'd frame. Default
             1 preserves current behavior exactly.
+        positive_jitter: "none" centres positive crops on their peak (default);
+            "uniform" places the peak uniformly inside the crop.
+        jitter_edge_pad: Minimum peak distance from the crop border for "uniform".
+        crop_within_frame: Keep every crop off the zero pad band.
 
     Returns:
         DataLoader yielding (tensor(B*crops_per_frame,1,224,224), label(B*crops_per_frame,)) pairs.
@@ -150,6 +159,9 @@ def asymmetric_loader(
         hit_frac=hit_frac,
         hard_neg_max_attempts=hard_neg_max_attempts,
         crops_per_frame=crops_per_frame,
+        positive_jitter=positive_jitter,
+        jitter_edge_pad=jitter_edge_pad,
+        crop_within_frame=crop_within_frame,
     )
     return DataLoader(
         dataset,

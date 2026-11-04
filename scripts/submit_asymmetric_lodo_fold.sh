@@ -32,7 +32,9 @@
 # Examples:
 #   sbatch scripts/submit_asymmetric_lodo_fold.sh 3 resnet18-asymmetric-v2
 #
-# Environment variables (set automatically by submit_asymmetric_lodo_all.sh):
+# Environment variables (CACHE_NVME / RESUME_FLAG are set automatically by submit_asymmetric_lodo_all.sh):
+#   CONFIG        Training config (default configs/supervised/resnet18_asymmetric.yaml), e.g.
+#                 configs/supervised/resnet18_asymmetric_jitter.yaml (writes ...-seed<S>-jitter).
 #   CACHE_NVME    Path to this fold's NVMe-staged frame-cache tier
 #                 (default /tmp/sfx_frame_cache). See scripts/stage_frame_cache.sh.
 #   RESUME_FLAG   --resume-training (default), --override-training or
@@ -80,7 +82,7 @@ source .secrets/wandb.env
 mkdir -p logs
 
 python -u -m src.training.train_asymmetric \
-    --config configs/supervised/resnet18_asymmetric.yaml \
+    --config "${CONFIG:-configs/supervised/resnet18_asymmetric.yaml}" \
     --run-name-prefix "${RUN_NAME_PREFIX}" \
     --folds "${FOLD}" \
     --cache-nvme "${CACHE_NVME:-/tmp/sfx_frame_cache}" \

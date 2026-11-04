@@ -508,3 +508,43 @@ class TestCarefulConfigs:
         assert set(diag["training"]) - set(base["training"]) == extra
         diag["training"] = {k: v for k, v in diag["training"].items() if k not in extra}
         assert diag == base
+
+
+class TestJitterConfigs:
+    """The jitter variants must differ from their base configs only in the crop keys."""
+
+    @staticmethod
+    def _load(path):
+        import yaml
+
+        with open(path) as f:
+            return yaml.safe_load(f)
+
+    @pytest.mark.parametrize(
+        "base,variant",
+        [
+            ("configs/ssl/mae_finetune.yaml", "configs/ssl/mae_finetune_jitter.yaml"),
+            (
+                "configs/ssl/mae_finetune_careful.yaml",
+                "configs/ssl/mae_finetune_careful_jitter.yaml",
+            ),
+            (
+                "configs/supervised/resnet18_asymmetric.yaml",
+                "configs/supervised/resnet18_asymmetric_jitter.yaml",
+            ),
+        ],
+    )
+    def test_only_crop_keys_differ(self, base, variant):
+        b, v = self._load(base), self._load(variant)
+        crop_keys = {"positive_jitter", "jitter_edge_pad", "crop_within_frame"}
+        assert set(v.get("asymmetric", {})) - set(b.get("asymmetric", {})) == crop_keys
+        assert v["asymmetric"]["positive_jitter"] == "uniform"
+        assert v["asymmetric"]["crop_within_frame"] is True
+        for cfg in (b, v):
+            cfg.pop("asymmetric", None)
+            cfg.pop("wandb", None)
+        assert b == v
+
+    def test_resnet_variant_names_its_run_directory(self):
+        v = self._load("configs/supervised/resnet18_asymmetric_jitter.yaml")
+        assert v["wandb"]["run_suffix"] == "-jitter"

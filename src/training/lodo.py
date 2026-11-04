@@ -18,6 +18,7 @@ import torch
 import torch.nn as nn
 
 from src.data.dataloader import asymmetric_loader
+from src.data.dataset import POSITIVE_JITTER_EDGE_PAD, POSITIVE_JITTER_NONE
 from src.data.frame_cache import FrameCache, verify_cache_or_raise
 from src.evaluation.benchmark import (
     SPLIT_CROSS_DETECTOR,
@@ -226,6 +227,18 @@ def _train_fold(
     hit_frac = cfg.get("asymmetric", {}).get("hit_frac", 0.5)
     hard_neg_max_attempts = cfg.get("asymmetric", {}).get("hard_neg_max_attempts", 50)
     crops_per_frame = cfg.get("asymmetric", {}).get("crops_per_frame", 1)
+    positive_jitter = cfg.get("asymmetric", {}).get(
+        "positive_jitter", POSITIVE_JITTER_NONE
+    )
+    jitter_edge_pad = cfg.get("asymmetric", {}).get(
+        "jitter_edge_pad", POSITIVE_JITTER_EDGE_PAD
+    )
+    crop_within_frame = cfg.get("asymmetric", {}).get("crop_within_frame", False)
+    print(
+        f"  crops: hit_frac={hit_frac} crops_per_frame={crops_per_frame} "
+        f"positive_jitter={positive_jitter} jitter_edge_pad={jitter_edge_pad} "
+        f"crop_within_frame={crop_within_frame}"
+    )
 
     ckpt_dir = Path("checkpoints") / run_name
     # Must run AFTER check_checkpoint_collisions' real (non-dry) pass, which may
@@ -266,6 +279,9 @@ def _train_fold(
             hit_frac=hit_frac,
             hard_neg_max_attempts=hard_neg_max_attempts,
             crops_per_frame=crops_per_frame,
+            positive_jitter=positive_jitter,
+            jitter_edge_pad=jitter_edge_pad,
+            crop_within_frame=crop_within_frame,
         )
 
     bench_cfg = cfg.get("benchmark", {})
