@@ -540,9 +540,14 @@ class TestJitterConfigs:
         assert set(v.get("asymmetric", {})) - set(b.get("asymmetric", {})) == crop_keys
         assert v["asymmetric"]["positive_jitter"] == "uniform"
         assert v["asymmetric"]["crop_within_frame"] is True
+        diag_keys = {"log_val_breakdown", "save_epochs"}
+        assert set(v["training"]) - set(b["training"]) <= diag_keys
         for cfg in (b, v):
             cfg.pop("asymmetric", None)
             cfg.pop("wandb", None)
+            cfg["training"] = {
+                k: x for k, x in cfg["training"].items() if k not in diag_keys
+            }
         assert b == v
 
     def test_resnet_variant_names_its_run_directory(self):
