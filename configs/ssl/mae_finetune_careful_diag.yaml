@@ -22,7 +22,7 @@ ssl:
   pretrain_checkpoint: null
 
 training:
-  epochs: 50               # cosine decays to ~0 over this horizon
+  epochs: 50               # cosine decays towards 0 (residual ~0.001) over this horizon
   learning_rate: 1.25e-4   # peak LR (head/last block); earlier blocks scaled by layer_decay^depth
   weight_decay: 0.05
   warmup_epochs: 5

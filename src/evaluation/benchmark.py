@@ -371,9 +371,9 @@ def run_patch_agg(
 
             patch_scores = np.concatenate(patch_scores_list)
             n_patches = len(patch_scores)
+            vote_frac = float((patch_scores > 0.5).sum()) / max(n_patches, 1)
             if aggregation == "vote":
-                hit_count = int((patch_scores > 0.5).sum())
-                frame_score = float(hit_count) / max(n_patches, 1)
+                frame_score = vote_frac
             elif aggregation == "max":
                 frame_score = float(patch_scores.max())
             else:
@@ -381,9 +381,7 @@ def run_patch_agg(
                     f"aggregation must be 'max' or 'vote', got {aggregation!r}"
                 )
             all_scores.append(frame_score)
-            all_vote_scores.append(
-                float((patch_scores > 0.5).sum()) / max(n_patches, 1)
-            )
+            all_vote_scores.append(vote_frac)
             all_max_scores.append(float(patch_scores.max()))
             all_labels.append(int(round(float(labels_arr[frame_idx]))))
 
@@ -441,8 +439,8 @@ def _breakdown_metrics(
 
     - pos_zero_vote_frac: hit frames where no tile scored > 0.5 (missed hits).
     - neg_any_vote_frac: non-hit frames where at least one tile scored > 0.5.
-    - ap_max / auc_max: ranking quality when frames are scored by the best tile,
-      which has no vote-fraction ties.
+    - ap_max / auc_max: ranking quality when frames are scored by the best tile (tie-aware:
+      saturated float32 tile scores can tie at exactly 1.0, so index order must not decide).
     - ap_vote_tieaware / auc_vote_tieaware: the vote score with tied scores treated as
       one threshold step (sklearn's convention). Our own AP (index-order ties) and AUC
       (positives-first ties) disagree on tied scores; a gap to these exposes it.
@@ -454,8 +452,8 @@ def _breakdown_metrics(
     return {
         "pos_zero_vote_frac": float((vote[pos] == 0).mean()) if pos.any() else nan,
         "neg_any_vote_frac": float((vote[neg] > 0).mean()) if neg.any() else nan,
-        "ap_max": average_precision(y_true, max_score),
-        "auc_max": auc_roc(y_true, max_score),
+        "ap_max": _tie_aware_ap(y_true, max_score) if both else nan,
+        "auc_max": _tie_aware_auc(y_true, max_score) if both else nan,
         "ap_vote_tieaware": _tie_aware_ap(y_true, vote) if both else nan,
         "auc_vote_tieaware": _tie_aware_auc(y_true, vote) if both else nan,
         "pos_vote_mean": float(vote[pos].mean()) if pos.any() else nan,

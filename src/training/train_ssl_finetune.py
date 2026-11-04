@@ -184,7 +184,8 @@ def main() -> None:
         "--random-init",
         action="store_true",
         help="Skip loading MAE weights: the encoder keeps its random init (control for "
-        "'does pretraining help?'; use with --linear-probe and --run-suffix).",
+        "'does pretraining help?'; use with --linear-probe and --run-suffix). The init is "
+        "the library default of ViTClassifier, not the MAE pretraining (xavier) init.",
     )
     p.add_argument(
         "--run-suffix",

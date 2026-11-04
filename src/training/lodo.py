@@ -43,6 +43,10 @@ from src.training.recipe import apply_lr_schedule, build_optimizer
 from src.training.train_supervised import _set_seeds, train_one_epoch
 from src.training.wandb_identity import resolve_wandb_id, wandb_id_for_training
 
+# Keys of the val metrics dict that are logged under their own names; every other key
+# (the optional breakdown) is logged as `val/<key>`.
+_BASE_VAL_KEYS = ("ap", "auc_roc", "f1", "threshold")
+
 
 def _build_intra_split(sessions: list[dict]) -> dict:
     """80/10/10 greedy split within a single detector — no cross-detector held-out set.
@@ -335,6 +339,14 @@ def _train_fold(
             _ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
             model.load_state_dict(_ckpt["model_state_dict"])
             if "optimizer_state_dict" in _ckpt:
+                _n_saved = len(_ckpt["optimizer_state_dict"]["param_groups"])
+                if _n_saved != len(optimizer.param_groups):
+                    raise RuntimeError(
+                        f"cannot resume {ckpt_path}: it was saved with {_n_saved} optimizer "
+                        f"param group(s) but this config builds {len(optimizer.param_groups)} "
+                        "(layer_decay / wd_skip_norm_bias change the grouping). Resume with the "
+                        "recipe the run started with, or start a new run."
+                    )
                 optimizer.load_state_dict(_ckpt["optimizer_state_dict"])
             else:
                 print(
@@ -390,7 +402,7 @@ def _train_fold(
                     **{
                         f"val/{k}": v
                         for k, v in val_m.items()
-                        if k not in ("ap", "auc_roc", "f1", "threshold")
+                        if k not in _BASE_VAL_KEYS
                         and not np.isnan(v)  # an empty class is not a measurement
                     },
                 },
@@ -402,7 +414,7 @@ def _train_fold(
                     + "  ".join(
                         f"{k}={v:.4f}"
                         for k, v in val_m.items()
-                        if k not in ("ap", "auc_roc", "f1", "threshold")
+                        if k not in _BASE_VAL_KEYS
                     )
                 )
             if epoch in save_epochs:

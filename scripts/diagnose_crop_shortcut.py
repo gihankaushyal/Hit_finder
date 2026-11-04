@@ -42,6 +42,7 @@ import json
 import sys
 from pathlib import Path
 
+import h5py
 import numpy as np
 import torch
 
@@ -67,8 +68,9 @@ from src.utils.config import load_config  # noqa: E402
 
 CROP = 224
 HARD_NEG_MARGIN = 50
-# Peak distance from the crop centre (px) for the offset sweep; the largest
-# value is the most the JITTER_EDGE_PAD clip allows along an axis (80 px).
+# Peak distance from the crop centre (px) for the offset sweep. The per-axis clip to
+# [JITTER_EDGE_PAD, CROP - JITTER_EDGE_PAD - 1] allows at most 79 px along an axis, so the
+# "80" arm is 79 px for near-axis-aligned directions and a full 80 px on diagonals.
 OFFSET_SWEEP_PX = (0, 20, 40, 60, 80)
 # Keep the peak clear of the crop border so condition B still shows a whole
 # peak; only its position changes. 32 px each side leaves a 160 px jitter box.
@@ -220,7 +222,7 @@ def main() -> None:
     per_session = max(1, args.max_frames // len(val_ids))
     for sid in val_ids:
         path = session_map[sid]
-        with __import__("h5py").File(path, "r") as f:
+        with h5py.File(path, "r") as f:
             n = int(f[cfg["lodo"].get("label_key", "entry_1/labels/hit")].shape[0])
         for i in rng.choice(n, size=min(per_session, n), replace=False):
             frames.append((path, int(i), descs[sid]))

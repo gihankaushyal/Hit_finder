@@ -6,7 +6,7 @@ constant learning rate:
 
     warmup_epochs   linear LR warm-up over this many epochs (default 0)
     lr_schedule     "constant" (default) or "cosine" (decays towards 0 after warm-up; the last
-                    epoch keeps a small residual factor, ~0.0025 for 45 post-warm-up epochs)
+                    epoch keeps a small residual factor, ~0.0012 for 45 post-warm-up epochs)
     layer_decay     per-layer LR scale for ViT blocks, e.g. 0.75 (default 1.0 = off)
     wd_skip_norm_bias  no weight decay on biases/norm/cls params (default False; implied by
                     layer_decay, MAE convention)

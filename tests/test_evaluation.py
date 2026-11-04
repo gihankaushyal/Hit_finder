@@ -488,6 +488,19 @@ class TestBreakdownMetrics:
         assert m["neg_max_mean"] == pytest.approx((0.1 + 0.05 + 0.6) / 3)
         assert 0.0 <= m["ap_vote_tieaware"] <= 1.0 and 0.0 <= m["ap_max"] <= 1.0
 
+    def test_ap_max_is_independent_of_frame_order_on_tied_scores(self):
+        from src.evaluation.benchmark import _breakdown_metrics
+
+        # Positive and negative frames tied at a saturated 1.0 best-tile score.
+        y = np.array([1, 0, 1, 0, 1])
+        mx = np.array([1.0, 1.0, 1.0, 0.2, 0.1])
+        vote = np.zeros(5)
+        perm = np.array([4, 3, 2, 1, 0])
+        a = _breakdown_metrics(y, vote, mx)
+        b = _breakdown_metrics(y[perm], vote[perm], mx[perm])
+        assert a["ap_max"] == pytest.approx(b["ap_max"])
+        assert a["auc_max"] == pytest.approx(b["auc_max"])
+
     def test_single_class_gives_nan_not_error(self):
         from src.evaluation.benchmark import _breakdown_metrics
 
