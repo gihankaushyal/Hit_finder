@@ -207,9 +207,13 @@ def _train_fold(
         f"patience={patience} warmup_epochs={_tr.get('warmup_epochs', DEFAULT_WARMUP_EPOCHS)} "
         f"lr_schedule={_tr.get('lr_schedule', LR_CONSTANT)} "
         f"layer_decay={_tr.get('layer_decay', DEFAULT_LAYER_DECAY)} "
-        f"drop_path_rate={_ssl.get('drop_path_rate', DROP_PATH_RATE_DEFAULT)} "
-        f"head_init={_ssl.get('head_init', HEAD_INIT_DEFAULT)} "
-        f"log_val_breakdown={log_val_breakdown} save_epochs={sorted(save_epochs)}"
+        + (
+            f"drop_path_rate={_ssl.get('drop_path_rate', DROP_PATH_RATE_DEFAULT)} "
+            f"head_init={_ssl.get('head_init', HEAD_INIT_DEFAULT)} "
+            if _ssl  # ViT-only settings; a ResNet run has no ssl block
+            else ""
+        )
+        + f"log_val_breakdown={log_val_breakdown} save_epochs={sorted(save_epochs)}"
     )
     if any(e > epochs for e in save_epochs):
         print(f"  Warning: save_epochs {sorted(save_epochs)} exceeds epochs={epochs}")

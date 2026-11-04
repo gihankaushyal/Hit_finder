@@ -382,7 +382,7 @@ def run_patch_agg(
                 )
             all_scores.append(frame_score)
             all_vote_scores.append(vote_frac)
-            all_max_scores.append(float(patch_scores.max()))
+            all_max_scores.append(float(patch_scores.max()) if n_patches else 0.0)
             all_labels.append(int(round(float(labels_arr[frame_idx]))))
 
     if not all_scores:

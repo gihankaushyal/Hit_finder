@@ -392,12 +392,20 @@ def build_ssl_classifier(
     from pathlib import Path as _Path
 
     ssl_cfg = cfg.get("ssl", {})
+    drop_path_rate = ssl_cfg.get("drop_path_rate", DROP_PATH_RATE_DEFAULT)
+    if freeze_encoder and drop_path_rate:
+        # model.train() would keep stochastic depth active inside the frozen blocks and
+        # fit the head to noisy features, so a probe always runs without it.
+        print(
+            f"  [probe] ignoring ssl.drop_path_rate={drop_path_rate}: encoder is frozen"
+        )
+        drop_path_rate = DROP_PATH_RATE_DEFAULT
     clf = ViTClassifier(
         embed_dim=ssl_cfg.get("embed_dim", VIT_SMALL["embed_dim"]),
         depth=ssl_cfg.get("depth", VIT_SMALL["depth"]),
         num_heads=ssl_cfg.get("num_heads", VIT_SMALL["num_heads"]),
         num_classes=cfg.get("model", {}).get("num_classes", 2),
-        drop_path_rate=ssl_cfg.get("drop_path_rate", DROP_PATH_RATE_DEFAULT),
+        drop_path_rate=drop_path_rate,
         head_init=ssl_cfg.get("head_init", HEAD_INIT_DEFAULT),
     )
     if mae_checkpoint is not None:

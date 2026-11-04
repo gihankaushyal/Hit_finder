@@ -30,6 +30,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import re
 from collections.abc import Callable
 from pathlib import Path
@@ -69,7 +70,12 @@ SPLIT_DIR = Path("checkpoints") / "asymmetric_splits"
 RUN_SUFFIX_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
 
 
-def non_default_recipe_keys(cfg: dict) -> list[str]:
+V2_REFERENCE_CONFIG = "configs/ssl/mae_finetune.yaml"
+# Training hyper-parameters that define a v2 run besides the opt-in recipe knobs.
+V2_HPARAM_KEYS = ("learning_rate", "weight_decay", "epochs", "early_stopping_patience")
+
+
+def non_default_recipe_keys(cfg: dict, reference: dict | None = None) -> list[str]:
     """Names of recipe/diagnostic settings that differ from the v2 fine-tune defaults.
 
     A run that sets any of these must carry a --run-suffix, otherwise it would write into
@@ -89,6 +95,10 @@ def non_default_recipe_keys(cfg: dict) -> list[str]:
         != DROP_PATH_RATE_DEFAULT,
         "head_init": ssl.get("head_init", HEAD_INIT_DEFAULT) != HEAD_INIT_DEFAULT,
     }
+    if reference is not None:
+        ref_training = reference.get("training", {})
+        for k in V2_HPARAM_KEYS:
+            checks[k] = training.get(k) != ref_training.get(k)
     return [k for k, differs in checks.items() if differs]
 
 
@@ -102,12 +112,24 @@ def check_head_checkpoint(path: str | Path, fold: int | None = None) -> None:
 
     if not Path(path).exists():
         raise SystemExit(f"--head-checkpoint not found: {path}")
-    m = re.search(r"-fold(\d+)-", Path(path).parent.name)
-    if fold is not None and m and int(m.group(1)) != fold:
-        raise SystemExit(
-            f"--head-checkpoint {path} comes from fold {m.group(1)} but --fold is {fold}: "
-            "its head was fitted on this fold's held-out detector (cross-detector leak)"
-        )
+    if fold is not None:
+        m = re.search(r"-fold(\d+)-", Path(path).parent.name)
+        head_fold = int(m.group(1)) if m else None
+        results = Path(path).parent / "results.json"
+        if head_fold is None and results.exists():
+            head_fold = json.loads(results.read_text()).get("fold_id")
+        if head_fold is None:
+            raise SystemExit(
+                f"cannot tell which fold {path} was trained on (directory name has no "
+                "'-fold<N>-' and no results.json beside it); keep the head file in its run "
+                "directory so the cross-detector split can be checked"
+            )
+        if int(head_fold) != fold:
+            raise SystemExit(
+                f"--head-checkpoint {path} comes from fold {head_fold} but --fold is "
+                f"{fold}: its head was fitted on this fold's held-out detector "
+                "(cross-detector leak)"
+            )
     sd = torch.load(path, map_location="cpu", weights_only=True, mmap=True)
     keys = {k for k in sd.get("model_state_dict", {}) if k.startswith("head.")}
     if keys != HEAD_KEYS:
@@ -313,7 +335,10 @@ def main() -> None:
         check_head_checkpoint(args.head_checkpoint, args.fold)
 
     cfg = load_config(args.config)
-    recipe_keys = non_default_recipe_keys(cfg)
+    reference = (
+        load_config(V2_REFERENCE_CONFIG) if Path(V2_REFERENCE_CONFIG).exists() else None
+    )
+    recipe_keys = non_default_recipe_keys(cfg, reference)
     if recipe_keys and not args.run_suffix:
         p.error(
             f"{args.config} sets non-default recipe keys ({', '.join(recipe_keys)}); pass "

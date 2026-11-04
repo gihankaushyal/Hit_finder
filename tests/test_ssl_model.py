@@ -442,6 +442,44 @@ class TestFineTuneCliGuards:
         with pytest.raises(SystemExit, match="cross-detector leak"):
             check_head_checkpoint(run / "best.pt", 1)
 
+    def test_head_checkpoint_with_unknown_fold_is_rejected(self, tmp_path):
+        from src.models.ssl import build_ssl_classifier
+        from src.training.train_ssl_finetune import check_head_checkpoint
+
+        cfg = {"ssl": {"embed_dim": 64, "depth": 2, "num_heads": 4}}
+        full = build_ssl_classifier(cfg).state_dict()
+        torch.save(
+            {"model_state_dict": {k: full[k] for k in ("head.weight", "head.bias")}},
+            tmp_path / "copied_best.pt",
+        )
+        with pytest.raises(SystemExit, match="cannot tell which fold"):
+            check_head_checkpoint(tmp_path / "copied_best.pt", 4)
+
+    def test_hparam_only_change_requires_run_suffix(self):
+        from src.training.train_ssl_finetune import non_default_recipe_keys
+        from src.utils.config import load_config
+
+        ref = load_config("configs/ssl/mae_finetune.yaml")
+        assert non_default_recipe_keys(ref, ref) == []
+        lr_sweep = load_config("configs/ssl/mae_finetune.yaml")
+        lr_sweep["training"]["learning_rate"] = ref["training"]["learning_rate"] * 2
+        assert non_default_recipe_keys(lr_sweep, ref) == ["learning_rate"]
+
+    def test_probe_ignores_drop_path(self):
+        from src.models.ssl import build_ssl_classifier
+
+        cfg = {
+            "ssl": {"embed_dim": 64, "depth": 2, "num_heads": 4, "drop_path_rate": 0.1}
+        }
+        probe = build_ssl_classifier(cfg, freeze_encoder=True)
+        probe.train()
+        assert not any(
+            type(m).__name__ == "DropPath" for m in probe.modules()
+        ), "frozen encoder must not carry stochastic depth"
+        assert any(
+            type(m).__name__ == "DropPath" for m in build_ssl_classifier(cfg).modules()
+        )
+
     def test_partial_head_checkpoint_is_rejected(self, tmp_path):
         from src.models.ssl import build_ssl_classifier
 

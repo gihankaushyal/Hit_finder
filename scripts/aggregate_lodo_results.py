@@ -196,7 +196,9 @@ def main():
         default=None,
         help=(
             "Checkpoint directory prefix to aggregate (single-variant mode, no "
-            "menu). Omit to use the interactive menu or --select."
+            "menu); unsuffixed runs only. For a suffixed group pass the key the menu "
+            "prints, '<prefix>-fold*-seed*<suffix>'. Omit to use the interactive "
+            "menu or --select."
         ),
     )
     parser.add_argument(
@@ -212,8 +214,8 @@ def main():
     if args.run_prefix is not None:
         # Single-variant mode: original behavior, bypasses the menu entirely.
         print(
-            f"Aggregating: {args.checkpoints_dir}/{args.run_prefix.replace(_GROUP_SEP, '-fold*-seed*')}"
-            + ("" if _GROUP_SEP in args.run_prefix else "-fold*-seed*")
+            f"Aggregating: {args.checkpoints_dir}/{args.run_prefix}"
+            + ("" if _GROUP_SEP in args.run_prefix else _GROUP_SEP)
             + "/results.json\n"
         )
         results = load_results(args.checkpoints_dir, args.run_prefix)
