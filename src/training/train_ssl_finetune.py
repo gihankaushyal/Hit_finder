@@ -18,6 +18,10 @@ Usage:
         --fold 1 --run-name-prefix vits16-mae-v2 \
         --pretrain-checkpoint checkpoints/mae-vits16-v2-fold1-seed42/last.pt
     # add --linear-probe to freeze the encoder
+    # recipe experiments (tag the run with --run-suffix <name>; recipe knobs live in the config):
+    #   --config configs/ssl/mae_finetune_careful.yaml --run-suffix careful
+    #   --head-checkpoint checkpoints/vits16-mae-probe-v2-fold4-seed42/best.pt --run-suffix lpft
+    #   --linear-probe --random-init --run-suffix randinit
     # re-evaluate a finished run (no --pretrain-checkpoint needed):
     python -m src.training.train_ssl_finetune --config configs/ssl/mae_finetune.yaml \
         --fold 1 --run-name-prefix vits16-mae-v2 --inference-only
@@ -26,6 +30,8 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
+import re
 from collections.abc import Callable
 from pathlib import Path
 
@@ -39,7 +45,12 @@ from src.evaluation.benchmark import (
     save_split_artifact,
 )
 from src.hitfinders import get_hitfinder
-from src.models.ssl import build_ssl_classifier
+from src.models.ssl import (
+    DROP_PATH_RATE_DEFAULT,
+    HEAD_INIT_DEFAULT,
+    build_ssl_classifier,
+)
+from src.training.recipe import DEFAULT_LAYER_DECAY, DEFAULT_WARMUP_EPOCHS, LR_CONSTANT
 from src.training.lodo import _train_fold, build_sessions
 from src.training.run_naming import (
     SSL_FINETUNE_CONVENTION,
@@ -56,12 +67,80 @@ from src.training.wandb_identity import override_hook_from_cfg
 from src.utils.config import load_config
 
 SPLIT_DIR = Path("checkpoints") / "asymmetric_splits"
+RUN_SUFFIX_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
+
+
+V2_REFERENCE_CONFIG = "configs/ssl/mae_finetune.yaml"
+# Training hyper-parameters that define a v2 run besides the opt-in recipe knobs.
+V2_HPARAM_KEYS = ("learning_rate", "weight_decay", "epochs", "early_stopping_patience")
+
+
+def non_default_recipe_keys(cfg: dict, reference: dict | None = None) -> list[str]:
+    """Names of recipe/diagnostic settings that differ from the v2 fine-tune defaults.
+
+    A run that sets any of these must carry a --run-suffix, otherwise it would write into
+    (or, with --override-training, delete) the directory of the genuine v2 run.
+    """
+    training, ssl = cfg.get("training", {}), cfg.get("ssl", {})
+    checks = {
+        "warmup_epochs": training.get("warmup_epochs", DEFAULT_WARMUP_EPOCHS)
+        != DEFAULT_WARMUP_EPOCHS,
+        "lr_schedule": training.get("lr_schedule", LR_CONSTANT) != LR_CONSTANT,
+        "layer_decay": training.get("layer_decay", DEFAULT_LAYER_DECAY)
+        != DEFAULT_LAYER_DECAY,
+        "wd_skip_norm_bias": bool(training.get("wd_skip_norm_bias", False)),
+        "log_val_breakdown": bool(training.get("log_val_breakdown", False)),
+        "save_epochs": bool(training.get("save_epochs")),
+        "drop_path_rate": ssl.get("drop_path_rate", DROP_PATH_RATE_DEFAULT)
+        != DROP_PATH_RATE_DEFAULT,
+        "head_init": ssl.get("head_init", HEAD_INIT_DEFAULT) != HEAD_INIT_DEFAULT,
+    }
+    if reference is not None:
+        ref_training = reference.get("training", {})
+        for k in V2_HPARAM_KEYS:
+            checks[k] = training.get(k) != ref_training.get(k)
+    return [k for k, differs in checks.items() if differs]
+
+
+def check_head_checkpoint(path: str | Path, fold: int | None = None) -> None:
+    """Fail before any setup (and before --override-training deletes a run) on a bad head file.
+
+    With `fold`, the head must come from the same fold: a probe fitted on another fold saw the
+    held-out detector of this one, which would leak it into the fine-tune init.
+    """
+    from src.models.ssl import HEAD_KEYS
+
+    if not Path(path).exists():
+        raise SystemExit(f"--head-checkpoint not found: {path}")
+    if fold is not None:
+        m = re.search(r"-fold(\d+)-", Path(path).parent.name)
+        head_fold = int(m.group(1)) if m else None
+        results = Path(path).parent / "results.json"
+        if head_fold is None and results.exists():
+            head_fold = json.loads(results.read_text()).get("fold_id")
+        if head_fold is None:
+            raise SystemExit(
+                f"cannot tell which fold {path} was trained on (directory name has no "
+                "'-fold<N>-' and no results.json beside it); keep the head file in its run "
+                "directory so the cross-detector split can be checked"
+            )
+        if int(head_fold) != fold:
+            raise SystemExit(
+                f"--head-checkpoint {path} comes from fold {head_fold} but --fold is "
+                f"{fold}: its head was fitted on this fold's held-out detector "
+                "(cross-detector leak)"
+            )
+    sd = torch.load(path, map_location="cpu", weights_only=True, mmap=True)
+    keys = {k for k in sd.get("model_state_dict", {}) if k.startswith("head.")}
+    if keys != HEAD_KEYS:
+        raise SystemExit(f"{path}: head keys {sorted(keys)} != {sorted(HEAD_KEYS)}")
 
 
 def build_finetune_model_builder(
     cfg: dict,
     pretrain_checkpoint: str | Path | None,
     linear_probe: bool = False,
+    head_checkpoint: str | Path | None = None,
 ) -> Callable[[], nn.Module]:
     """Return a zero-argument callable that builds a ViTClassifier from the MAE checkpoint.
 
@@ -71,7 +150,10 @@ def build_finetune_model_builder(
 
     def _builder() -> nn.Module:
         return build_ssl_classifier(
-            cfg, mae_checkpoint=pretrain_checkpoint, freeze_encoder=linear_probe
+            cfg,
+            mae_checkpoint=pretrain_checkpoint,
+            freeze_encoder=linear_probe,
+            head_checkpoint=head_checkpoint,
         )
 
     return _builder
@@ -152,6 +234,26 @@ def main() -> None:
         ),
     )
     p.add_argument("--linear-probe", action="store_true")
+    p.add_argument(
+        "--head-checkpoint",
+        default=None,
+        help="Copy head.* weights from this classifier checkpoint (e.g. a probe best.pt) "
+        "before training: LP-FT. Name the run with --run-suffix.",
+    )
+    p.add_argument(
+        "--random-init",
+        action="store_true",
+        help="Skip loading MAE weights: the encoder keeps its random init (control for "
+        "'does pretraining help?'; use with --linear-probe and --run-suffix). The init is "
+        "the library default of ViTClassifier, not the MAE pretraining (xavier) init.",
+    )
+    p.add_argument(
+        "--run-suffix",
+        default=None,
+        help="Appended to the run name as '-<suffix>' (e.g. lpft -> ...-seed42-lpft), "
+        "overriding wandb.run_suffix. "
+        "Keeps the vN prefix convention while tagging the experimental factor.",
+    )
     p.add_argument("--device", default=None)
     p.add_argument(
         "--run-name-prefix",
@@ -206,10 +308,46 @@ def main() -> None:
         help="Disable the frame cache and recompute assembly/hitfinder/GCN live.",
     )
     args = p.parse_args()
-    if not args.inference_only and args.pretrain_checkpoint is None:
-        p.error("--pretrain-checkpoint is required unless --inference-only is given")
+    if args.random_init:
+        if args.pretrain_checkpoint is not None:
+            print(
+                "[random-init] ignoring --pretrain-checkpoint: the encoder keeps its random init"
+            )
+        if not args.linear_probe:
+            print(
+                "[random-init] WARNING: without --linear-probe this is a full fine-tune from scratch"
+            )
+        args.pretrain_checkpoint = None
+    elif not args.inference_only and args.pretrain_checkpoint is None:
+        p.error(
+            "--pretrain-checkpoint is required unless --inference-only or --random-init"
+        )
+    if args.run_suffix is not None and not RUN_SUFFIX_RE.fullmatch(
+        args.run_suffix.lstrip("-")
+    ):
+        p.error(f"--run-suffix {args.run_suffix!r} must match {RUN_SUFFIX_RE.pattern}")
+    if (args.random_init or args.head_checkpoint) and not args.run_suffix:
+        p.error(
+            "--random-init / --head-checkpoint need --run-suffix so the run cannot "
+            "collide with (or override) a real v2 run"
+        )
+    if args.head_checkpoint and not args.inference_only:
+        check_head_checkpoint(args.head_checkpoint, args.fold)
 
     cfg = load_config(args.config)
+    reference = (
+        load_config(V2_REFERENCE_CONFIG) if Path(V2_REFERENCE_CONFIG).exists() else None
+    )
+    recipe_keys = non_default_recipe_keys(cfg, reference)
+    if recipe_keys and not args.run_suffix:
+        p.error(
+            f"{args.config} sets non-default recipe keys ({', '.join(recipe_keys)}); pass "
+            "--run-suffix (e.g. careful) so the run cannot collide with a real v2 run"
+        )
+    if args.run_suffix is not None:
+        # argparse reads a value starting with "-" as a flag, so accept "lpft" and add the dash.
+        suffix = args.run_suffix.lstrip("-")
+        cfg.setdefault("wandb", {})["run_suffix"] = f"-{suffix}"
 
     validate_run_name_prefix(
         args.run_name_prefix,
@@ -219,7 +357,7 @@ def main() -> None:
     )
     probe = args.linear_probe
     pretrain_epoch = None
-    if not args.inference_only:
+    if not args.inference_only and not args.random_init:
         # Read the pretrain checkpoint early so a bad path fails before any setup.
         pretrain_epoch = read_pretrain_epoch(args.pretrain_checkpoint)
         print(f"[pretrain] {args.pretrain_checkpoint} — stored epoch {pretrain_epoch}")
@@ -235,8 +373,12 @@ def main() -> None:
     )
     if not args.inference_only:
         # _train_fold passes cfg to wandb.init(config=...), so these land in the run config.
-        cfg["pretrain_checkpoint"] = str(args.pretrain_checkpoint)
+        cfg["pretrain_checkpoint"] = (
+            None if args.pretrain_checkpoint is None else str(args.pretrain_checkpoint)
+        )
         cfg["pretrain_epoch"] = pretrain_epoch
+        cfg["head_checkpoint"] = args.head_checkpoint
+        cfg["random_init"] = args.random_init
 
     cache_cfg = cfg.setdefault("cache", {})
     if args.cache_root is not None:
@@ -291,6 +433,7 @@ def main() -> None:
             cfg,
             None if args.inference_only else args.pretrain_checkpoint,
             linear_probe=probe,
+            head_checkpoint=None if args.inference_only else args.head_checkpoint,
         ),
         run_name_prefix=prefix,
         extra_results={
@@ -300,8 +443,14 @@ def main() -> None:
                 {}
                 if args.inference_only
                 else {
-                    "pretrain_checkpoint": str(args.pretrain_checkpoint),
+                    "pretrain_checkpoint": (
+                        None
+                        if args.pretrain_checkpoint is None
+                        else str(args.pretrain_checkpoint)
+                    ),
                     "pretrain_epoch": pretrain_epoch,
+                    "head_checkpoint": args.head_checkpoint,
+                    "random_init": args.random_init,
                 }
             ),
         },

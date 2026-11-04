@@ -8,6 +8,7 @@ reuse the same loop without duplication.
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Callable
 from pathlib import Path
 
@@ -39,8 +40,20 @@ from src.training.inference_results import (
     training_block,
     wandb_enabled,
 )
+from src.models.ssl import DROP_PATH_RATE_DEFAULT, HEAD_INIT_DEFAULT
+from src.training.recipe import (
+    DEFAULT_LAYER_DECAY,
+    DEFAULT_WARMUP_EPOCHS,
+    LR_CONSTANT,
+    apply_lr_schedule,
+    build_optimizer,
+)
 from src.training.train_supervised import _set_seeds, train_one_epoch
 from src.training.wandb_identity import resolve_wandb_id, wandb_id_for_training
+
+# Keys of the val metrics dict that are logged under their own names; every other key
+# (the optional breakdown) is logged as `val/<key>`.
+_BASE_VAL_KEYS = ("ap", "auc_roc", "f1", "threshold")
 
 
 def _build_intra_split(sessions: list[dict]) -> dict:
@@ -183,6 +196,27 @@ def _train_fold(
     )
     epochs = cfg["training"]["epochs"]
     patience = cfg["training"].get("early_stopping_patience", 10)
+    # Opt-in diagnostics (default off): extra val metrics per epoch, and weights
+    # saved as epoch<N>.pt at the listed epochs, independent of best.pt.
+    log_val_breakdown = cfg["training"].get("log_val_breakdown", False)
+    save_epochs = set(cfg["training"].get("save_epochs", []))
+    _tr, _ssl = cfg["training"], cfg.get("ssl", {})
+    print(
+        "  recipe: "
+        f"lr={_tr.get('learning_rate')} wd={_tr.get('weight_decay')} epochs={epochs} "
+        f"patience={patience} warmup_epochs={_tr.get('warmup_epochs', DEFAULT_WARMUP_EPOCHS)} "
+        f"lr_schedule={_tr.get('lr_schedule', LR_CONSTANT)} "
+        f"layer_decay={_tr.get('layer_decay', DEFAULT_LAYER_DECAY)} "
+        + (
+            f"drop_path_rate={_ssl.get('drop_path_rate', DROP_PATH_RATE_DEFAULT)} "
+            f"head_init={_ssl.get('head_init', HEAD_INIT_DEFAULT)} "
+            if _ssl  # ViT-only settings; a ResNet run has no ssl block
+            else ""
+        )
+        + f"log_val_breakdown={log_val_breakdown} save_epochs={sorted(save_epochs)}"
+    )
+    if any(e > epochs for e in save_epochs):
+        print(f"  Warning: save_epochs {sorted(save_epochs)} exceeds epochs={epochs}")
 
     prefix = run_name_prefix or f"{backbone}-asymmetric"
     run_suffix = cfg.get("wandb", {}).get("run_suffix", "")
@@ -305,11 +339,7 @@ def _train_fold(
     if inference_only:
         print(f"  --inference-only: evaluating {ckpt_path}; no training.")
     else:
-        optimizer = torch.optim.AdamW(
-            model.parameters(),
-            lr=cfg["training"]["learning_rate"],
-            weight_decay=cfg["training"]["weight_decay"],
-        )
+        optimizer = build_optimizer(model, cfg["training"])
         criterion = nn.CrossEntropyLoss()
 
         best_f1 = -1.0
@@ -321,6 +351,14 @@ def _train_fold(
             _ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
             model.load_state_dict(_ckpt["model_state_dict"])
             if "optimizer_state_dict" in _ckpt:
+                _n_saved = len(_ckpt["optimizer_state_dict"]["param_groups"])
+                if _n_saved != len(optimizer.param_groups):
+                    raise RuntimeError(
+                        f"cannot resume {ckpt_path}: it was saved with {_n_saved} optimizer "
+                        f"param group(s) but this config builds {len(optimizer.param_groups)} "
+                        "(layer_decay / wd_skip_norm_bias change the grouping). Resume with the "
+                        "recipe the run started with, or start a new run."
+                    )
                 optimizer.load_state_dict(_ckpt["optimizer_state_dict"])
             else:
                 print(
@@ -343,6 +381,7 @@ def _train_fold(
         last_epoch = start_epoch - 1
         for epoch in range(start_epoch, epochs + 1):
             train_dl.dataset.set_epoch(epoch)
+            apply_lr_schedule(optimizer, epoch, epochs, cfg["training"])
             train_m = train_one_epoch(model, train_dl, optimizer, criterion, device)
             val_m = run_patch_agg(
                 model,
@@ -354,6 +393,7 @@ def _train_fold(
                 device=device,
                 aggregation=aggregation,
                 frame_cache=frame_cache,
+                return_breakdown=log_val_breakdown,
             )
 
             last_epoch = epoch
@@ -362,6 +402,12 @@ def _train_fold(
                 f"train_loss={train_m['loss']:.4f}  "
                 f"val_AP={val_m['ap']:.4f}  val_F1={val_m['f1']:.4f}"
             )
+            # Breakdown metrics beyond the base ones; NaN (an empty class) is not a measurement.
+            val_extra = {
+                k: v
+                for k, v in val_m.items()
+                if k not in _BASE_VAL_KEYS and not np.isnan(v)
+            }
             wandb.log(
                 {
                     "epoch": epoch,
@@ -371,9 +417,30 @@ def _train_fold(
                     "val/auc": val_m["auc_roc"],
                     "val/f1": val_m["f1"],
                     "hitfinder/n_peaks_mean": float("nan"),
+                    **{f"val/{k}": v for k, v in val_extra.items()},
                 },
                 step=epoch,
             )
+            if log_val_breakdown:
+                print(
+                    "    val breakdown: "
+                    + "  ".join(f"{k}={v:.4f}" for k, v in val_extra.items())
+                )
+            if epoch in save_epochs:
+                snap_path = ckpt_path.parent / f"epoch{epoch}.pt"
+                snap_tmp = snap_path.with_name(snap_path.name + ".tmp")
+                torch.save(
+                    {
+                        "epoch": epoch,
+                        "model_state_dict": model.state_dict(),
+                        "val_f1": val_m["f1"],
+                        "backbone": backbone,
+                        "num_classes": cfg["model"]["num_classes"],
+                    },
+                    snap_tmp,
+                )
+                # Atomic rename: a preempted job never leaves a truncated epochN.pt behind.
+                os.replace(snap_tmp, snap_path)
 
             if not np.isnan(val_m["f1"]) and val_m["f1"] > best_f1:
                 best_f1 = val_m["f1"]

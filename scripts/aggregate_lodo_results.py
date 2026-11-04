@@ -23,13 +23,11 @@ import numpy as np
 
 DETECTOR_ORDER = {1: "AGIPD", 2: "JUNGFRAU_4M", 3: "ePix10k", 4: "Eiger4M"}
 
-# Trailing ".*" tolerates an optional wandb.run_suffix appended after "-seed<S>"
-# (e.g. "vits16-mae-finetune-fold1-seed42-v2") — without it, those directories
-# are silently invisible to discover_prefixes(). Suffixed and unsuffixed runs
-# under the same base prefix still group together here, same as the existing
-# glob ambiguity in load_results() below; this is a known limitation, not a
-# new one introduced by this grouping.
-_RUN_DIR_RE = re.compile(r"^(?P<prefix>.+)-fold\d+-seed\d+.*$")
+# A run directory is "<prefix>-fold<N>-seed<S><suffix>". The optional suffix (e.g. "-v2" from
+# wandb.run_suffix, or "-careful" / "-lpft" from --run-suffix) is part of the group key, so a
+# recipe experiment never mixes into the unsuffixed baseline of the same prefix.
+_RUN_DIR_RE = re.compile(r"^(?P<prefix>.+)-fold\d+-seed\d+(?P<suffix>.*)$")
+_GROUP_SEP = "-fold*-seed*"
 
 # Doc-only generations that predate this checkpoint format or have since been
 # overwritten on disk. Source: docs/progress_notes.md. These never come from
@@ -51,8 +49,12 @@ DOC_BASELINES = {
 
 
 def discover_prefixes(checkpoints_dir: Path) -> list[str]:
-    """Find run-name prefixes with at least one completed fold on disk."""
-    prefixes = set()
+    """Find run groups with at least one completed fold on disk.
+
+    A group key is the bare prefix for unsuffixed runs and "<prefix>-fold*-seed*<suffix>"
+    for suffixed ones, so the two never share a key.
+    """
+    groups: set[str] = set()
     if not checkpoints_dir.is_dir():
         return []
     for p in checkpoints_dir.iterdir():
@@ -60,13 +62,19 @@ def discover_prefixes(checkpoints_dir: Path) -> list[str]:
             continue
         m = _RUN_DIR_RE.match(p.name)
         if m and (p / "results.json").exists():
-            prefixes.add(m.group("prefix"))
-    return sorted(prefixes)
+            suffix = m.group("suffix")
+            groups.add(m.group("prefix") + (_GROUP_SEP + suffix if suffix else ""))
+    return sorted(groups)
 
 
 def load_results(checkpoints_dir: Path, run_prefix: str) -> list[dict]:
+    """Load results.json for every fold of one run group (see discover_prefixes)."""
+    prefix, _, suffix = run_prefix.partition(_GROUP_SEP)
+    dir_re = re.compile(re.escape(prefix) + r"-fold\d+-seed\d+" + re.escape(suffix))
     results = []
-    for path in sorted(checkpoints_dir.glob(f"{run_prefix}-fold*/results.json")):
+    for path in sorted(checkpoints_dir.glob("*/results.json")):
+        if not dir_re.fullmatch(path.parent.name):
+            continue
         with open(path) as f:
             data = json.load(f)
         fold_id = data.get("fold_id")
@@ -188,7 +196,9 @@ def main():
         default=None,
         help=(
             "Checkpoint directory prefix to aggregate (single-variant mode, no "
-            "menu). Omit to use the interactive menu or --select."
+            "menu); unsuffixed runs only. For a suffixed group pass the key the menu "
+            "prints, '<prefix>-fold*-seed*<suffix>'. Omit to use the interactive "
+            "menu or --select."
         ),
     )
     parser.add_argument(
@@ -204,7 +214,9 @@ def main():
     if args.run_prefix is not None:
         # Single-variant mode: original behavior, bypasses the menu entirely.
         print(
-            f"Aggregating: {args.checkpoints_dir}/{args.run_prefix}-fold*/results.json\n"
+            f"Aggregating: {args.checkpoints_dir}/{args.run_prefix}"
+            + ("" if _GROUP_SEP in args.run_prefix else _GROUP_SEP)
+            + "/results.json\n"
         )
         results = load_results(args.checkpoints_dir, args.run_prefix)
         if not results:

@@ -200,6 +200,7 @@ def run_patch_agg(
     inference_batch_size: int = 64,
     aggregation: str = "vote",
     frame_cache: "FrameCache | None" = None,
+    return_breakdown: bool = False,
 ) -> dict[str, float]:
     """Evaluate a model on full frames using patch-grid aggregation.
 
@@ -228,9 +229,13 @@ def run_patch_agg(
         frame_cache: Optional FrameCache. On a hit, the read/assembly/GCN prefix
             is skipped and the cached GCN'd frame is tiled directly. A miss
             falls back to the live path, so a partially built cache is safe.
+        return_breakdown: Also return diagnostics for why the frame score moves
+            (see `_breakdown_metrics`). Off by default so callers and results.json
+            are unchanged.
 
     Returns:
-        dict with keys: ap, auc_roc, f1, threshold.
+        dict with keys: ap, auc_roc, f1, threshold (plus the breakdown keys when
+        `return_breakdown` is set).
     """
     from src.data.frame_cache import CacheMissError
     from src.preprocessing.geometry import get_assembler, get_geometry
@@ -250,6 +255,8 @@ def run_patch_agg(
 
     all_scores: list[float] = []
     all_labels: list[int] = []
+    all_vote_scores: list[float] = []
+    all_max_scores: list[float] = []
 
     for sid in session_ids:
         path = Path(session_map[sid])
@@ -364,9 +371,9 @@ def run_patch_agg(
 
             patch_scores = np.concatenate(patch_scores_list)
             n_patches = len(patch_scores)
+            vote_frac = float((patch_scores > 0.5).sum()) / max(n_patches, 1)
             if aggregation == "vote":
-                hit_count = int((patch_scores > 0.5).sum())
-                frame_score = float(hit_count) / max(n_patches, 1)
+                frame_score = vote_frac
             elif aggregation == "max":
                 frame_score = float(patch_scores.max())
             else:
@@ -374,6 +381,8 @@ def run_patch_agg(
                     f"aggregation must be 'max' or 'vote', got {aggregation!r}"
                 )
             all_scores.append(frame_score)
+            all_vote_scores.append(vote_frac)
+            all_max_scores.append(float(patch_scores.max()) if n_patches else 0.0)
             all_labels.append(int(round(float(labels_arr[frame_idx]))))
 
     if not all_scores:
@@ -383,11 +392,72 @@ def run_patch_agg(
     y_score = np.array(all_scores)
     y_true = np.array(all_labels)
     best_f1, threshold = f1_at_optimal_threshold(y_true, y_score)
-    return {
+    out = {
         "ap": average_precision(y_true, y_score),
         "auc_roc": auc_roc(y_true, y_score),
         "f1": best_f1,
         "threshold": threshold,
+    }
+    if return_breakdown:
+        out.update(
+            _breakdown_metrics(
+                y_true, np.array(all_vote_scores), np.array(all_max_scores)
+            )
+        )
+    return out
+
+
+def _tie_aware_ap(y_true: np.ndarray, y_score: np.ndarray) -> float:
+    """AP with each distinct score as one threshold (equals sklearn's average_precision_score)."""
+    order = np.argsort(-y_score, kind="stable")
+    y, sc = y_true[order], y_score[order]
+    tp = np.cumsum(y)
+    last_of_group = np.r_[sc[1:] != sc[:-1], True]
+    tp_g, n_g = tp[last_of_group], (np.arange(len(y)) + 1)[last_of_group]
+    precision, recall = tp_g / n_g, tp_g / y.sum()
+    return float(np.sum(precision * np.diff(recall, prepend=0.0)))
+
+
+def _tie_aware_auc(y_true: np.ndarray, y_score: np.ndarray) -> float:
+    """ROC AUC where tied pos/neg pairs count 0.5 (Mann-Whitney)."""
+    n_pos = int((y_true == 1).sum())
+    n_neg = len(y_true) - n_pos
+    # Midranks (tied scores share their average rank) give the Mann-Whitney U in
+    # O(n log n) memory-flat time, equal to counting tied pairs as 0.5.
+    _, inverse, counts = np.unique(y_score, return_inverse=True, return_counts=True)
+    ends = np.cumsum(counts)
+    midrank = (ends - counts + 1 + ends) / 2.0
+    ranks = midrank[inverse]
+    u = ranks[y_true == 1].sum() - n_pos * (n_pos + 1) / 2.0
+    return float(u / (n_pos * n_neg))
+
+
+def _breakdown_metrics(
+    y_true: np.ndarray, vote: np.ndarray, max_score: np.ndarray
+) -> dict[str, float]:
+    """Diagnostics for a falling validation score.
+
+    - pos_zero_vote_frac: hit frames where no tile scored > 0.5 (missed hits).
+    - neg_any_vote_frac: non-hit frames where at least one tile scored > 0.5.
+    - ap_max / auc_max: ranking quality when frames are scored by the best tile (tie-aware:
+      saturated float32 tile scores can tie at exactly 1.0, so index order must not decide).
+    - ap_vote_tieaware / auc_vote_tieaware: the vote score with tied scores treated as
+      one threshold step (sklearn's convention). Our own AP (index-order ties) and AUC
+      (positives-first ties) disagree on tied scores; a gap to these exposes it.
+    - pos_vote_mean / neg_max_mean: mean vote on hits, mean best-tile score on non-hits.
+    """
+    pos, neg = y_true == 1, y_true == 0
+    nan = float("nan")
+    both = bool(pos.any() and neg.any())
+    return {
+        "pos_zero_vote_frac": float((vote[pos] == 0).mean()) if pos.any() else nan,
+        "neg_any_vote_frac": float((vote[neg] > 0).mean()) if neg.any() else nan,
+        "ap_max": _tie_aware_ap(y_true, max_score) if both else nan,
+        "auc_max": _tie_aware_auc(y_true, max_score) if both else nan,
+        "ap_vote_tieaware": _tie_aware_ap(y_true, vote) if both else nan,
+        "auc_vote_tieaware": _tie_aware_auc(y_true, vote) if both else nan,
+        "pos_vote_mean": float(vote[pos].mean()) if pos.any() else nan,
+        "neg_max_mean": float(max_score[neg].mean()) if neg.any() else nan,
     }
 
 
