@@ -1,11 +1,12 @@
 # Careful recipe + per-epoch diagnostics (log_val_breakdown, save_epochs).
-# Identical training recipe to mae_finetune_careful.yaml; only the two diagnostic keys are added.
-# Run with --run-suffix careful-ep. Used to explain why validation peaks at epoch 1.
+# Identical training recipe to mae_finetune_careful.yaml; only the two diagnostic keys are added
+# (tests/test_ssl_model.py::TestCarefulConfigs enforces this). Run with --run-suffix careful-ep.
+# Used to explain why validation peaks at epoch 1.
 # "Careful" fine-tune recipe (MAE reference fine-tune settings, scaled for batch 32).
 # Differences from mae_finetune.yaml (the v2 recipe), all optimiser/model-side:
 #   warmup 5 ep + cosine, layer-wise LR decay 0.75, drop_path 0.1, wd 0.05 (not on norm/bias),
-#   trunc-normal head init, peak LR 1.25e-4 (= 1e-3 * 32/256 for the head/last block).
-# The data pipeline is untouched. Run with --run-suffix careful.
+#   trunc-normal head init, peak LR 1.25e-4 (= 1e-3 * 32/256, the head's LR).
+# The data pipeline is untouched.
 # Fine-tune MAE-pretrained ViT-S/16 through the unchanged asymmetric pipeline.
 model:
   backbone: mae_vit_small_patch16
@@ -23,7 +24,7 @@ ssl:
 
 training:
   epochs: 50               # cosine decays towards 0 (residual ~0.001) over this horizon
-  learning_rate: 1.25e-4   # peak LR (head/last block); earlier blocks scaled by layer_decay^depth
+  learning_rate: 1.25e-4   # peak LR (head and final norm); the last block gets layer_decay^1, block 0 layer_decay^12, embeddings layer_decay^13
   weight_decay: 0.05
   warmup_epochs: 5
   lr_schedule: cosine

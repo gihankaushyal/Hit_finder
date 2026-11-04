@@ -64,6 +64,26 @@ SPLIT_DIR = Path("checkpoints") / "asymmetric_splits"
 RUN_SUFFIX_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
 
 
+def non_default_recipe_keys(cfg: dict) -> list[str]:
+    """Names of recipe/diagnostic settings that differ from the v2 fine-tune defaults.
+
+    A run that sets any of these must carry a --run-suffix, otherwise it would write into
+    (or, with --override-training, delete) the directory of the genuine v2 run.
+    """
+    training, ssl = cfg.get("training", {}), cfg.get("ssl", {})
+    checks = {
+        "warmup_epochs": training.get("warmup_epochs", 0) != 0,
+        "lr_schedule": training.get("lr_schedule", "constant") != "constant",
+        "layer_decay": training.get("layer_decay", 1.0) != 1.0,
+        "wd_skip_norm_bias": bool(training.get("wd_skip_norm_bias", False)),
+        "log_val_breakdown": bool(training.get("log_val_breakdown", False)),
+        "save_epochs": bool(training.get("save_epochs")),
+        "drop_path_rate": ssl.get("drop_path_rate", 0.0) != 0.0,
+        "head_init": ssl.get("head_init", "default") != "default",
+    }
+    return [k for k, differs in checks.items() if differs]
+
+
 def check_head_checkpoint(path: str | Path) -> None:
     """Fail before any setup (and before --override-training deletes a run) on a bad head file."""
     from src.models.ssl import HEAD_KEYS
@@ -275,6 +295,12 @@ def main() -> None:
         check_head_checkpoint(args.head_checkpoint)
 
     cfg = load_config(args.config)
+    recipe_keys = non_default_recipe_keys(cfg)
+    if recipe_keys and not args.run_suffix:
+        p.error(
+            f"{args.config} sets non-default recipe keys ({', '.join(recipe_keys)}); pass "
+            "--run-suffix (e.g. careful) so the run cannot collide with a real v2 run"
+        )
     if args.run_suffix is not None:
         # argparse reads a value starting with "-" as a flag, so accept "lpft" and add the dash.
         suffix = args.run_suffix.lstrip("-")

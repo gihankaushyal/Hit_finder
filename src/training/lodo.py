@@ -8,6 +8,7 @@ reuse the same loop without duplication.
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Callable
 from pathlib import Path
 
@@ -418,6 +419,8 @@ def _train_fold(
                     )
                 )
             if epoch in save_epochs:
+                snap_path = ckpt_path.parent / f"epoch{epoch}.pt"
+                snap_tmp = snap_path.with_name(snap_path.name + ".tmp")
                 torch.save(
                     {
                         "epoch": epoch,
@@ -426,8 +429,10 @@ def _train_fold(
                         "backbone": backbone,
                         "num_classes": cfg["model"]["num_classes"],
                     },
-                    ckpt_path.parent / f"epoch{epoch}.pt",
+                    snap_tmp,
                 )
+                # Atomic rename: a preempted job never leaves a truncated epochN.pt behind.
+                os.replace(snap_tmp, snap_path)
 
             if not np.isnan(val_m["f1"]) and val_m["f1"] > best_f1:
                 best_f1 = val_m["f1"]

@@ -397,6 +397,35 @@ class TestFineTuneCliGuards:
             assert self._run(monkeypatch, "--pretrain-checkpoint", "x.pt",
                              "--run-suffix", bad) == 2  # fmt: skip
 
+    def test_recipe_config_requires_run_suffix(self, monkeypatch):
+        import sys
+
+        from src.training import train_ssl_finetune
+
+        argv = [
+            "x", "--config", "configs/ssl/mae_finetune_careful.yaml", "--fold", "4",
+            "--run-name-prefix", "vits16-mae-finetune-v2",
+            "--pretrain-checkpoint", "x.pt",
+        ]  # fmt: skip
+        monkeypatch.setattr(sys, "argv", argv)
+        with pytest.raises(SystemExit) as e:
+            train_ssl_finetune.main()
+        assert e.value.code == 2
+
+    def test_default_v2_config_has_no_recipe_keys(self):
+        from src.training.train_ssl_finetune import non_default_recipe_keys
+        from src.utils.config import load_config
+
+        assert (
+            non_default_recipe_keys(load_config("configs/ssl/mae_finetune.yaml")) == []
+        )
+        careful = non_default_recipe_keys(
+            load_config("configs/ssl/mae_finetune_careful.yaml")
+        )
+        assert {"warmup_epochs", "lr_schedule", "layer_decay", "drop_path_rate"} <= set(
+            careful
+        )
+
     def test_partial_head_checkpoint_is_rejected(self, tmp_path):
         from src.models.ssl import build_ssl_classifier
 
@@ -408,3 +437,20 @@ class TestFineTuneCliGuards:
         )
         with pytest.raises(RuntimeError, match="head keys"):
             build_ssl_classifier(cfg, head_checkpoint=tmp_path / "h.pt")
+
+
+class TestCarefulConfigs:
+    def test_diag_config_differs_only_in_diagnostic_keys(self):
+        import yaml
+
+        def load(name):
+            with open(f"configs/ssl/{name}") as f:
+                return yaml.safe_load(f)
+
+        base, diag = load("mae_finetune_careful.yaml"), load(
+            "mae_finetune_careful_diag.yaml"
+        )
+        extra = {"log_val_breakdown", "save_epochs"}
+        assert set(diag["training"]) - set(base["training"]) == extra
+        diag["training"] = {k: v for k, v in diag["training"].items() if k not in extra}
+        assert diag == base
