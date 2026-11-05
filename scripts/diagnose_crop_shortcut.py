@@ -49,6 +49,7 @@ import torch
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.data.dataset import (  # noqa: E402
+    HARD_NEG_MARGIN_DEFAULT,
     POSITIVE_JITTER_EDGE_PAD,
     _crop_within_margin,
     _load_gcn_frame,
@@ -71,7 +72,9 @@ from src.training.lodo import build_sessions  # noqa: E402
 from src.utils.config import load_config  # noqa: E402
 
 CROP = 224
-HARD_NEG_MARGIN = 50
+HARD_NEG_MARGIN = (
+    HARD_NEG_MARGIN_DEFAULT  # shared with training so the two cannot drift
+)
 # Peak distance from the crop centre (px) for the offset sweep. The per-axis clip to
 # [JITTER_EDGE_PAD, CROP - JITTER_EDGE_PAD - 1] allows at most 79 px along an axis, so the
 # "80" arm is 79 px for near-axis-aligned directions and a full 80 px on diagonals.

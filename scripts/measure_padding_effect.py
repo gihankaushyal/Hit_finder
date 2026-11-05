@@ -186,6 +186,11 @@ def main() -> None:
         labels_out.append(label)
 
     y = np.asarray(labels_out)
+    if len(np.unique(y)) < 2:
+        raise SystemExit(
+            f"need hits and non-hits among the scored frames, got {len(y)} frames with "
+            f"classes {np.unique(y).tolist()}; raise --max-frames"
+        )
     result = {
         "checkpoint": args.checkpoint,
         "fold": args.fold,

@@ -36,7 +36,7 @@ module load mamba/latest
 # with no conda env active.
 source activate sfx-hitfinder
 mkdir -p logs "${STATS_DIR}" "${PAD_DIR}"
-N_OK=0; N_SKIP=0; N_FAIL=0
+N_OK=0; N_PAD_OK=0; N_SKIP=0; N_FAIL=0
 
 run() {  # run <label> <command...>: count success/failure without aborting the job
     local label="$1"; shift
@@ -63,14 +63,17 @@ for FOLD in ${FOLDS}; do
             N_SKIP=$((N_SKIP + 1))
             continue
         fi
+        OK_BEFORE=${N_OK}
         run "padding effect fold ${FOLD} ${ARM}" python -u scripts/measure_padding_effect.py \
             --arch "${ARCH}" --config "${CONFIG}" --checkpoint "${CKPT}" --fold "${FOLD}" \
             --max-frames "${MAX_FRAMES}" --out "${PAD_DIR}/fold${FOLD}_${ARM}_${RUN_VERSION}.json"
+        N_PAD_OK=$((N_PAD_OK + N_OK - OK_BEFORE))
     done
 done
 
 echo "[done] ran=${N_OK} skipped=${N_SKIP} failed=${N_FAIL}; results in ${STATS_DIR}/ and ${PAD_DIR}/"
-# A job that did nothing, or lost a step, must not show up as COMPLETED.
-if [ "${N_OK}" -eq 0 ] || [ "${N_FAIL}" -gt 0 ]; then
+# A job that did nothing, or lost a step, must not show up as COMPLETED. The crop-stats
+# runs succeed on their own, so count the padding-effect steps separately.
+if [ "${N_PAD_OK}" -eq 0 ] || [ "${N_FAIL}" -gt 0 ]; then
     exit 1
 fi
