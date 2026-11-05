@@ -30,6 +30,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.data.dataset import (  # noqa: E402
+    CROP_SIZE,
     HARD_NEG_MARGIN_DEFAULT as HARD_NEG_MARGIN,
     POSITIVE_JITTER_EDGE_PAD,
     _crop_bounds,
@@ -44,15 +45,15 @@ from src.evaluation.benchmark import (  # noqa: E402
 )
 from src.hitfinders import get_hitfinder  # noqa: E402
 from src.preprocessing.augment import PAD_BORDER_DEFAULT, pad_border  # noqa: E402
-from src.preprocessing.io import (
+from src.preprocessing.io import (  # noqa: E402
     read_detector_description,
     read_embedded_labels,
-)  # noqa: E402
+)
 from src.training.lodo import build_sessions  # noqa: E402
 from src.utils.config import load_config  # noqa: E402
 
-CROP = 224
-HARD_NEG_TRIES = 50
+CROP = CROP_SIZE
+HARD_NEG_TRIES = 50  # dataset default; main() uses asymmetric.hard_neg_max_attempts
 PEAK_BINS = ((1, 1), (2, 2), (3, 4), (5, 10**9))
 # channels of the stacked map the crop helpers cut from
 _VALID, _INFRAME, _ROW, _COL = range(4)
@@ -92,7 +93,11 @@ def peaks_in_window(centroids: np.ndarray, top: int, left: int) -> int:
 
 
 def frame_crop_stats(
-    valid_mask: np.ndarray, centroids: np.ndarray, rng: np.random.Generator, draws: int
+    valid_mask: np.ndarray,
+    centroids: np.ndarray,
+    rng: np.random.Generator,
+    draws: int,
+    tries: int = HARD_NEG_TRIES,
 ) -> dict[str, dict[str, list]]:
     """Per-mode lists of (valid_frac, pad_frac, n_peaks) for one frame.
 
@@ -122,7 +127,7 @@ def frame_crop_stats(
                 pw,
                 CROP,
                 HARD_NEG_MARGIN,
-                HARD_NEG_TRIES,
+                tries,
                 bounds,
             )
             if crop is not None:
@@ -188,6 +193,7 @@ def main() -> None:
 
     cfg = load_config(args.config)
     rng = np.random.default_rng(args.seed)
+    tries = cfg.get("asymmetric", {}).get("hard_neg_max_attempts", HARD_NEG_TRIES)
     hitfinder = get_hitfinder(cfg)
     sessions, session_map = build_sessions(cfg["lodo"])
     fold = next(f for f in build_lodo_folds() if f["fold_id"] == args.fold)
@@ -226,7 +232,7 @@ def main() -> None:
                 continue
             n_used += 1
             for mode, d in frame_crop_stats(
-                valid_mask, centroids, rng, args.draws
+                valid_mask, centroids, rng, args.draws, tries
             ).items():
                 acc.setdefault(mode, []).extend(d["rows"])
                 failed[mode] = failed.get(mode, 0) + d.get("failed", 0)

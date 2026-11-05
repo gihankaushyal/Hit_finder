@@ -18,7 +18,12 @@ import torch
 import torch.nn as nn
 
 from src.data.dataloader import asymmetric_loader
-from src.data.dataset import POSITIVE_JITTER_EDGE_PAD, POSITIVE_JITTER_NONE
+from src.data.dataset import (
+    CROP_SIZE,
+    POSITIVE_JITTER_EDGE_PAD,
+    POSITIVE_JITTER_NONE,
+    POSITIVE_JITTERS,
+)
 from src.data.frame_cache import FrameCache, verify_cache_or_raise
 from src.evaluation.benchmark import (
     SPLIT_CROSS_DETECTOR,
@@ -142,6 +147,31 @@ def _write_inference_summary(
             wandb.finish()
     except Exception as exc:  # the local result file is already written
         print(f"  [wandb] could not record the inference summary: {exc!r}")
+
+
+def check_crop_options(cfg: dict) -> None:
+    """Validate the crop-placement keys and demand a run suffix when they are non-default.
+
+    Called by both entry points right after the config is loaded, i.e. before the checkpoint
+    collision gate can rotate or delete a run directory.
+    """
+    asym = cfg.get("asymmetric", {})
+    jitter = asym.get("positive_jitter", POSITIVE_JITTER_NONE)
+    pad = asym.get("jitter_edge_pad", POSITIVE_JITTER_EDGE_PAD)
+    if jitter not in POSITIVE_JITTERS:
+        raise ValueError(
+            f"asymmetric.positive_jitter must be one of {POSITIVE_JITTERS}, got {jitter!r}"
+        )
+    if not 0 <= pad < CROP_SIZE // 2:
+        raise ValueError(
+            f"asymmetric.jitter_edge_pad must be in [0, {CROP_SIZE // 2}), got {pad}"
+        )
+    require_run_suffix_for_crop_options(
+        jitter,
+        bool(asym.get("crop_within_frame", False)),
+        cfg.get("wandb", {}).get("run_suffix", ""),
+        "the v2 baseline run",
+    )
 
 
 def require_run_suffix_for_crop_options(

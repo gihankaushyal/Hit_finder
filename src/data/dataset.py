@@ -49,7 +49,7 @@ POSITIVE_JITTER_NONE = "none"
 POSITIVE_JITTER_UNIFORM = "uniform"
 POSITIVE_JITTERS = (POSITIVE_JITTER_NONE, POSITIVE_JITTER_UNIFORM)
 POSITIVE_JITTER_EDGE_PAD = 32
-_CROP_SIZE = 224
+CROP_SIZE = 224
 # Clearance (px) between a hard-negative crop and every Bragg peak; shared with the scripts
 # that measure or probe the negative sampler.
 HARD_NEG_MARGIN_DEFAULT = 50
@@ -529,9 +529,9 @@ class AsymmetricCXIDataset(Dataset):
             raise ValueError(
                 f"positive_jitter must be one of {POSITIVE_JITTERS}, got {positive_jitter!r}"
             )
-        if not 0 <= jitter_edge_pad < _CROP_SIZE // 2:
+        if not 0 <= jitter_edge_pad < CROP_SIZE // 2:
             raise ValueError(
-                f"jitter_edge_pad must be in [0, {_CROP_SIZE // 2}), got {jitter_edge_pad}"
+                f"jitter_edge_pad must be in [0, {CROP_SIZE // 2}), got {jitter_edge_pad}"
             )
         self._positive_jitter = positive_jitter
         self._jitter_edge_pad = jitter_edge_pad
@@ -744,7 +744,7 @@ class AsymmetricCXIDataset(Dataset):
             _epoch_seed(self._seed, self._epoch, idx, len(self))
         )
 
-        _CROP = _CROP_SIZE
+        _CROP = CROP_SIZE
 
         # Each draw can independently fail (Path B rejection-sampling exhausts
         # max_tries); retry failed draws rather than skipping them, so an item

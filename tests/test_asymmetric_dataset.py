@@ -869,3 +869,24 @@ def test_crop_options_require_a_run_suffix() -> None:
     for jitter, within in (("uniform", False), ("none", True), ("uniform", True)):
         with pytest.raises(ValueError, match="baseline directory"):
             check(jitter, within, "", "resnet18-asymmetric-v2-fold4-seed42")
+
+
+def test_check_crop_options_validates_values_and_demands_a_suffix() -> None:
+    from src.training.lodo import check_crop_options
+
+    check_crop_options({})  # defaults: nothing to check
+    check_crop_options(
+        {
+            "asymmetric": {"positive_jitter": "uniform"},
+            "wandb": {"run_suffix": "-jitter"},
+        }
+    )
+    bad = [
+        {"asymmetric": {"positive_jitter": "uniformm"}, "wandb": {"run_suffix": "-j"}},
+        {"asymmetric": {"jitter_edge_pad": 120}, "wandb": {"run_suffix": "-j"}},
+        {"asymmetric": {"crop_within_frame": True}},  # no suffix
+        {"asymmetric": {"positive_jitter": "uniform"}, "wandb": {"run_suffix": ""}},
+    ]
+    for cfg in bad:
+        with pytest.raises(ValueError):
+            check_crop_options(cfg)

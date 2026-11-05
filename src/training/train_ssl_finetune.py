@@ -52,7 +52,7 @@ from src.models.ssl import (
     build_ssl_classifier,
 )
 from src.training.recipe import DEFAULT_LAYER_DECAY, DEFAULT_WARMUP_EPOCHS, LR_CONSTANT
-from src.training.lodo import _train_fold, build_sessions
+from src.training.lodo import _train_fold, build_sessions, check_crop_options
 from src.training.run_naming import (
     SSL_FINETUNE_CONVENTION,
     SSL_FINETUNE_EXAMPLE,
@@ -353,6 +353,10 @@ def main() -> None:
         # argparse reads a value starting with "-" as a flag, so accept "lpft" and add the dash.
         suffix = args.run_suffix.lstrip("-")
         cfg.setdefault("wandb", {})["run_suffix"] = f"-{suffix}"
+    try:
+        check_crop_options(cfg)
+    except ValueError as e:
+        p.error(str(e))
 
     validate_run_name_prefix(
         args.run_name_prefix,
