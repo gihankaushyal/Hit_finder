@@ -145,7 +145,7 @@ Crop positions are re-seeded per epoch: `set_epoch(epoch)` folds the epoch into 
 
 ## Stage 6 — Model + Vote Aggregation + Evaluation
 
-**Training:** `src/training/lodo.py` → `_train_fold()`, which calls `src/training/train_supervised.py` → `train_one_epoch(model, loader, optimizer, device)` each epoch.
+**Training:** `src/training/lodo.py` → `_train_fold()`, which calls `src/training/train_supervised.py` → `train_one_epoch(model, loader, optimizer, criterion, device)` each epoch.
 
 **Inference:** `src/evaluation/benchmark.py` → `run_patch_agg(model, session_map, session_ids, label_key, patch_size=224, patch_stride=224, aggregation="vote", …)`
 

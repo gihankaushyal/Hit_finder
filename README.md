@@ -199,6 +199,7 @@ MAE pretraining (400 epochs) on pooled unlabeled frames, then either full fine-t
 | 4 | Eiger4M | 0.8913 | 0.9707 |
 
 - **v2 comparison:** the three `-v2` arms ran on the frame cache like Track 1 v2. The linear probe (0.962) is the best arm and its spread across detectors is the smallest (±0.024); the fine-tune (0.858) trails the supervised ResNet18 v2 (0.900) on the mean. The `-v2` encoders were pretrained in October 2026, after the crop-diversity fix (PR #34).
+- **Fine-tune recipe variants (single seed, `-v2` encoders):** a careful fine-tune recipe (`src/training/recipe.py`: warmup, cosine schedule, layer-wise lr decay, drop-path, no weight decay on norm/bias, truncated-normal head init; `configs/ssl/mae_finetune_careful.yaml`) lifts the fine-tune mean cross AP from 0.858 to 0.922 ± 0.052, and LP-FT (probe head first, then fine-tune) gives 0.915 ± 0.040. The probe (0.962) still leads. A crop-position diagnostic (`scripts/diagnose_crop_shortcut.py`) shows full fine-tuning becomes sensitive to where in the crop the Bragg peak sits, which the frozen-encoder probe is not. Details and the other variants (probe on earlier pretrain snapshots, random-init encoder) → [docs/detailed_notes.md](docs/detailed_notes.md).
 - Per-fold detail → [docs/detailed_notes.md#track-2--self-supervised-mae-vit-s16](docs/detailed_notes.md#track-2--self-supervised-mae-vit-s16)
 
 ## Setup
@@ -224,7 +225,7 @@ python -c "import torch; print(torch.cuda.is_available(), torch.version.cuda)"
 **Supported image formats:** `.h5` / `.cxi` (HDF5, multi-panel detectors via Reborn) and `.img` (ADSC/MAR, pre-assembled, read via fabio).
 
 ```bash
-# Run tests (699 tests; CI runs black --check, then pytest)
+# Run tests (724 tests; CI runs black --check, then pytest)
 pytest tests/ -v
 
 # Check formatting before committing
@@ -248,8 +249,9 @@ python -u -m src.training.train_ssl_finetune --config configs/ssl/mae_finetune.y
 python -m src.training.train_asymmetric --config configs/supervised/resnet18_asymmetric.yaml \
     --run-name-prefix resnet18-asymmetric-v2 --folds 2 --inference-only
 
-# Summarize finished folds
+# Summarize finished folds (interactive menu; --select all prints every run group, --run-prefix one unsuffixed prefix)
 python scripts/aggregate_lodo_results.py
+python scripts/aggregate_lodo_results.py --select all
 ```
 
 **Frame cache** (optional, enabled by the `cache:` block in a run config): caches the read → assemble → hitfinder → GCN prefix so it runs once per frame rather than once per epoch.

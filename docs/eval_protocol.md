@@ -1,6 +1,6 @@
 # Cross-Detector Leave-One-Detector-Out Benchmark Protocol
 
-**Version:** 2.1 — Phase 5 update (2026-10-29); originally 1.0, Phase 1 finalization
+**Version:** 2.2 — Phase 5 update (2026-11-05); originally 1.0, Phase 1 finalization
 **Original design:** `docs/superpowers/plans/2026-05-13-benchmark-protocol.md` (the design spec file is no longer in the repo)
 **Implementation:** `src/evaluation/benchmark.py` (splits, patch aggregation, metrics), `src/training/lodo.py` (fold loop, sessions), `src/training/inference_results.py` (result files)
 
@@ -80,8 +80,13 @@ class imbalance. SFX hit rates can be as low as 5%.
 | AUC-ROC | Ranking quality, full threshold range |
 | F1 at optimal threshold | Single operating-point summary; the F1-maximizing threshold over all unique scores **of the evaluated split itself** is returned with it (`threshold`). This is an optimistic, best-case operating point (on `cross`, it uses the held-out detector's labels); AP and AUC-ROC do not depend on a threshold |
 
-`run_on_loader` and `run_patch_agg` return exactly four values: `ap`, `auc_roc`,
-`f1` and `threshold`. Precision and recall at the operating point are **not**
+`run_on_loader` and `run_patch_agg` return four values by default: `ap`, `auc_roc`,
+`f1` and `threshold`. `run_patch_agg(..., return_breakdown=True)` (used when
+`training.log_val_breakdown` is set) adds `pos_zero_vote_frac`, `neg_any_vote_frac`,
+`ap_max`, `auc_max`, `ap_vote_tieaware`, `auc_vote_tieaware`, `pos_vote_mean` and
+`neg_max_mean`. Ties: `average_precision` orders tied scores by sample index and
+`auc_roc` puts tied positives first, so the two can disagree on discrete vote scores;
+`ap_max` / `auc_max` and the `*_tieaware` keys treat tied scores as one group. Precision and recall at the operating point are **not**
 computed by the current code.
 
 All headline metrics are **frame-level**. Both are computed twice per fold: on
@@ -144,11 +149,11 @@ overwritten, and logs `inference/threshold` and
 (`src/training/inference_results.py`).
 
 `python scripts/aggregate_lodo_results.py` collects finished folds into
-per-variant tables (interactive menu, `--select`, or `--run-prefix`).
+per-variant tables, grouping runs by (prefix, suffix) (interactive menu, `--select`, or `--run-prefix`).
 
 ## Run Identity
 
-Every run uses a required, versioned `--run-name-prefix` (`src/training/run_naming.py`);
+Every run uses a required, versioned `--run-name-prefix` (`src/training/run_naming.py`) and an optional run suffix that names a recipe variant (`--run-suffix` on `train_ssl_finetune.py`, `wandb.run_suffix` in the config for Track 1; `checkpoints/<prefix>-fold<N>-seed<S><suffix>/`);
 results from different generations (e.g. `resnet18-asymmetric` vs
 `resnet18-asymmetric-v2`, `mae-vits16` vs `mae-vits16-v2`) must never be mixed in one
 table. An existing checkpoint under the resolved name requires `--resume-training`

@@ -24,7 +24,7 @@ Auto-generated from the live codebase. Thicker clusters are tighter communities;
 
 ![Module Dependency Graph](../assets/module-graph-curated.svg)
 
-> **For function-level exploration with pan/zoom/search** — open `graphify-out/graph.html` (generated locally by `graphify update .`, not tracked in git) in a browser (3326 nodes, 6757 edges, 236 communities as of 2026-10-29; the graph also covers `dashboard/` and `tests/`, so counts are larger than for `src/` alone). The static image above is a curated older snapshot.
+> **For function-level exploration with pan/zoom/search** — open `graphify-out/graph.html` (generated locally by `graphify update .`, not tracked in git) in a browser (3391 nodes, 6900 edges, 238 communities as of 2026-11-05; the graph also covers `dashboard/` and `tests/`, so counts are larger than for `src/` alone). The static image above is a curated older snapshot.
 
 ---
 
@@ -43,16 +43,16 @@ Run naming, the resume/override gate, W&B run identity and the frame cache are c
 
 ## God Nodes (most-connected — highest blast radius)
 
-If you touch these, run the full test suite. Edge counts are from the graph rebuilt on 2026-10-29 (`graphify-out/GRAPH_REPORT.md`) and include test and script usages. The table lists `src/` symbols only; the whole-graph top 10 also contains `_make_run_dir()` (a test helper in `tests/test_run_naming.py`, 38 edges) and the dashboard's `EventBus` (33), `Config` (31) and `useResource()` (30).
+If you touch these, run the full test suite. Edge counts are from the graph rebuilt on 2026-11-05 (`graphify-out/GRAPH_REPORT.md`) and include test and script usages. The table lists `src/` symbols only; the whole-graph top 10 also contains `_make_run_dir()` (a test helper in `tests/test_run_naming.py`, 38 edges) and the dashboard's `EventBus` (33), `Config` (31) and `useResource()` (30).
 
 | Symbol | File | Edges |
 |--------|------|-------|
 | `FrameCache` | `src/data/frame_cache.py` | 46 |
 | `AsymmetricCXIDataset` | `src/data/dataset.py` | 41 |
 | `check_checkpoint_collisions()` | `src/training/run_naming.py` | 40 |
-| `load_config()` | `src/utils/config.py` | 40 |
+| `load_config()` | `src/utils/config.py` | 42 |
 | `MockHitfinder` | `src/hitfinders/base.py` | 36 |
-| `run_patch_agg()` | `src/evaluation/benchmark.py` | 31 |
+| `run_patch_agg()` | `src/evaluation/benchmark.py` | 32 |
 | `get_hitfinder()` | `src/hitfinders/__init__.py` | 27 |
 | `lcn()` | `src/preprocessing/normalize.py` | 26 |
 | `get_geometry()` | `src/preprocessing/geometry.py` | 24 |

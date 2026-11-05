@@ -146,7 +146,7 @@ Track 2 adds a self-supervised pretraining stage to initialize representations f
 
 **Orchestration:** `scripts/submit_ssl_pretrain_all.sh` and `scripts/submit_ssl_finetune_all.sh` stage the CXI files on local NVMe, train each fold, then clean up (`stage_ssl_data.sh`, `cleanup_ssl_stage.sh`).
 
-> **Status (2026-10-29):** The September 2026 generation completed fine-tune on 4/4 folds (mean cross AP 0.836) and linear probe on 3/4 folds (0.829; the fold-2 probe was cancelled). The rerun under the current run-naming standard (`mae-vits16-v2`) has finished 4/4 folds for both heads: fine-tune 0.858 ± 0.060 and linear probe 0.962 ± 0.024 mean cross AP. Results and caveats → [detailed_notes.md](detailed_notes.md).
+> **Status (2026-11-05):** The September 2026 generation completed fine-tune on 4/4 folds (mean cross AP 0.836) and linear probe on 3/4 folds (0.829; the fold-2 probe was cancelled). The rerun under the current run-naming standard (`mae-vits16-v2`) has finished 4/4 folds for both heads: fine-tune 0.858 ± 0.060 and linear probe 0.962 ± 0.024 mean cross AP. Single-seed recipe experiments on the `-v2` encoders (careful fine-tune recipe, LP-FT, probes on earlier pretrain snapshots, random-init encoder) are documented in the detailed notes: the careful recipe reaches 0.922 ± 0.052 and LP-FT 0.915 ± 0.040. The careful recipe lives in `src/training/recipe.py` (warmup + cosine schedule, layer-wise lr decay, drop-path, no weight decay on norm/bias, truncated-normal head init) and is selected by config (`configs/ssl/mae_finetune_careful.yaml`); `train_ssl_finetune.py` also takes `--run-suffix`, `--random-init` and `--head-checkpoint` (LP-FT head, with a fold-leak check), and `training.save_epochs` writes atomic `epochN.pt` snapshots. Results and caveats → [detailed_notes.md](detailed_notes.md).
 
 ---
 
@@ -205,16 +205,16 @@ Metrics are computed at the frame level after vote aggregation:
 | **AUC-ROC** | Ranking quality across full threshold range |
 | **F1 at optimal threshold** | Single operating-point summary |
 
-AP uses sklearn-compatible stable sort with pessimistic ordering (tied positives are not promoted). See `src/evaluation/metrics.py` for implementations and `src/evaluation/benchmark.py` for the LODO orchestration.
+Ties are not handled alike: `average_precision` sorts by a stable argsort reversed, so tied scores are ordered by sample index (not sklearn's tie-grouped AP), while `auc_roc` puts tied positives first. Vote scores are a small set of discrete fractions, so ties are common; `run_patch_agg(return_breakdown=True)` therefore also reports tie-aware AP/AUC (`ap_vote_tieaware`, `auc_vote_tieaware`) next to the headline numbers. See `src/evaluation/metrics.py` for implementations and `src/evaluation/benchmark.py` for the LODO orchestration.
 
 ### Run lifecycle
 
-- **Naming:** every run takes a required, versioned `--run-name-prefix`; the checkpoint directory is `checkpoints/<prefix>-fold<N>-seed<S>/`. An existing `best.pt` under the resolved name stops the run unless `--resume-training` or `--override-training` is given (`src/training/run_naming.py`).
+- **Naming:** every run takes a required, versioned `--run-name-prefix`; the checkpoint directory is `checkpoints/<prefix>-fold<N>-seed<S><run_suffix>/` (the suffix, e.g. `-careful`, is empty for the default recipe; `train_ssl_finetune.py` takes it as `--run-suffix`, Track 1 as `wandb.run_suffix`, and only `train_ssl_finetune.py` enforces it for non-default recipes, `--random-init` and `--head-checkpoint`). An existing `best.pt` under the resolved name stops the run unless `--resume-training` or `--override-training` is given (`src/training/run_naming.py`).
 - **Override once per SLURM job:** after an override deletes the old checkpoint, `override_applied.json` records the job id and restart count (`override_marker.py`), so a requeued job resumes instead of overriding again and destroying the new attempt's checkpoint.
 - **W&B identity:** each override attempt logs to a new run id (`<run>`, `<run>-o2`, …) stored in `<run_dir>/wandb_id.txt`; the superseded run is tagged `overridden` (`wandb_identity.py`).
 - **Results:** each fold writes `results.json` with `fold_id`, `test_detector`, `inference_threshold` and `cross` / `in_domain` blocks (`ap`, `auc_roc`, `f1`, `threshold`); newer runs also carry a `training` block (e.g. `configured_epochs`, `last_epoch`, `best_epoch`, `early_stopped`).
 - **Inference-only:** `--inference-only` (Track 1 and SSL fine-tune/probe) re-evaluates `best.pt` without training. It writes `results.json` if none exists, otherwise `results.inference.json`, and logs `inference/*` summaries to W&B (`inference_results.py`).
-- **Aggregation:** `python scripts/aggregate_lodo_results.py` collects finished folds into per-variant tables.
+- **Aggregation:** `python scripts/aggregate_lodo_results.py` collects finished folds into per-variant tables, grouping runs by (prefix, suffix).
 
 ---
 
