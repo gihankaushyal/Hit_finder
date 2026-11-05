@@ -1,6 +1,7 @@
 # Positive-jitter variant of resnet18_asymmetric.yaml: identical except the three
-# asymmetric.* crop keys below and wandb.run_suffix. Used with
-#   CONFIG=configs/supervised/resnet18_asymmetric_jitter.yaml sbatch scripts/submit_asymmetric_lodo_fold.sh <fold> resnet18-asymmetric-v2
+# asymmetric.* crop keys, wandb.run_suffix and training.log_val_breakdown (extra val/* metrics
+# only: no extra training passes, no RNG use). Used with
+#   TRAIN_CONFIG=configs/supervised/resnet18_asymmetric_jitter.yaml sbatch scripts/submit_asymmetric_lodo_fold.sh <fold> resnet18-asymmetric-v2
 model:
   backbone: resnet18
   pretrained: true

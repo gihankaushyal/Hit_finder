@@ -33,3 +33,10 @@ def test_rescore_reports_every_threshold_and_dropped_tiles():
         > out["valid>=0.5"]["mean_tiles_dropped"]
     )
     assert all(0.0 <= m["ap_tieaware"] <= 1.0 for m in out.values())
+
+
+def test_frame_smaller_than_a_tile_is_skipped_not_fatal():
+    import torch
+
+    small = np.zeros((100, 100), dtype=np.float32)
+    assert mpe.score_frame(torch.nn.Identity(), small, small > 0, "cpu") is None

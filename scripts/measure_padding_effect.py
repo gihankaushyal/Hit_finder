@@ -92,9 +92,11 @@ def rescore(
 @torch.no_grad()
 def score_frame(
     model: torch.nn.Module, gcn_frame: np.ndarray, valid_mask: np.ndarray, device: str
-) -> tuple[np.ndarray, np.ndarray]:
-    """P(hit) and valid-pixel fraction of every stride-224 tile of one frame."""
+) -> tuple[np.ndarray, np.ndarray] | None:
+    """P(hit) and valid-pixel fraction of every stride-224 tile of one frame (None if no tile fits)."""
     tiles = patch_grid(gcn_frame, PATCH, PATCH)
+    if not tiles:  # frame smaller than a tile: run_patch_agg skips it too
+        return None
     masks = patch_grid(valid_mask, PATCH, PATCH)
     x = lcn_torch(
         torch.from_numpy(np.stack(tiles)).to(device),
@@ -174,7 +176,11 @@ def main() -> None:
         gcn_frame, valid_mask, _ = _load_gcn_frame(
             path, idx, desc, geom_cache, None, holder  # peaks are not needed here
         )
-        s, v = score_frame(model, gcn_frame, valid_mask, device)
+        scored = score_frame(model, gcn_frame, valid_mask, device)
+        if scored is None:
+            print(f"  skipping {path} frame {idx}: no complete tile")
+            continue
+        s, v = scored
         tile_scores.append(s)
         tile_valid.append(v)
         labels_out.append(label)

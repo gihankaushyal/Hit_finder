@@ -144,6 +144,20 @@ def _write_inference_summary(
         print(f"  [wandb] could not record the inference summary: {exc!r}")
 
 
+def require_run_suffix_for_crop_options(
+    positive_jitter: str, crop_within_frame: bool, run_suffix: str, baseline_name: str
+) -> None:
+    """A run with a non-default crop distribution must not share the baseline's directory."""
+    if (
+        positive_jitter != POSITIVE_JITTER_NONE or crop_within_frame
+    ) and not run_suffix:
+        raise ValueError(
+            "positive_jitter / crop_within_frame are set but wandb.run_suffix is empty; the run "
+            f"would resolve to the baseline directory {baseline_name}. "
+            "Set a run suffix (e.g. -jitter)."
+        )
+
+
 def _train_fold(
     fold: dict,
     split_artifact: dict,
@@ -234,6 +248,12 @@ def _train_fold(
         "jitter_edge_pad", POSITIVE_JITTER_EDGE_PAD
     )
     crop_within_frame = cfg.get("asymmetric", {}).get("crop_within_frame", False)
+    require_run_suffix_for_crop_options(
+        positive_jitter,
+        crop_within_frame,
+        run_suffix,
+        f"{prefix}-fold{fold_id}-seed{seed}",
+    )
     print(
         f"  crops: hit_frac={hit_frac} crops_per_frame={crops_per_frame} "
         f"positive_jitter={positive_jitter} jitter_edge_pad={jitter_edge_pad} "

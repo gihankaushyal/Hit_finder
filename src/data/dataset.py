@@ -50,6 +50,9 @@ POSITIVE_JITTER_UNIFORM = "uniform"
 POSITIVE_JITTERS = (POSITIVE_JITTER_NONE, POSITIVE_JITTER_UNIFORM)
 POSITIVE_JITTER_EDGE_PAD = 32
 _CROP_SIZE = 224
+# Clearance (px) between a hard-negative crop and every Bragg peak; shared with the scripts
+# that measure or probe the negative sampler.
+HARD_NEG_MARGIN_DEFAULT = 50
 
 # 1_000_003 is prime, chosen so the seed/epoch/idx components of the formula
 # below don't alias into each other's ranges.
@@ -241,7 +244,10 @@ def _path_a_crop(
             uniformly in [jitter_edge_pad, size - jitter_edge_pad) on each axis.
         bounds: Inclusive (top_min, top_max, left_min, left_max) window limits (see
             `_crop_bounds`); None allows the whole padded canvas. The window is clipped
-            to these limits, which keeps the peak inside the crop.
+            to these limits, which keeps the peak inside the crop. Near a limit (a peak
+            within `jitter_edge_pad` px of the real frame edge under `within_frame`) the
+            clip wins over the jitter, so the peak can sit closer to the crop border than
+            `jitter_edge_pad`.
 
     Returns:
         (crop, label) where label is always 1.
@@ -536,7 +542,7 @@ class AsymmetricCXIDataset(Dataset):
         self._frame_cache = frame_cache
         self._hit_frac = hit_frac
         self._hard_neg_max_attempts = hard_neg_max_attempts
-        self._hard_neg_margin = 50
+        self._hard_neg_margin = HARD_NEG_MARGIN_DEFAULT
         self._crops_per_frame = crops_per_frame
         if crops_per_frame < 1:
             raise ValueError(f"crops_per_frame must be >= 1, got {crops_per_frame}")
@@ -738,7 +744,7 @@ class AsymmetricCXIDataset(Dataset):
             _epoch_seed(self._seed, self._epoch, idx, len(self))
         )
 
-        _CROP = 224
+        _CROP = _CROP_SIZE
 
         # Each draw can independently fail (Path B rejection-sampling exhausts
         # max_tries); retry failed draws rather than skipping them, so an item

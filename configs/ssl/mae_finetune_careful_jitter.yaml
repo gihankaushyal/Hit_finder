@@ -66,7 +66,8 @@ cache:
   enabled: true
 
 # Positive-jitter variant: identical to the file this was copied from except for this block.
-# Run with --run-suffix jitter (the CLI guard requires a suffix when these keys are set).
+# Run with --run-suffix careful-jitter (the CLI guard requires a suffix when these keys are set;
+# plain `jitter` is taken by mae_finetune_jitter.yaml).
 asymmetric:
   positive_jitter: uniform     # peak uniformly placed in the positive crop (>= jitter_edge_pad from the border)
   jitter_edge_pad: 32

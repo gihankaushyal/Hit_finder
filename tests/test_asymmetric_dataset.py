@@ -859,3 +859,13 @@ def test_loader_forwards_jitter_options_and_base_config_defaults(
         40,
         True,
     )
+
+
+def test_crop_options_require_a_run_suffix() -> None:
+    from src.training.lodo import require_run_suffix_for_crop_options as check
+
+    check("none", False, "", "resnet18-asymmetric-v2-fold4-seed42")  # baseline: fine
+    check("uniform", True, "-jitter", "x")  # suffixed: fine
+    for jitter, within in (("uniform", False), ("none", True), ("uniform", True)):
+        with pytest.raises(ValueError, match="baseline directory"):
+            check(jitter, within, "", "resnet18-asymmetric-v2-fold4-seed42")

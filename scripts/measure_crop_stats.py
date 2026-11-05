@@ -30,6 +30,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.data.dataset import (  # noqa: E402
+    HARD_NEG_MARGIN_DEFAULT as HARD_NEG_MARGIN,
     POSITIVE_JITTER_EDGE_PAD,
     _crop_bounds,
     _load_gcn_frame,
@@ -51,7 +52,6 @@ from src.training.lodo import build_sessions  # noqa: E402
 from src.utils.config import load_config  # noqa: E402
 
 CROP = 224
-HARD_NEG_MARGIN = 50
 HARD_NEG_TRIES = 50
 PEAK_BINS = ((1, 1), (2, 2), (3, 4), (5, 10**9))
 # channels of the stacked map the crop helpers cut from
@@ -128,7 +128,7 @@ def frame_crop_stats(
             if crop is not None:
                 valid, pad, _, _ = _crop_summary(crop)
                 rows.append((valid, pad, 0))
-        out[name] = {"rows": rows}
+        out[name] = {"rows": rows, "failed": draws - len(rows)}
     return out
 
 
@@ -214,6 +214,7 @@ def main() -> None:
     for desc, frames in sorted(by_desc.items()):
         pick = rng.permutation(len(frames))[: args.frames_per_detector]
         acc: dict[str, list] = {}
+        failed: dict[str, int] = {}
         eval_rows: list = []
         n_used = 0
         for k in pick:
@@ -228,10 +229,17 @@ def main() -> None:
                 valid_mask, centroids, rng, args.draws
             ).items():
                 acc.setdefault(mode, []).extend(d["rows"])
+                failed[mode] = failed.get(mode, 0) + d.get("failed", 0)
             eval_rows.extend(eval_tile_stats(valid_mask, centroids))
         report[desc] = {"frames_used": n_used}
         for mode in list(POSITIVE_MODES) + list(NEGATIVE_MODES):
             report[desc][mode] = summarise(acc.get(mode, []), mode in POSITIVE_MODES)
+            if mode in NEGATIVE_MODES:
+                # a failed draw (no clear window) is dropped, so report how often it happens
+                tried = len(acc.get(mode, [])) + failed.get(mode, 0)
+                report[desc][mode]["draw_failure_rate"] = (
+                    failed.get(mode, 0) / tried if tried else 0.0
+                )
         report[desc]["eval_tiles_with_peak"] = summarise(eval_rows, True)
         print(f"{desc}: {n_used} frames")
         for mode, s in report[desc].items():
