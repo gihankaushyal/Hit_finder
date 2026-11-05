@@ -30,11 +30,13 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.data.dataset import _load_gcn_frame  # noqa: E402
+from src.data.dataset import CROP_SIZE, _load_gcn_frame  # noqa: E402
 from src.evaluation.benchmark import (  # noqa: E402
     SPLIT_CROSS_DETECTOR,
     SPLIT_IN_DOMAIN_TEST,
     SPLIT_VAL,
+    INFERENCE_BATCH_SIZE_DEFAULT,
+    VOTE_SCORE_THRESHOLD,
     _tie_aware_ap,
     _tie_aware_auc,
     build_lodo_folds,
@@ -48,8 +50,9 @@ from src.preprocessing.normalize import lcn_torch  # noqa: E402
 from src.training.lodo import build_sessions  # noqa: E402
 from src.utils.config import load_config  # noqa: E402
 
-PATCH = 224
-VOTE_THRESHOLD = 0.5
+PATCH = CROP_SIZE
+DEFAULT_MAX_FRAMES = 1200
+VALID_FRACTION_QUARTILES = (25, 50, 75)
 VALID_THRESHOLDS = (
     0.0,
     0.5,
@@ -69,7 +72,7 @@ def vote_scores(
         keep = v >= thr
         if not keep.any():
             keep = np.ones_like(keep)
-        out.append(float((s[keep] > VOTE_THRESHOLD).mean()))
+        out.append(float((s[keep] > VOTE_SCORE_THRESHOLD).mean()))
     return np.asarray(out)
 
 
@@ -103,8 +106,9 @@ def score_frame(
         masks=torch.from_numpy(np.stack(masks)).to(device),
     ).unsqueeze(1)
     scores = []
-    for start in range(0, len(x), 64):
-        scores.append(torch.softmax(model(x[start : start + 64]), dim=1)[:, 1].cpu())
+    step = INFERENCE_BATCH_SIZE_DEFAULT
+    for start in range(0, len(x), step):
+        scores.append(torch.softmax(model(x[start : start + step]), dim=1)[:, 1].cpu())
     frac = np.asarray([float(np.asarray(m).mean()) for m in masks])
     return torch.cat(scores).numpy(), frac
 
@@ -120,7 +124,7 @@ def main() -> None:
         choices=[SPLIT_VAL, SPLIT_IN_DOMAIN_TEST, SPLIT_CROSS_DETECTOR],
     )
     p.add_argument("--arch", default="vit", choices=["vit", "resnet"])
-    p.add_argument("--max-frames", type=int, default=1200)
+    p.add_argument("--max-frames", type=int, default=DEFAULT_MAX_FRAMES)
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--device", default=None)
     p.add_argument("--out", default=None)
@@ -198,7 +202,7 @@ def main() -> None:
         "n_frames": int(len(y)),
         "n_tiles_per_frame": int(np.median([len(s) for s in tile_scores])),
         "tile_valid_fraction_quartiles": np.percentile(
-            np.concatenate(tile_valid), [25, 50, 75]
+            np.concatenate(tile_valid), VALID_FRACTION_QUARTILES
         ).tolist(),
         "rescored": rescore(tile_scores, tile_valid, y),
     }

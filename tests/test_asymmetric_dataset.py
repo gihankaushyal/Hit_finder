@@ -15,8 +15,11 @@ import torch
 
 from src.data.dataset import (
     AsymmetricCXIDataset,
+    HARD_NEG_MARGIN_DEFAULT,
+    _crop_bounds,
     _crop_contains_centroid,
     _crop_within_margin,
+    _sample_clear_crop,
 )
 from src.hitfinders import MockHitfinder
 from src.preprocessing.augment import PAD_BORDER_DEFAULT, pad_border
@@ -288,6 +291,73 @@ def test_dataset_with_jitter_and_within_frame_yields_valid_items(
             assert tensor.shape == (1, 1, 224, 224)
             labels.add(int(label[0]))
     assert labels == {0, 1}
+
+
+def _hard_neg_failure_rate(peaks: np.ndarray, within_frame: bool, draws: int) -> float:
+    """How often the hard-negative sampler finds no clear window on a frame with `peaks`."""
+    ph, pw = H + 2 * PAD_BORDER_DEFAULT, W + 2 * PAD_BORDER_DEFAULT
+    canvas = np.zeros((ph, pw, 1), dtype=np.float32)
+    shifted = peaks + PAD_BORDER_DEFAULT
+    bounds = _crop_bounds(ph, pw, 224, within_frame)
+    rng = np.random.default_rng(1)
+    failed = sum(
+        _sample_clear_crop(
+            canvas, shifted, rng, ph, pw, 224, HARD_NEG_MARGIN_DEFAULT, 50, bounds
+        )
+        is None
+        for _ in range(draws)
+    )
+    return failed / draws
+
+
+def _realized_positive_fraction(
+    cxi: Path, peaks: np.ndarray, within_frame: bool, epochs: int
+) -> float:
+    """Share of label-1 crops drawn from the metadata-hit frames of the fixture."""
+    ds = AsymmetricCXIDataset(
+        session_ids=["s0"],
+        session_map={"s0": cxi},
+        hitfinder=MockHitfinder(peaks=peaks),
+        label_key=LABEL_KEY,
+        hit_frac=0.5,
+        positive_jitter="uniform",
+        crop_within_frame=within_frame,
+    )
+    labels = []
+    for epoch in range(epochs):
+        ds.set_epoch(epoch)
+        for idx in range(N_HITS):  # indices 0-3 are metadata hits
+            item = ds[idx]
+            assert item is not None
+            labels.append(int(item[1][0]))
+    return float(np.mean(labels))
+
+
+def test_realized_hit_fraction_follows_the_hard_negative_failure_rate(
+    synthetic_cxi: Path,
+) -> None:
+    """On a hit frame a failed hard-negative draw falls back to a positive crop, so
+    P(label 1) = hit_frac + (1 - hit_frac) * P(sampler fails). crop_within_frame removes the
+    border positions the sampler can use, so it can only raise the positive share."""
+    hit_frac, tol = 0.5, 0.08
+    sparse = np.array([[256.0, 256.0]], dtype=np.float32)
+    # a cluster so wide that no 224 px window keeps 50 px clear of it inside the frame
+    dense = 256.0 + np.random.default_rng(0).uniform(-60, 60, size=(12, 2))
+    dense = dense.astype(np.float32)
+    for peaks in (sparse, dense):
+        measured = {}
+        for within in (False, True):
+            fail = _hard_neg_failure_rate(peaks, within, draws=400)
+            expected = hit_frac + (1 - hit_frac) * fail
+            measured[within] = _realized_positive_fraction(
+                synthetic_cxi, peaks, within, epochs=150
+            )
+            assert measured[within] == pytest.approx(expected, abs=tol), (
+                len(peaks),
+                within,
+                fail,
+            )
+        assert measured[True] >= measured[False] - tol
 
 
 # ---------------------------------------------------------------------------

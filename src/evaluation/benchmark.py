@@ -40,6 +40,11 @@ SPLIT_VAL = "val"
 SPLIT_IN_DOMAIN_TEST = "in_domain_test"
 SPLIT_CROSS_DETECTOR = "cross_detector_eval"
 
+# A tile votes "hit" when its softmax hit probability exceeds this; the frame score is the
+# fraction of tiles that vote.
+VOTE_SCORE_THRESHOLD = 0.5
+INFERENCE_BATCH_SIZE_DEFAULT = 64
+
 
 def build_lodo_folds() -> list[dict]:
     """Return the 4 leave-one-detector-out fold definitions.
@@ -197,7 +202,7 @@ def run_patch_agg(
     patch_stride: int = 224,
     min_hit_patches: int = 3,
     device: str = "cpu",
-    inference_batch_size: int = 64,
+    inference_batch_size: int = INFERENCE_BATCH_SIZE_DEFAULT,
     aggregation: str = "vote",
     frame_cache: "FrameCache | None" = None,
     return_breakdown: bool = False,
@@ -371,7 +376,9 @@ def run_patch_agg(
 
             patch_scores = np.concatenate(patch_scores_list)
             n_patches = len(patch_scores)
-            vote_frac = float((patch_scores > 0.5).sum()) / max(n_patches, 1)
+            vote_frac = float((patch_scores > VOTE_SCORE_THRESHOLD).sum()) / max(
+                n_patches, 1
+            )
             if aggregation == "vote":
                 frame_score = vote_frac
             elif aggregation == "max":

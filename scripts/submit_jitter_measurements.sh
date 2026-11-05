@@ -10,6 +10,10 @@
 # Neither trains or changes anything. Usage (fresh terminal, no conda env active):
 #   sbatch scripts/submit_jitter_measurements.sh [max_frames] [run_version]
 #   FOLDS="4 1 2 3" sbatch scripts/submit_jitter_measurements.sh
+#   SUFFIX=-jitter sbatch scripts/submit_jitter_measurements.sh   # measure the jittered runs instead
+#   SEED=43 sbatch scripts/submit_jitter_measurements.sh          # another training seed
+# SUFFIX is the run suffix of the checkpoints to measure (empty = baseline, -jitter, ...); the
+# careful arm reads <prefix>-careful<SUFFIX>, e.g. ...-seed42-careful-jitter.
 #SBATCH --job-name=sfx-jitter-meas
 #SBATCH -p general
 #SBATCH -q grp_cxfel
@@ -27,6 +31,8 @@ set -euo pipefail
 MAX_FRAMES="${1:-1200}"
 RUN_VERSION="${2:-v2}"
 FOLDS="${FOLDS:-4 1}"
+SEED="${SEED:-42}"
+SUFFIX="${SUFFIX:-}"
 STATS_DIR="docs/figures/crop_stats"
 PAD_DIR="docs/figures/padding_effect"
 
@@ -51,11 +57,11 @@ for FOLD in ${FOLDS}; do
 
     for ARM in finetune probe resnet careful; do
         case "${ARM}" in
-            resnet)  CKPT="checkpoints/resnet18-asymmetric-${RUN_VERSION}-fold${FOLD}-seed42/best.pt"
+            resnet)  CKPT="checkpoints/resnet18-asymmetric-${RUN_VERSION}-fold${FOLD}-seed${SEED}${SUFFIX}/best.pt"
                      CONFIG="configs/supervised/resnet18_asymmetric.yaml"; ARCH=resnet ;;
-            careful) CKPT="checkpoints/vits16-mae-finetune-${RUN_VERSION}-fold${FOLD}-seed42-careful/best.pt"
+            careful) CKPT="checkpoints/vits16-mae-finetune-${RUN_VERSION}-fold${FOLD}-seed${SEED}-careful${SUFFIX}/best.pt"
                      CONFIG="configs/ssl/mae_finetune_careful.yaml"; ARCH=vit ;;
-            *)       CKPT="checkpoints/vits16-mae-${ARM}-${RUN_VERSION}-fold${FOLD}-seed42/best.pt"
+            *)       CKPT="checkpoints/vits16-mae-${ARM}-${RUN_VERSION}-fold${FOLD}-seed${SEED}${SUFFIX}/best.pt"
                      CONFIG="configs/ssl/mae_finetune.yaml"; ARCH=vit ;;
         esac
         if [ ! -f "${CKPT}" ]; then
@@ -66,7 +72,7 @@ for FOLD in ${FOLDS}; do
         OK_BEFORE=${N_OK}
         run "padding effect fold ${FOLD} ${ARM}" python -u scripts/measure_padding_effect.py \
             --arch "${ARCH}" --config "${CONFIG}" --checkpoint "${CKPT}" --fold "${FOLD}" \
-            --max-frames "${MAX_FRAMES}" --out "${PAD_DIR}/fold${FOLD}_${ARM}_${RUN_VERSION}.json"
+            --max-frames "${MAX_FRAMES}" --out "${PAD_DIR}/fold${FOLD}_${ARM}_${RUN_VERSION}_seed${SEED}${SUFFIX}.json"
         N_PAD_OK=$((N_PAD_OK + N_OK - OK_BEFORE))
     done
 done

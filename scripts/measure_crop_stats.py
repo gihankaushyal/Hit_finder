@@ -44,7 +44,11 @@ from src.evaluation.benchmark import (  # noqa: E402
     build_session_stratified_split,
 )
 from src.hitfinders import get_hitfinder  # noqa: E402
-from src.preprocessing.augment import PAD_BORDER_DEFAULT, pad_border  # noqa: E402
+from src.preprocessing.augment import (  # noqa: E402
+    PAD_BORDER_DEFAULT,
+    pad_border,
+    patch_grid,
+)
 from src.preprocessing.io import (  # noqa: E402
     read_detector_description,
     read_embedded_labels,
@@ -54,6 +58,12 @@ from src.utils.config import load_config  # noqa: E402
 
 CROP = CROP_SIZE
 HARD_NEG_TRIES = 50  # dataset default; main() uses asymmetric.hard_neg_max_attempts
+# Crops at least this valid count as 'mostly real panel' in the report. Descriptive only: a floor
+# like this was considered for training and rejected (infeasible on AGIPD).
+MOSTLY_VALID_FRACTION = 0.8
+MOSTLY_VALID_KEY = (
+    f"valid_frac_ge_{MOSTLY_VALID_FRACTION}"  # JSON key, unchanged from earlier output
+)
 PEAK_BINS = ((1, 1), (2, 2), (3, 4), (5, 10**9))
 # channels of the stacked map the crop helpers cut from
 _VALID, _INFRAME, _ROW, _COL = range(4)
@@ -141,19 +151,16 @@ def eval_tile_stats(
     valid_mask: np.ndarray, centroids: np.ndarray
 ) -> list[tuple[float, float, int]]:
     """(valid_frac, pad_frac=0, n_peaks) for each stride-224 eval tile holding >= 1 peak."""
-    h, w = valid_mask.shape
+    # patch_grid defines the evaluation tiling; it returns tiles row-major, so a tile's origin
+    # follows from its index and the number of tile columns.
+    tiles = patch_grid(valid_mask.astype(np.float32), CROP)
+    n_cols = valid_mask.shape[1] // CROP
     rows = []
-    for top in range(0, h - CROP + 1, CROP):
-        for left in range(0, w - CROP + 1, CROP):
-            n = peaks_in_window(centroids, top, left)
-            if n:
-                rows.append(
-                    (
-                        float(valid_mask[top : top + CROP, left : left + CROP].mean()),
-                        0.0,
-                        n,
-                    )
-                )
+    for k, tile in enumerate(tiles):
+        top, left = (k // n_cols) * CROP, (k % n_cols) * CROP
+        n = peaks_in_window(centroids, top, left)
+        if n:
+            rows.append((float(tile.mean()), 0.0, n))
     return rows
 
 
@@ -165,7 +172,7 @@ def summarise(rows: list[tuple[float, float, int]], positive: bool) -> dict:
     out = {
         "n": len(rows),
         "valid_frac_mean": float(a[:, 0].mean()),
-        "valid_frac_ge_0.8": float((a[:, 0] >= 0.8).mean()),
+        MOSTLY_VALID_KEY: float((a[:, 0] >= MOSTLY_VALID_FRACTION).mean()),
         "pad_frac_mean": float(a[:, 1].mean()),
         "p_pad_gt_0": float((a[:, 1] > 0).mean()),
     }
@@ -252,7 +259,7 @@ def main() -> None:
             if isinstance(s, dict) and s.get("n"):
                 print(
                     f"  {mode:24s} valid={s['valid_frac_mean']:.3f} "
-                    f">=0.8:{s['valid_frac_ge_0.8']:.2f} pad={s['pad_frac_mean']:.3f} "
+                    f">={MOSTLY_VALID_FRACTION}:{s[MOSTLY_VALID_KEY]:.2f} pad={s['pad_frac_mean']:.3f} "
                     f"P(pad>0)={s['p_pad_gt_0']:.2f}"
                     + (
                         f" peaks={s['peaks_mean']:.2f} {s['peaks_hist']}"
