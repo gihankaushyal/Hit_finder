@@ -1,6 +1,6 @@
 # Detailed Results — LODO Benchmark (Track 1 Supervised, Track 2 SSL; 4-fold)
 
-*Full per-fold breakdown referenced from README.md. Last updated: 2026-11-03. All "±" values are the sample standard deviation (n−1) over folds, as printed by `scripts/aggregate_lodo_results.py`.*
+*Full per-fold breakdown referenced from README.md. Last updated: 2026-11-05. All "±" values are the sample standard deviation (n−1) over folds, as printed by `scripts/aggregate_lodo_results.py`.*
 
 **Contents:** [Protocol](#evaluation-protocol) · [Pipeline comparison](#pipeline-comparison) · [Naive baseline](#phase-4-naive-baseline--frame-level-labels-random-crops) · [Asymmetric v1](#asymmetric-pipeline-baseline--hitfinder-guided-crops--all-pr-22-fixes) · [Asymmetric v2](#asymmetric-pipeline-v2--frame-cache-backed-training) · [Track 2 SSL](#track-2--self-supervised-mae-vit-s16) · [Track 2 recipe and pretraining checks](#track-2--fine-tune-recipe-and-pretraining-checks-v2-2026-11) · [Key findings](#key-findings) · [Thresholds](#inference-thresholds)
 
@@ -199,7 +199,7 @@ In this `-v2` generation the linear probe has the highest mean cross AP (0.962 v
 
 ## Track 2 — fine-tune recipe and pretraining checks (v2, 2026-11)
 
-Single-seed (42) runs on top of the `-v2` SSL generation above; all numbers from `checkpoints/*/results.json`, frame-level tile-vote evaluation on the held-out detector. Run names carry the factor as a suffix: `vits16-mae-finetune-v2-fold<N>-seed42-{careful,lpft,lpft-careful}` and `vits16-mae-probe-v2-fold<N>-seed42-{pt20,pt100,pt200,randinit}` (`ptN` = probe on the epoch-N pretrain snapshot; the epoch-400 probe is the plain `vits16-mae-probe-v2`). Recipe definitions are in `configs/ssl/mae_finetune_careful.yaml`; the investigation is in `docs/progress_notes.md` §23. Differences under ~0.03 AP are within single-seed noise.
+Single-seed (42) runs on top of the `-v2` SSL generation above; all numbers from `checkpoints/*/results.json`, frame-level tile-vote evaluation on the held-out detector. Run names carry the factor as a suffix: `vits16-mae-finetune-v2-fold<N>-seed42-{careful,lpft,lpft-careful}` and `vits16-mae-probe-v2-fold<N>-seed42-{pt20,pt100,pt200,randinit}` (`ptN` = probe on the epoch-N pretrain snapshot; the epoch-400 probe is the plain `vits16-mae-probe-v2`). Recipe definitions are in `configs/ssl/mae_finetune_careful.yaml` and `src/training/recipe.py`; the investigation notes are in the local, untracked project log. A `-careful-ep` group (folds 1 and 4 only, per-epoch snapshots for the crop-position diagnostic) is on disk and left out of the table because it is partial (cross AP 0.867 and 0.993). Differences under ~0.03 AP are within single-seed noise.
 
 **Cross-detector AP**
 
@@ -260,7 +260,7 @@ Single-seed (42) runs on top of the `-v2` SSL generation above; all numbers from
 | Probe, epoch-200 encoder | 79 / 89 | 11 / 21 | 32 / 42 | 34 / 44 |
 | Probe, random-init encoder | 70 / 80 | 1 / 11 | 1 / 11 | 1 / 11 |
 
-**Reading.** The recipe changes raise the mean fine-tune cross AP from 0.858 to 0.915–0.922 and win on every fold against the v2 fine-tune, but the probe (0.962) still leads on three of four folds; the gain is largest on fold 4 (careful 0.993). A random-init encoder probes at chance on folds 2–4, so MAE pretraining contributes; the epoch-200 and epoch-400 encoders probe equally well (0.960 vs 0.962). Nearly every fine-tune variant peaks at epoch 1 (10 of 12), so the validation-selected checkpoint is the first epoch's. The crop-position diagnostic on these checkpoints (positional Δ −0.06 to −0.15 vs the probe's ≈ −0.01) is tabulated in `docs/progress_notes.md` §23.4.
+**Reading.** The recipe changes raise the mean fine-tune cross AP from 0.858 to 0.915–0.922 and win on every fold against the v2 fine-tune for careful and LP-FT (LP-FT+careful loses on fold 1, 0.736 vs 0.773), but the probe (0.962) still leads: on three of four folds against careful and LP-FT+careful, on all four against LP-FT; the gain is largest on fold 4 (careful 0.993). A random-init encoder probes at chance on folds 2–4, so MAE pretraining contributes; the epoch-200 and epoch-400 encoders probe equally well (0.960 vs 0.962). Nearly every fine-tune variant peaks at epoch 1 (10 of 12), so the validation-selected checkpoint is the first epoch's. The crop-position diagnostic on these checkpoints (positional Δ −0.06 to −0.15 vs the probe's ≈ −0.01) was measured with `scripts/diagnose_crop_shortcut.py` (position sweep of the peak inside the crop; submit wrappers `scripts/submit_crop_shortcut_*.sh`); the table is kept in the local project log. The diagnostic and the frame-level AP/AUC it reports use tie-aware variants (`_tie_aware_ap`, `_tie_aware_auc` in `src/evaluation/benchmark.py`), because vote scores are a small set of discrete fractions and the headline metrics break ties by order; `run_patch_agg(return_breakdown=True)` also returns the per-frame vote breakdown. Headline numbers elsewhere in this document use the standard `average_precision` / `auc_roc`.
 
 ---
 
