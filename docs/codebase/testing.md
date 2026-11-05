@@ -1,6 +1,6 @@
 # Testing Guide
 
-699 tests across 30 files (counted with `pytest tests/ --collect-only -q` on 2026-10-22). Test counts per file are in the map below.
+724 tests across 31 test files (counted with `pytest tests/ --collect-only -q` on 2026-11-05). Test counts per file are in the map below.
 
 ## Running Tests
 
@@ -65,12 +65,13 @@ pytest tests/ -v
 | `test_inference_only.py` | 64 | `--inference-only`: result helpers, the `_train_fold` inference path, CLI wiring | faked `wandb`; the training loader raises if built |
 | `test_orchestrator_inference.py` | 30 | Orchestrator scripts' `inference` answer, run against a stub `sbatch` | temp dir with fake `sbatch` on `PATH` |
 | `test_ssl_dataset.py` | 13 | `SSLPretrainCXIDataset` — random valid-region crops for MAE pretraining | synthetic CXI + valid-pixel mask |
-| `test_ssl_model.py` | 22 | `src/models/ssl.py` — MAE ViT-S/16 builder, masking, pixel MSE loss | `torch.zeros()` |
+| `test_ssl_model.py` | 40 | `src/models/ssl.py` — MAE ViT-S/16 builder, masking, pixel MSE loss | `torch.zeros()` |
 | `test_train_ssl.py` | 42 | SSL pretraining and fine-tuning loops (CPU smoke test, `MockHitfinder`) | small synthetic loader |
 | `test_ssl_main_requeue.py` | 6 | A requeued SSL launch through the real `main()` entry points | tmp run dir |
 | `test_submit_script_parity.py` | 10 | The bash copies of the run-name prefix regexes and the seed lookup in the SSL submit scripts match `run_naming.py` and `load_config()` | — |
 | `test_deprecated_scripts.py` | 23 | The seven legacy v1 submit scripts refuse to run and name their replacement | temp dir with stub `sbatch` / `python` |
-| `test_evaluation.py` | 34 | `metrics.py`: AP, AUC-ROC, F1 edge cases; `benchmark.py` helpers | `np.array` fixtures |
+| `test_evaluation.py` | 39 | `metrics.py`: AP, AUC-ROC, F1 edge cases; `benchmark.py` helpers | `np.array` fixtures |
+| `test_aggregate_lodo_results.py` | 2 | `scripts/aggregate_lodo_results.py` — grouping by (prefix, suffix) | temp checkpoint dirs |
 | `test_patch_eval.py` | 22 | Patch-level centroid crop geometry, patch-grid evaluation | synthetic canvas + centroids |
 | `test_vote_aggregation.py` | 4 | Vote aggregation: frame score formula, threshold behavior | synthetic patch scores |
 | `test_config.py` | 6 | `load_config()`: base merge, model values win, missing file | tmp YAML files |

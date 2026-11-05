@@ -26,7 +26,7 @@ Stateless functions. No class state. All functions are safe to call from multipl
 | File | Purpose | Key exports |
 |------|---------|-------------|
 | `io.py` | Read CXI/HDF5/CBF frames and metadata | `read_frame()` ⚡, `read_embedded_labels()` ⚡, `read_detector_description()`, `count_frames()`, `read_image()` |
-| `geometry.py` | Detector panel geometry and assembly. `DETECTOR_LOADERS` maps short names (`AGIPD`, `JUNGFRAU_4M`, `ePix10k`, `Eiger4M`, `EigerRESoNeT`) to Reborn geometry-list functions; `_DESC_LOADERS` does the same for CXI description strings | `get_geometry(detector_desc)` ⚡, `get_assembler(detector_desc)`, `assemble_image()`, `load_pad_geometry(detector_type, detector_distance)`, `extract_panels_from_canvas()`, `jungfrau_8_pad_geometry_list()`, `eiger4m_64_pad_geometry_list()`, `eiger_resonet_pad_geometry_list()` |
+| `geometry.py` | Detector panel geometry and assembly. `DETECTOR_LOADERS` maps short names (`AGIPD`, `JUNGFRAU_4M`, `ePix10k`, `Eiger4M`, `EigerRESoNeT`) to Reborn geometry-list functions; `_DESC_LOADERS` does the same for CXI description strings (it has no `EigerRESoNeT` entry, so that name resolves by short name only) | `get_geometry(detector_desc)` ⚡, `get_assembler(detector_desc)`, `assemble_image()`, `load_pad_geometry(detector_type, detector_distance)`, `extract_panels_from_canvas()`, `jungfrau_8_pad_geometry_list()`, `eiger4m_64_pad_geometry_list()`, `eiger_resonet_pad_geometry_list()` |
 | `normalize.py` | Global (GCN) and local (LCN) contrast normalization | `gcn()` ⚡, `lcn()` ⚡, `lcn_torch()` (batched torch LCN used by `run_patch_agg`; must match the masked NumPy `lcn` within float32 tolerance) |
 | `augment.py` | Spatial augmentation and patch utilities | `pad_border()`, `random_rot90()`, `random_flip()`, `patch_grid()`, `random_cutout()` (defaults: 3 holes, `CUTOUT_HOLE_SIZE_DEFAULT=24`, `CUTOUT_AVOID_MARGIN_DEFAULT=8`, `CUTOUT_MAX_TRIES=20`) |
 | `pipeline.py` | Assembled multi-step preprocessing | `assemble_only(frame, pads, detector_desc, assembler)`, `valid_pixel_mask()`, `get_valid_mask_for_frame()`, `fill_gaps_after_gcn()`, `preprocess_eval_patches()`, `preprocess_eval_patches_from_gcn()` |
@@ -121,7 +121,7 @@ Training loop functions and the primary entry-point scripts. Invoked as `python 
 |------|---------|-------------|
 | `train_asymmetric.py` | **Primary Track 1 entry point** — LODO driver, hitfinder-guided crop pipeline, wandb logging. Flags: `--config`, `--run-name-prefix` (required), `--folds`, `--device`, `--intra`, `--tags`, `--resume-training` / `--override-training`, `--inference-only`, `--cache-root`, `--cache-nvme`, `--no-cache` | `main()` |
 | `lodo.py` | Shared LODO fold loop (train, evaluate, write `results.json`) and session builder, used by Track 1 and the SSL fine-tune | `build_sessions(lodo_cfg)`; private `_train_fold()`, `_build_intra_split()` |
-| `train_supervised.py` | One-epoch supervised training loop (utility, called by `lodo.py`) | `train_one_epoch(model, loader, optimizer, device)` |
+| `train_supervised.py` | One-epoch supervised training loop (utility, called by `lodo.py`) | `train_one_epoch(model, loader, optimizer, criterion, device)` |
 | `train_ssl_pretrain.py` | MAE pretraining loop — mask patches (`ssl.mask_ratio`, default 0.6), reconstruct, log pixel MSE and sample reconstructions. Requires `--fold` (the fold's test detector is excluded) and `--run-name-prefix` | `main()` |
 | `train_ssl_finetune.py` | SSL fine-tuning or linear probe (`--linear-probe`) — attach classification head to the pretrained encoder (`--pretrain-checkpoint`), train on labeled CXI; also supports `--inference-only` | `main()` |
 | `run_naming.py` | Versioned run-name prefix validation and the resume/override checkpoint gate shared by all entry points | `validate_run_name_prefix()`, `fold_run_name()`, `expand_finetune_prefix()`, `check_checkpoint_collisions()`, `effective_resume()` |
@@ -147,9 +147,9 @@ Metric functions and LODO orchestration. `benchmark.py` is the highest-level ent
 ```python
 def run_patch_agg(model, session_map, session_ids, label_key, patch_size=224, patch_stride=224,
                   min_hit_patches=3, device="cpu", inference_batch_size=64,
-                  aggregation="vote", frame_cache=None) -> dict
+                  aggregation="vote", frame_cache=None, return_breakdown=False) -> dict
 ```
-Returns `{"ap": float, "auc_roc": float, "f1": float, "threshold": float}`. `min_hit_patches` is accepted and recorded in the result files but reserved: it does not change the score; the vote score is `hit_count / n_patches` with a patch counted as a hit above 0.5. `f1` / `threshold` are the optimum on the evaluated frames.
+Returns `{"ap": float, "auc_roc": float, "f1": float, "threshold": float}`. `min_hit_patches` is accepted and recorded in the result files but reserved: it does not change the score; the vote score is `hit_count / n_patches` with a patch counted as a hit above 0.5. `f1` / `threshold` are the optimum on the evaluated frames. With `return_breakdown=True` (set by `training.log_val_breakdown`) the dict also carries `pos_zero_vote_frac`, `neg_any_vote_frac`, `ap_max`, `auc_max`, `ap_vote_tieaware`, `auc_vote_tieaware`, `pos_vote_mean` and `neg_max_mean`, computed by the private `_tie_aware_ap`, `_tie_aware_auc` and `_breakdown_metrics`.
 
 **Imports from:** `src/preprocessing/{geometry,io,pipeline}`, `src/evaluation/metrics`, `src/data/frame_cache`
 **Imported by:** `src/training/lodo.py`, `src/training/train_asymmetric.py`, `src/training/train_ssl_finetune.py`, `src/training/train_ssl_pretrain.py` (`build_lodo_folds`), and `scripts/{plan_cache_staging,diagnose_crop_shortcut,visualize_mae_recon}.py`. (`scripts/aggregate_lodo_results.py` reads `results.json` files and does not import `benchmark`.)
@@ -178,12 +178,12 @@ Python utilities (files here that import from `src/` carry a `sys.path.insert` h
 |--------|---------|-------------|
 | `run_pipeline_debug.py` | Debug and profile the preprocessing pipeline | `preprocessing.*`, `data`, `hitfinders.gpu` |
 | `smoke_test_detector_shapes.py` | Verify geometry + assembly for all detectors | `preprocessing.{geometry,io,augment,pipeline}` |
-| `visualize_assembled.py` | Save assembled detector images to PNG | `preprocessing.{geometry,io,pipeline}`, `matplotlib` |
+| `visualize_assembled.py` | Save assembled detector images to PNG | `preprocessing.{geometry,io}`, `reborn`, `matplotlib` |
 | `visualize_mae_recon.py` | Masked input / reconstruction / target renders for an MAE checkpoint (output in `docs/figures/mae_recon/`) | `models.ssl`, `data.dataloader`, `evaluation.benchmark` |
 | `probe_hdf5.py` | Print HDF5/CXI file tree: keys, shapes, dtypes | (stdlib + h5py only) |
-| `aggregate_lodo_results.py` | Read `checkpoints/<run>-fold*/results.json`, print per-variant tables with sample std; interactive menu, `--select`, `--run-prefix` | (stdlib + numpy; reads `results.json` files only) |
+| `aggregate_lodo_results.py` | Read `checkpoints/<run>-fold*/results.json`, print per-variant tables with sample std, grouping runs by (prefix, suffix); interactive menu, `--select`, `--run-prefix`, `--checkpoints-dir` | (stdlib + numpy; reads `results.json` files only) |
 | `build_frame_cache.py` | Build the on-disk frame cache once per frame (float16, memory-mappable) | `data.dataset._compute_gcn_frame`, `data.frame_cache` |
-| `plan_cache_staging.py` | Emit one fold's cache entry directories in NVMe staging priority order (train, then val, then test sessions) | `evaluation.benchmark`, `training.lodo`, `utils.config` |
+| `plan_cache_staging.py` | Emit one fold's cache entry directories in NVMe staging priority order (train sessions first, then val; in-domain and cross-detector sessions are never staged) | `evaluation.benchmark`, `training.lodo`, `utils.config` |
 | `plot_hit_frac.py` | Plot realized `train/realized_hit_frac` against the configured value from W&B (`wandb.Api()`) | `wandb`, `matplotlib`, `training.wandb_identity` |
 | `diagnose_crop_shortcut.py` | Measure how much a trained classifier relies on crop-construction shortcuts (peak-centred positives vs. clearance negatives) | `data.dataset`, `models.ssl`, `evaluation.benchmark` |
 

@@ -184,7 +184,7 @@ Add a metric that is computed alongside AP, AUC-ROC, and F1 after vote aggregati
 
 - [ ] **2. Wire into the return dicts in `src/evaluation/benchmark.py`**
 
-  Both `run_on_loader()` and `run_patch_agg()` return `{"ap", "auc_roc", "f1", "threshold"}` (and a NaN version for empty input). Add the key to each, including the all-NaN fallback:
+  Both `run_on_loader()` and `run_patch_agg()` return `{"ap", "auc_roc", "f1", "threshold"}` (and a NaN version for empty input); `run_patch_agg(return_breakdown=True)` adds the diagnostic keys listed in `modules.md`. Add the key to each, including the all-NaN fallback:
 
   ```python
   return {
