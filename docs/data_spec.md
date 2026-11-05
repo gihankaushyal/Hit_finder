@@ -126,7 +126,7 @@ Detector type is read from `entry_1/instrument_1/detector_1/description` (`read_
 | `ePix10k 2.2M` | `ePix10k` |
 | `EIGER 4M` | `Eiger4M` (the Resonet CrystFEL layout is also available as `EigerRESoNeT`) |
 
-Geometry is built in `src/preprocessing/geometry.py`. Local geometry files in `src/preprocessing/data/` are `agipd.geom`, `epix10k.geom` and `eiger_resonet.geom`; Jungfrau 4M and Eiger4M use Reborn's bundled loaders (`jungfrau_8_pad_geometry_list`, `eiger4m_64_pad_geometry_list`).
+Geometry is built in `src/preprocessing/geometry.py`. Local geometry files in `src/preprocessing/data/` are `agipd.geom`, `epix10k.geom` and `eiger_resonet.geom`, but only `eiger_resonet.geom` is read by the code (AGIPD and ePix10k use Reborn's standard loaders, so those two files are unused); Jungfrau 4M and Eiger4M use Reborn's bundled loaders (`jungfrau_8_pad_geometry_list`, `eiger4m_64_pad_geometry_list`).
 
 ---
 
@@ -210,8 +210,8 @@ Observed pixel sizes per detector:
 | EIGER 4M | `b'EIGER 4M'` | 100 µm |
 | Jungfrau 4M | `b'Jungfrau 4M'` | 75 µm |
 
-`AsymmetricCXIDataset` reads `x_pixel_size`, `distance`, and `wavelength` at
-`__init__` time and passes them to `hitfinder.set_geometry()` before each frame's
+`AsymmetricCXIDataset` reads `x_pixel_size`, `distance`, and `wavelength` lazily
+on first access to each file (inside `_load_gcn_frame`, cached per path) and passes them to `hitfinder.set_geometry()` before each frame's
 `find_peaks` call (short-circuited when the CXI path has not changed).
 
 ---
