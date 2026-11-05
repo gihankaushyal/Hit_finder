@@ -211,7 +211,7 @@ Observed pixel sizes per detector:
 | Jungfrau 4M | `b'Jungfrau 4M'` | 75 µm |
 
 `AsymmetricCXIDataset` reads `x_pixel_size`, `distance`, and `wavelength` lazily
-on first access to each file (inside `_load_gcn_frame`, cached per path) and passes them to `hitfinder.set_geometry()` before each frame's
+on first access to each file (inside `_compute_gcn_frame`, cached per path; a warm frame-cache hit in `_load_gcn_frame` skips the read entirely) and passes them to `hitfinder.set_geometry()` before each frame's
 `find_peaks` call (short-circuited when the CXI path has not changed).
 
 ---

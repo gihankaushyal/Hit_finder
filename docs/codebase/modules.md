@@ -6,7 +6,7 @@ Dependency layers flow bottom to top. No circular imports exist.
 
 ```
 Layer 6 — Entry points   src/training/{train_asymmetric,train_ssl_pretrain,train_ssl_finetune}.py  scripts/*.py
-Layer 5 — Training glue  src/training/{lodo,run_naming,wandb_identity,override_marker,inference_results}.py
+Layer 5 — Training glue  src/training/{lodo,recipe,run_naming,wandb_identity,override_marker,inference_results}.py
 Layer 4 — DataLoader     src/data/dataloader.py
 Layer 3 — Dataset        src/data/dataset.py          src/evaluation/benchmark.py
 Layer 2 — Cache + Pipeline  src/data/frame_cache.py   src/preprocessing/pipeline.py
@@ -123,7 +123,8 @@ Training loop functions and the primary entry-point scripts. Invoked as `python 
 | `lodo.py` | Shared LODO fold loop (train, evaluate, write `results.json`) and session builder, used by Track 1 and the SSL fine-tune | `build_sessions(lodo_cfg)`; private `_train_fold()`, `_build_intra_split()` |
 | `train_supervised.py` | One-epoch supervised training loop (utility, called by `lodo.py`) | `train_one_epoch(model, loader, optimizer, criterion, device)` |
 | `train_ssl_pretrain.py` | MAE pretraining loop — mask patches (`ssl.mask_ratio`, default 0.6), reconstruct, log pixel MSE and sample reconstructions. Requires `--fold` (the fold's test detector is excluded) and `--run-name-prefix` | `main()` |
-| `train_ssl_finetune.py` | SSL fine-tuning or linear probe (`--linear-probe`) — attach classification head to the pretrained encoder (`--pretrain-checkpoint`), train on labeled CXI; also supports `--inference-only` | `main()` |
+| `train_ssl_finetune.py` | SSL fine-tuning or linear probe (`--linear-probe`) — attach classification head to the pretrained encoder (`--pretrain-checkpoint`), train on labeled CXI; also supports `--inference-only`, `--run-suffix`, `--random-init`, `--head-checkpoint` (LP-FT head, fold-leak check; these three need a run suffix) and `training.save_epochs` snapshots | `main()` |
+| `recipe.py` | Careful fine-tune recipe, opt-in via config: layer-wise lr decay, no weight decay on norm/bias, linear warmup + cosine schedule | `build_optimizer()`, `lr_factor()`, `apply_lr_schedule()` |
 | `run_naming.py` | Versioned run-name prefix validation and the resume/override checkpoint gate shared by all entry points | `validate_run_name_prefix()`, `fold_run_name()`, `expand_finetune_prefix()`, `check_checkpoint_collisions()`, `effective_resume()` |
 | `override_marker.py` | `override_applied.json` in the run dir: a requeued SLURM job (same job id, higher restart count) resumes instead of re-running `--override-training` | `write_override_marker()`, `override_already_applied()`, `current_job_id()`, `current_restart_count()` |
 | `wandb_identity.py` | New W&B run id per override attempt (`<run>`, `<run>-o2`, …) kept in `<run_dir>/wandb_id.txt`; previous run tagged `overridden` | `resolve_wandb_id()`, `rotate_wandb_id()`, `next_wandb_id()`, `ensure_fresh_wandb_id()`, `wandb_id_for_training()`, `tag_overridden()`, `OverrideHook`, `override_hook_from_cfg()` |
