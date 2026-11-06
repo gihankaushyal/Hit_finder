@@ -2,7 +2,7 @@
 # Differences from mae_finetune.yaml (the v2 recipe), all optimiser/model-side:
 #   warmup 5 ep + cosine, layer-wise LR decay 0.75, drop_path 0.1, wd 0.05 (not on norm/bias),
 #   trunc-normal head init, peak LR 1.25e-4 (= 1e-3 * 32/256, the head's LR).
-# The data pipeline is untouched. Run with --run-suffix careful.
+# Crop placement is changed only by the asymmetric: block at the bottom. Run with --run-suffix careful-jitter.
 # Fine-tune MAE-pretrained ViT-S/16 through the unchanged asymmetric pipeline.
 model:
   backbone: mae_vit_small_patch16

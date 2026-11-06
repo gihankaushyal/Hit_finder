@@ -8,8 +8,9 @@ frames offline with only the tiles that are at least `thr` valid (a frame with n
 all of its tiles). It reports AP/AUC for each threshold, so the effect of gap-heavy tiles can be
 read off without retraining and without changing the evaluation protocol.
 
-Tiles are scored with the cached-path semantics of run_patch_agg (masked torch LCN on the
-stride-224 grid of the GCN'd, gap-filled frame).
+Tiles are scored like run_patch_agg's cached path (masked torch LCN on the stride-224 grid of
+the GCN'd, gap-filled frame), but from live fp32 frames: the frame cache stores float16, so
+scores can differ slightly from the reported APs.
 
 Usage:
     python scripts/measure_padding_effect.py --arch vit --config configs/ssl/mae_finetune.yaml \\
@@ -24,7 +25,6 @@ import json
 import sys
 from pathlib import Path
 
-import h5py
 import numpy as np
 import torch
 
@@ -45,7 +45,10 @@ from src.evaluation.benchmark import (  # noqa: E402
 from src.models.ssl import build_ssl_classifier  # noqa: E402
 from src.models.supervised import build_supervised_model  # noqa: E402
 from src.preprocessing.augment import patch_grid  # noqa: E402
-from src.preprocessing.io import read_detector_description  # noqa: E402
+from src.preprocessing.io import (  # noqa: E402
+    read_detector_description,
+    read_embedded_labels,
+)
 from src.preprocessing.normalize import lcn_torch  # noqa: E402
 from src.training.lodo import build_sessions  # noqa: E402
 from src.utils.config import load_config  # noqa: E402
@@ -87,7 +90,12 @@ def rescore(
             "ap_tieaware": _tie_aware_ap(labels, vote),
             "auc_tieaware": _tie_aware_auc(labels, vote),
             "n_distinct_scores": int(len(np.unique(vote))),
-            "mean_tiles_dropped": float(np.mean([(v < thr).sum() for v in tile_valid])),
+            # a frame with no qualifying tile keeps all of them (see vote_scores), so drops none
+            "mean_tiles_dropped": float(
+                np.mean(
+                    [(v < thr).sum() if (v >= thr).any() else 0 for v in tile_valid]
+                )
+            ),
         }
     return result
 
@@ -161,8 +169,7 @@ def main() -> None:
     for sid in ids:
         path = session_map[sid]
         desc = read_detector_description(path)
-        with h5py.File(path, "r") as f:
-            labels = np.round(f[label_key][()]).astype(int)
+        labels = np.round(read_embedded_labels(path, label_key)).astype(int)
         for i in rng.choice(
             len(labels), size=min(per_session, len(labels)), replace=False
         ):

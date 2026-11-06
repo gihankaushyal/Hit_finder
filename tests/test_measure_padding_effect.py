@@ -35,6 +35,14 @@ def test_rescore_reports_every_threshold_and_dropped_tiles():
     assert all(0.0 <= m["ap_tieaware"] <= 1.0 for m in out.values())
 
 
+def test_dropped_tiles_ignore_frames_that_keep_all_their_tiles():
+    scores = [np.array([0.9, 0.9, 0.1]), np.array([0.9, 0.1, 0.1])]
+    valid = [np.array([0.9, 0.8, 0.3]), np.array([0.2, 0.2, 0.2])]
+    out = mpe.rescore(scores, valid, np.array([1, 0]))
+    # thr 0.5: frame 0 drops 1 tile; frame 1 has none >= 0.5, keeps all 3, drops 0
+    assert out["valid>=0.5"]["mean_tiles_dropped"] == 0.5
+
+
 def test_frame_smaller_than_a_tile_is_skipped_not_fatal():
     import torch
 
