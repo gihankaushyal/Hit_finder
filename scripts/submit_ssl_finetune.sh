@@ -27,6 +27,11 @@
 #   sbatch scripts/submit_ssl_finetune.sh 1 vits16-mae-v2 mae-vits16-v2 --linear-probe
 #
 # Environment variables (set automatically by submit_ssl_finetune_all.sh):
+#   TRAIN_CONFIG  Fine-tune config (default configs/ssl/mae_finetune.yaml), e.g.
+#                 configs/ssl/mae_finetune_jitter.yaml. Configs that change the recipe or crop
+#                 placement need a run suffix, passed as extra arguments, e.g.
+#                   TRAIN_CONFIG=configs/ssl/mae_finetune_jitter.yaml \
+#                     sbatch scripts/submit_ssl_finetune.sh 4 vits16-mae-v2 mae-vits16-v2 --run-suffix jitter
 #   CACHE_NVME    Path to this fold's NVMe-staged frame-cache tier
 #                 (default /tmp/sfx_frame_cache). See scripts/stage_frame_cache.sh.
 #   RESUME_FLAG   --resume-training (default), --override-training or --inference-only.
@@ -71,6 +76,7 @@ EXTRA=("$@")
 RESUME_FLAG="${RESUME_FLAG:---resume-training}"
 
 CONFIG="configs/ssl/mae_finetune.yaml"
+CONFIG="${TRAIN_CONFIG:-${CONFIG}}"  # the seed lookup below follows the config actually used
 # seed lives in base.yaml and may be overridden in the model config (load_config()
 # deep-merges base.yaml with model values winning) — check the model file first.
 # Only a top-level `seed:` counts (python reads cfg["seed"]); nested keys are ignored.

@@ -42,6 +42,18 @@ from src.preprocessing.pipeline import (
 # None for the whole item (see _draw_one_crop's rare Path-B exhaustion case).
 CROP_RETRY_FACTOR = 4
 
+# Positive-crop placement. "none" centres the crop on the chosen Bragg peak (v2 behaviour);
+# "uniform" puts the peak at a uniformly random position inside the crop, at least
+# POSITIVE_JITTER_EDGE_PAD px from the crop border, like a peak on an evaluation tile.
+POSITIVE_JITTER_NONE = "none"
+POSITIVE_JITTER_UNIFORM = "uniform"
+POSITIVE_JITTERS = (POSITIVE_JITTER_NONE, POSITIVE_JITTER_UNIFORM)
+POSITIVE_JITTER_EDGE_PAD = 32
+CROP_SIZE = 224
+# Clearance (px) between a hard-negative crop and every Bragg peak; shared with the scripts
+# that measure or probe the negative sampler.
+HARD_NEG_MARGIN_DEFAULT = 50
+
 # 1_000_003 is prime, chosen so the seed/epoch/idx components of the formula
 # below don't alias into each other's ranges.
 _SEED_PRIME = 1_000_003
@@ -189,6 +201,25 @@ def _crop_within_margin(
     return bool(near.any())
 
 
+def _crop_bounds(
+    ph: int, pw: int, size: int, within_frame: bool, pad: int = PAD_BORDER_DEFAULT
+) -> tuple[int, int, int, int]:
+    """Inclusive (top_min, top_max, left_min, left_max) for a crop window.
+
+    By default a window may lie anywhere on the padded canvas, including the zero band.
+    With `within_frame` it must lie entirely inside the real frame, as evaluation tiles do.
+    """
+    if not within_frame:
+        return 0, ph - size, 0, pw - size
+    bounds = (pad, ph - pad - size, pad, pw - pad - size)
+    if bounds[1] < bounds[0] or bounds[3] < bounds[2]:
+        raise ValueError(
+            f"crop_within_frame: frame {ph - 2 * pad}x{pw - 2 * pad} is smaller than "
+            f"a {size} px crop"
+        )
+    return bounds
+
+
 def _path_a_crop(
     padded: np.ndarray,
     centroids: np.ndarray,
@@ -196,26 +227,42 @@ def _path_a_crop(
     ph: int,
     pw: int,
     size: int,
+    jitter_edge_pad: int | None = None,
+    bounds: tuple[int, int, int, int] | None = None,
 ) -> tuple[np.ndarray, int]:
-    """Crop centred on a randomly chosen Bragg peak.
+    """Crop containing a randomly chosen Bragg peak.
 
     Args:
         padded: (H, W) or (H, W, C) padded frame stack to crop from.
         centroids: (N, 2) float32 array of [x, y] pairs in padded coordinates.
             Must be non-empty.
-        rng: Numpy Generator used to pick which centroid to centre on.
+        rng: Numpy Generator used to pick which centroid to use (and the jitter).
         ph: Padded frame height.
         pw: Padded frame width.
         size: Side length of the square crop in pixels.
+        jitter_edge_pad: None centres the crop on the peak. An int places the peak
+            uniformly in [jitter_edge_pad, size - jitter_edge_pad) on each axis.
+        bounds: Inclusive (top_min, top_max, left_min, left_max) window limits (see
+            `_crop_bounds`); None allows the whole padded canvas. The window is clipped
+            to these limits, which keeps the peak inside the crop. Near a limit (a peak
+            within `jitter_edge_pad` px of the real frame edge under `within_frame`) the
+            clip wins over the jitter, so the peak can sit closer to the crop border than
+            `jitter_edge_pad`.
 
     Returns:
         (crop, label) where label is always 1.
     """
+    top_min, top_max, left_min, left_max = bounds or _crop_bounds(ph, pw, size, False)
     peak = centroids[int(rng.integers(0, len(centroids)))]
     cx = int(round(float(peak[0])))  # column
     cy = int(round(float(peak[1])))  # row
-    left = int(np.clip(cx - size // 2, 0, pw - size))
-    top = int(np.clip(cy - size // 2, 0, ph - size))
+    if jitter_edge_pad is None:
+        off_x = off_y = size // 2
+    else:
+        off_x = int(rng.integers(jitter_edge_pad, size - jitter_edge_pad))
+        off_y = int(rng.integers(jitter_edge_pad, size - jitter_edge_pad))
+    left = int(np.clip(cx - off_x, left_min, left_max))
+    top = int(np.clip(cy - off_y, top_min, top_max))
     crop = padded[top : top + size, left : left + size].copy()
     return crop, 1
 
@@ -229,6 +276,7 @@ def _sample_clear_crop(
     size: int,
     margin: int,
     max_tries: int,
+    bounds: tuple[int, int, int, int] | None = None,
 ) -> np.ndarray | None:
     """Randomly sample a crop position with `margin` px clearance from every centroid.
 
@@ -241,14 +289,17 @@ def _sample_clear_crop(
         size: Side length of the square crop in pixels.
         margin: Clearance buffer in pixels around the crop boundary.
         max_tries: Number of random positions to attempt before giving up.
+        bounds: Inclusive (top_min, top_max, left_min, left_max) window limits (see
+            `_crop_bounds`); None allows the whole padded canvas.
 
     Returns:
         The cropped (size, size, C) array, or None if no clear position was
         found within max_tries attempts.
     """
+    top_min, top_max, left_min, left_max = bounds or _crop_bounds(ph, pw, size, False)
     for _ in range(max_tries):
-        top = int(rng.integers(0, ph - size + 1))
-        left = int(rng.integers(0, pw - size + 1))
+        top = int(rng.integers(top_min, top_max + 1))
+        left = int(rng.integers(left_min, left_max + 1))
         if not _crop_within_margin(top, left, size, centroids, margin=margin):
             return padded[top : top + size, left : left + size].copy()
     return None
@@ -449,6 +500,14 @@ class AsymmetricCXIDataset(Dataset):
             crops_per_frame; all crops for that frame are drawn from the
             single assembled result, mirroring SSLPretrainCXIDataset. Default
             1 preserves prior behavior exactly (one crop, scalar label).
+        positive_jitter: "none" (default) centres each positive crop on its peak;
+            "uniform" places the peak uniformly at random inside the crop, at least
+            jitter_edge_pad px from the crop border. Any other peaks inside the window
+            come along (and are protected from cutout) automatically.
+        jitter_edge_pad: Minimum peak distance from the crop border for "uniform".
+        crop_within_frame: When True, every crop (positive and negative) must lie
+            entirely inside the real frame, i.e. never overlap the zero pad band.
+            Panel gaps are unaffected. Default False keeps the v2 behaviour.
     """
 
     def __init__(
@@ -462,14 +521,28 @@ class AsymmetricCXIDataset(Dataset):
         hit_frac: float = 0.5,
         hard_neg_max_attempts: int = 50,
         crops_per_frame: int = 1,
+        positive_jitter: str = POSITIVE_JITTER_NONE,
+        jitter_edge_pad: int = POSITIVE_JITTER_EDGE_PAD,
+        crop_within_frame: bool = False,
     ) -> None:
+        if positive_jitter not in POSITIVE_JITTERS:
+            raise ValueError(
+                f"positive_jitter must be one of {POSITIVE_JITTERS}, got {positive_jitter!r}"
+            )
+        if not 0 <= jitter_edge_pad < CROP_SIZE // 2:
+            raise ValueError(
+                f"jitter_edge_pad must be in [0, {CROP_SIZE // 2}), got {jitter_edge_pad}"
+            )
+        self._positive_jitter = positive_jitter
+        self._jitter_edge_pad = jitter_edge_pad
+        self._crop_within_frame = crop_within_frame
         self._hitfinder = hitfinder
         self._label_key = label_key
         self._seed = seed
         self._frame_cache = frame_cache
         self._hit_frac = hit_frac
         self._hard_neg_max_attempts = hard_neg_max_attempts
-        self._hard_neg_margin = 50
+        self._hard_neg_margin = HARD_NEG_MARGIN_DEFAULT
         self._crops_per_frame = crops_per_frame
         if crops_per_frame < 1:
             raise ValueError(f"crops_per_frame must be >= 1, got {crops_per_frame}")
@@ -549,6 +622,12 @@ class AsymmetricCXIDataset(Dataset):
         a frame with no peaks) — the caller skips this crop, matching the
         prior per-item None-sentinel contract.
         """
+        bounds = _crop_bounds(ph, pw, crop_size, self._crop_within_frame)
+        jitter = (
+            self._jitter_edge_pad
+            if self._positive_jitter == POSITIVE_JITTER_UNIFORM
+            else None
+        )
         if centroids.shape[0] > 0:
             # Metadata HIT frame with centroids found: 50/50 coin toss between
             # Path A (peak-centred, label=1) and Path B (hard-negative crop
@@ -557,7 +636,7 @@ class AsymmetricCXIDataset(Dataset):
             # frame has known peaks, so a valid Path A crop always exists.
             if rng.random() < self._hit_frac:
                 crop, derived_label = _path_a_crop(
-                    padded, centroids, rng, ph, pw, crop_size
+                    padded, centroids, rng, ph, pw, crop_size, jitter, bounds
                 )
             else:
                 crop = _sample_clear_crop(
@@ -569,10 +648,11 @@ class AsymmetricCXIDataset(Dataset):
                     crop_size,
                     margin=self._hard_neg_margin,
                     max_tries=self._hard_neg_max_attempts,
+                    bounds=bounds,
                 )
                 if crop is None:
                     crop, derived_label = _path_a_crop(
-                        padded, centroids, rng, ph, pw, crop_size
+                        padded, centroids, rng, ph, pw, crop_size, jitter, bounds
                     )
                 else:
                     derived_label = 0
@@ -590,6 +670,7 @@ class AsymmetricCXIDataset(Dataset):
                 crop_size,
                 margin=self._hard_neg_margin,
                 max_tries=self._hard_neg_max_attempts,
+                bounds=bounds,
             )
             if crop is None:
                 return None
@@ -663,7 +744,7 @@ class AsymmetricCXIDataset(Dataset):
             _epoch_seed(self._seed, self._epoch, idx, len(self))
         )
 
-        _CROP = 224
+        _CROP = CROP_SIZE
 
         # Each draw can independently fail (Path B rejection-sampling exhausts
         # max_tries); retry failed draws rather than skipping them, so an item

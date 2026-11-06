@@ -48,7 +48,12 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.data.dataset import _crop_within_margin, _load_gcn_frame  # noqa: E402
+from src.data.dataset import (  # noqa: E402
+    HARD_NEG_MARGIN_DEFAULT,
+    POSITIVE_JITTER_EDGE_PAD,
+    _crop_within_margin,
+    _load_gcn_frame,
+)
 from src.evaluation.benchmark import (  # noqa: E402
     SPLIT_CROSS_DETECTOR,
     SPLIT_IN_DOMAIN_TEST,
@@ -67,14 +72,16 @@ from src.training.lodo import build_sessions  # noqa: E402
 from src.utils.config import load_config  # noqa: E402
 
 CROP = 224
-HARD_NEG_MARGIN = 50
+HARD_NEG_MARGIN = (
+    HARD_NEG_MARGIN_DEFAULT  # shared with training so the two cannot drift
+)
 # Peak distance from the crop centre (px) for the offset sweep. The per-axis clip to
 # [JITTER_EDGE_PAD, CROP - JITTER_EDGE_PAD - 1] allows at most 79 px along an axis, so the
 # "80" arm is 79 px for near-axis-aligned directions and a full 80 px on diagonals.
 OFFSET_SWEEP_PX = (0, 20, 40, 60, 80)
-# Keep the peak clear of the crop border so condition B still shows a whole
-# peak; only its position changes. 32 px each side leaves a 160 px jitter box.
-JITTER_EDGE_PAD = 32
+# Keep the peak clear of the crop border so condition B still shows a whole peak; only its
+# position changes. Shared with training (positive_jitter: uniform) so the two cannot drift.
+JITTER_EDGE_PAD = POSITIVE_JITTER_EDGE_PAD
 
 
 def _stack(assembled: np.ndarray, valid_mask: np.ndarray) -> np.ndarray:

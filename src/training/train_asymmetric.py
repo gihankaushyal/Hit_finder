@@ -61,6 +61,7 @@ from src.training.run_naming import (
 )
 from src.training.inference_results import INFERENCE_RESULTS_NAME, RESULTS_NAME
 from src.training.wandb_identity import override_hook_from_cfg
+from src.training.lodo import check_crop_options
 from src.utils.config import load_config
 
 
@@ -115,6 +116,7 @@ def main(
         ASYMMETRIC_EXAMPLE,
     )
     cfg = load_config(config_path)
+    check_crop_options(cfg)  # before any collision gate can touch a run directory
     if tags is not None:
         cfg.setdefault("wandb", {})["tags"] = tags
 

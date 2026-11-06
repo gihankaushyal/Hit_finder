@@ -41,6 +41,9 @@ hitfinder:
 # scope for this change.
 asymmetric:
   crops_per_frame: 1  # independently-augmented crops drawn per cached frame per item; __len__ is frame count, not frame count * this
+  positive_jitter: none      # none = positive crop centred on its peak (v2); uniform = peak uniformly placed in the crop
+  jitter_edge_pad: 32        # uniform only: minimum peak distance from the crop border (px); a peak near the real frame edge under crop_within_frame can end up closer
+  crop_within_frame: false   # true = no crop (positive or negative) may overlap the 112 px zero pad band
 
 benchmark:
   split_seed: 42

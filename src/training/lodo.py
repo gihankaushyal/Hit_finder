@@ -18,6 +18,12 @@ import torch
 import torch.nn as nn
 
 from src.data.dataloader import asymmetric_loader
+from src.data.dataset import (
+    CROP_SIZE,
+    POSITIVE_JITTER_EDGE_PAD,
+    POSITIVE_JITTER_NONE,
+    POSITIVE_JITTERS,
+)
 from src.data.frame_cache import FrameCache, verify_cache_or_raise
 from src.evaluation.benchmark import (
     SPLIT_CROSS_DETECTOR,
@@ -143,6 +149,45 @@ def _write_inference_summary(
         print(f"  [wandb] could not record the inference summary: {exc!r}")
 
 
+def check_crop_options(cfg: dict) -> None:
+    """Validate the crop-placement keys and demand a run suffix when they are non-default.
+
+    Called by both entry points right after the config is loaded, i.e. before the checkpoint
+    collision gate can rotate or delete a run directory.
+    """
+    asym = cfg.get("asymmetric", {})
+    jitter = asym.get("positive_jitter", POSITIVE_JITTER_NONE)
+    pad = asym.get("jitter_edge_pad", POSITIVE_JITTER_EDGE_PAD)
+    if jitter not in POSITIVE_JITTERS:
+        raise ValueError(
+            f"asymmetric.positive_jitter must be one of {POSITIVE_JITTERS}, got {jitter!r}"
+        )
+    if not 0 <= pad < CROP_SIZE // 2:
+        raise ValueError(
+            f"asymmetric.jitter_edge_pad must be in [0, {CROP_SIZE // 2}), got {pad}"
+        )
+    require_run_suffix_for_crop_options(
+        jitter,
+        bool(asym.get("crop_within_frame", False)),
+        cfg.get("wandb", {}).get("run_suffix", ""),
+        "the v2 baseline run",
+    )
+
+
+def require_run_suffix_for_crop_options(
+    positive_jitter: str, crop_within_frame: bool, run_suffix: str, baseline_name: str
+) -> None:
+    """A run with a non-default crop distribution must not share the baseline's directory."""
+    if (
+        positive_jitter != POSITIVE_JITTER_NONE or crop_within_frame
+    ) and not run_suffix:
+        raise ValueError(
+            "positive_jitter / crop_within_frame are set but wandb.run_suffix is empty; the run "
+            f"would resolve to the baseline directory {baseline_name}. "
+            "Set a run suffix (e.g. -jitter)."
+        )
+
+
 def _train_fold(
     fold: dict,
     split_artifact: dict,
@@ -226,6 +271,24 @@ def _train_fold(
     hit_frac = cfg.get("asymmetric", {}).get("hit_frac", 0.5)
     hard_neg_max_attempts = cfg.get("asymmetric", {}).get("hard_neg_max_attempts", 50)
     crops_per_frame = cfg.get("asymmetric", {}).get("crops_per_frame", 1)
+    positive_jitter = cfg.get("asymmetric", {}).get(
+        "positive_jitter", POSITIVE_JITTER_NONE
+    )
+    jitter_edge_pad = cfg.get("asymmetric", {}).get(
+        "jitter_edge_pad", POSITIVE_JITTER_EDGE_PAD
+    )
+    crop_within_frame = cfg.get("asymmetric", {}).get("crop_within_frame", False)
+    require_run_suffix_for_crop_options(
+        positive_jitter,
+        crop_within_frame,
+        run_suffix,
+        f"{prefix}-fold{fold_id}-seed{seed}",
+    )
+    print(
+        f"  crops: hit_frac={hit_frac} crops_per_frame={crops_per_frame} "
+        f"positive_jitter={positive_jitter} jitter_edge_pad={jitter_edge_pad} "
+        f"crop_within_frame={crop_within_frame}"
+    )
 
     ckpt_dir = Path("checkpoints") / run_name
     # Must run AFTER check_checkpoint_collisions' real (non-dry) pass, which may
@@ -266,6 +329,9 @@ def _train_fold(
             hit_frac=hit_frac,
             hard_neg_max_attempts=hard_neg_max_attempts,
             crops_per_frame=crops_per_frame,
+            positive_jitter=positive_jitter,
+            jitter_edge_pad=jitter_edge_pad,
+            crop_within_frame=crop_within_frame,
         )
 
     bench_cfg = cfg.get("benchmark", {})

@@ -15,8 +15,11 @@ import torch
 
 from src.data.dataset import (
     AsymmetricCXIDataset,
+    HARD_NEG_MARGIN_DEFAULT,
+    _crop_bounds,
     _crop_contains_centroid,
     _crop_within_margin,
+    _sample_clear_crop,
 )
 from src.hitfinders import MockHitfinder
 from src.preprocessing.augment import PAD_BORDER_DEFAULT, pad_border
@@ -144,6 +147,217 @@ def test_path_a_crop_centres_on_peak() -> None:
         crop,
         padded[expected_top : expected_top + 224, expected_left : expected_left + 224],
     )
+
+
+# ---------------------------------------------------------------------------
+# Positive jitter / crop_within_frame
+# ---------------------------------------------------------------------------
+
+_PH = _PW = 512 + 2 * PAD_BORDER_DEFAULT  # padded canvas of a 512 px frame
+_ENCODED = np.arange(_PH * _PW, dtype=np.int64).reshape(
+    _PH, _PW
+)  # value = row*_PW + col
+
+
+def _window_of(crop: np.ndarray) -> tuple[int, int]:
+    """Recover (top, left) of a crop cut from _ENCODED."""
+    v = int(crop[0, 0])
+    return v // _PW, v % _PW
+
+
+def _random_peaks(rng: np.random.Generator, n: int) -> np.ndarray:
+    """Peaks anywhere in the real frame (padded coordinates), incl. the frame edge."""
+    p = PAD_BORDER_DEFAULT
+    return rng.integers(p, p + 512, size=(n, 2)).astype(np.float32)
+
+
+def test_jittered_peak_is_always_inside_the_crop() -> None:
+    from src.data.dataset import POSITIVE_JITTER_EDGE_PAD, _path_a_crop
+
+    rng = np.random.default_rng(1)
+    for peak in _random_peaks(rng, 300):
+        crop, label = _path_a_crop(
+            _ENCODED, peak[None], rng, _PH, _PW, 224,
+            jitter_edge_pad=POSITIVE_JITTER_EDGE_PAD,
+        )  # fmt: skip
+        top, left = _window_of(crop)
+        x, y = int(peak[0]), int(peak[1])
+        assert label == 1 and crop.shape == (224, 224)
+        assert left <= x < left + 224 and top <= y < top + 224
+
+
+def test_jitter_spreads_the_peak_position_over_the_crop() -> None:
+    from src.data.dataset import POSITIVE_JITTER_EDGE_PAD, _path_a_crop
+
+    rng = np.random.default_rng(2)
+    peak = np.array([[368.0, 368.0]], dtype=np.float32)  # far from every edge
+    offs = []
+    for _ in range(400):
+        crop, _ = _path_a_crop(
+            _ENCODED, peak, rng, _PH, _PW, 224,
+            jitter_edge_pad=POSITIVE_JITTER_EDGE_PAD,
+        )  # fmt: skip
+        top, left = _window_of(crop)
+        offs.append((368 - left, 368 - top))
+    offs = np.array(offs)
+    assert offs.min() >= POSITIVE_JITTER_EDGE_PAD
+    assert offs.max() < 224 - POSITIVE_JITTER_EDGE_PAD
+    assert offs.std(axis=0).min() > 30  # uniform over 160 px has sd ~46, centred has 0
+
+
+def test_crop_within_frame_never_touches_the_pad_band() -> None:
+    from src.data.dataset import _crop_bounds, _path_a_crop, _sample_clear_crop
+
+    p = PAD_BORDER_DEFAULT
+    bounds = _crop_bounds(_PH, _PW, 224, within_frame=True)
+    assert bounds == (p, _PH - p - 224, p, _PW - p - 224)
+    rng = np.random.default_rng(3)
+    for peak in _random_peaks(rng, 200):
+        for jit in (None, 32):
+            crop, _ = _path_a_crop(
+                _ENCODED, peak[None], rng, _PH, _PW, 224,
+                jitter_edge_pad=jit, bounds=bounds,
+            )  # fmt: skip
+            top, left = _window_of(crop)
+            assert p <= top <= bounds[1] and p <= left <= bounds[3]
+            assert left <= int(peak[0]) < left + 224 and top <= int(peak[1]) < top + 224
+    neg = _sample_clear_crop(
+        _ENCODED, np.zeros((0, 2), np.float32), rng, _PH, _PW, 224, 50, 10, bounds=bounds
+    )  # fmt: skip
+    top, left = _window_of(neg)
+    assert p <= top <= bounds[1] and p <= left <= bounds[3]
+
+
+def test_defaults_leave_crops_and_rng_stream_unchanged() -> None:
+    from src.data.dataset import _path_a_crop, _sample_clear_crop
+
+    peaks = np.array([[400.0, 300.0], [250.0, 260.0]], dtype=np.float32)
+    a, b = np.random.default_rng(9), np.random.default_rng(9)
+    ca, _ = _path_a_crop(_ENCODED, peaks, a, _PH, _PW, 224)
+    cb, _ = _path_a_crop(
+        _ENCODED, peaks, b, _PH, _PW, 224, jitter_edge_pad=None, bounds=None
+    )
+    np.testing.assert_array_equal(ca, cb)
+    na = _sample_clear_crop(_ENCODED, peaks, a, _PH, _PW, 224, 50, 20)
+    nb = _sample_clear_crop(_ENCODED, peaks, b, _PH, _PW, 224, 50, 20, bounds=None)
+    assert (na is None and nb is None) or np.array_equal(na, nb)
+    assert a.integers(0, 10**9) == b.integers(0, 10**9)
+
+
+def test_crop_bounds_rejects_a_frame_smaller_than_a_crop() -> None:
+    from src.data.dataset import _crop_bounds
+
+    with pytest.raises(ValueError, match="smaller than"):
+        _crop_bounds(300, 300, 224, within_frame=True)
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"positive_jitter": "gaussian"},
+        {"positive_jitter": "uniform", "jitter_edge_pad": -1},
+        {"positive_jitter": "uniform", "jitter_edge_pad": 112},
+    ],
+)
+def test_dataset_rejects_bad_jitter_options(synthetic_cxi: Path, kwargs) -> None:
+    with pytest.raises(ValueError):
+        AsymmetricCXIDataset(
+            session_ids=["s0"],
+            session_map={"s0": synthetic_cxi},
+            hitfinder=MockHitfinder(peaks=np.zeros((0, 2), np.float32)),
+            label_key=LABEL_KEY,
+            **kwargs,
+        )
+
+
+def test_dataset_with_jitter_and_within_frame_yields_valid_items(
+    synthetic_cxi: Path,
+) -> None:
+    ds = AsymmetricCXIDataset(
+        session_ids=["s0"],
+        session_map={"s0": synthetic_cxi},
+        hitfinder=MockHitfinder(peaks=np.array([[256.0, 256.0]], dtype=np.float32)),
+        label_key=LABEL_KEY,
+        positive_jitter="uniform",
+        crop_within_frame=True,
+    )
+    labels = set()
+    for epoch in range(6):
+        ds.set_epoch(epoch)
+        for idx in range(len(ds)):
+            item = ds[idx]
+            assert item is not None
+            tensor, label = item
+            assert tensor.shape == (1, 1, 224, 224)
+            labels.add(int(label[0]))
+    assert labels == {0, 1}
+
+
+def _hard_neg_failure_rate(peaks: np.ndarray, within_frame: bool, draws: int) -> float:
+    """How often the hard-negative sampler finds no clear window on a frame with `peaks`."""
+    ph, pw = H + 2 * PAD_BORDER_DEFAULT, W + 2 * PAD_BORDER_DEFAULT
+    canvas = np.zeros((ph, pw, 1), dtype=np.float32)
+    shifted = peaks + PAD_BORDER_DEFAULT
+    bounds = _crop_bounds(ph, pw, 224, within_frame)
+    rng = np.random.default_rng(1)
+    failed = sum(
+        _sample_clear_crop(
+            canvas, shifted, rng, ph, pw, 224, HARD_NEG_MARGIN_DEFAULT, 50, bounds
+        )
+        is None
+        for _ in range(draws)
+    )
+    return failed / draws
+
+
+def _realized_positive_fraction(
+    cxi: Path, peaks: np.ndarray, within_frame: bool, epochs: int
+) -> float:
+    """Share of label-1 crops drawn from the metadata-hit frames of the fixture."""
+    ds = AsymmetricCXIDataset(
+        session_ids=["s0"],
+        session_map={"s0": cxi},
+        hitfinder=MockHitfinder(peaks=peaks),
+        label_key=LABEL_KEY,
+        hit_frac=0.5,
+        positive_jitter="uniform",
+        crop_within_frame=within_frame,
+    )
+    labels = []
+    for epoch in range(epochs):
+        ds.set_epoch(epoch)
+        for idx in range(N_HITS):  # indices 0-3 are metadata hits
+            item = ds[idx]
+            assert item is not None
+            labels.append(int(item[1][0]))
+    return float(np.mean(labels))
+
+
+def test_realized_hit_fraction_follows_the_hard_negative_failure_rate(
+    synthetic_cxi: Path,
+) -> None:
+    """On a hit frame a failed hard-negative draw falls back to a positive crop, so
+    P(label 1) = hit_frac + (1 - hit_frac) * P(sampler fails). crop_within_frame removes the
+    border positions the sampler can use, so it can only raise the positive share."""
+    hit_frac, tol = 0.5, 0.08
+    sparse = np.array([[256.0, 256.0]], dtype=np.float32)
+    # a cluster so wide that no 224 px window keeps 50 px clear of it inside the frame
+    dense = 256.0 + np.random.default_rng(0).uniform(-60, 60, size=(12, 2))
+    dense = dense.astype(np.float32)
+    for peaks in (sparse, dense):
+        measured = {}
+        for within in (False, True):
+            fail = _hard_neg_failure_rate(peaks, within, draws=400)
+            expected = hit_frac + (1 - hit_frac) * fail
+            measured[within] = _realized_positive_fraction(
+                synthetic_cxi, peaks, within, epochs=150
+            )
+            assert measured[within] == pytest.approx(expected, abs=tol), (
+                len(peaks),
+                within,
+                fail,
+            )
+        assert measured[True] >= measured[False] - tol
 
 
 # ---------------------------------------------------------------------------
@@ -687,3 +901,62 @@ def test_out_of_range_label_warns_and_still_functions(
     assert (
         label[0].item() == 0
     ), f"out-of-range label must be treated as non-hit, got {label}"
+
+
+def test_loader_forwards_jitter_options_and_base_config_defaults(
+    synthetic_cxi: Path,
+) -> None:
+    from src.data.dataloader import asymmetric_loader
+    from src.utils.config import load_config
+
+    asym = load_config("configs/supervised/resnet18_asymmetric.yaml")["asymmetric"]
+    assert asym["positive_jitter"] == "none" and asym["crop_within_frame"] is False
+
+    loader = asymmetric_loader(
+        session_map={"s0": synthetic_cxi},
+        session_ids=["s0"],
+        hitfinder=MockHitfinder(peaks=np.zeros((0, 2), np.float32)),
+        batch_size=2,
+        num_workers=0,
+        label_key=LABEL_KEY,
+        positive_jitter="uniform",
+        jitter_edge_pad=40,
+        crop_within_frame=True,
+    )
+    ds = loader.dataset
+    assert (ds._positive_jitter, ds._jitter_edge_pad, ds._crop_within_frame) == (
+        "uniform",
+        40,
+        True,
+    )
+
+
+def test_crop_options_require_a_run_suffix() -> None:
+    from src.training.lodo import require_run_suffix_for_crop_options as check
+
+    check("none", False, "", "resnet18-asymmetric-v2-fold4-seed42")  # baseline: fine
+    check("uniform", True, "-jitter", "x")  # suffixed: fine
+    for jitter, within in (("uniform", False), ("none", True), ("uniform", True)):
+        with pytest.raises(ValueError, match="baseline directory"):
+            check(jitter, within, "", "resnet18-asymmetric-v2-fold4-seed42")
+
+
+def test_check_crop_options_validates_values_and_demands_a_suffix() -> None:
+    from src.training.lodo import check_crop_options
+
+    check_crop_options({})  # defaults: nothing to check
+    check_crop_options(
+        {
+            "asymmetric": {"positive_jitter": "uniform"},
+            "wandb": {"run_suffix": "-jitter"},
+        }
+    )
+    bad = [
+        {"asymmetric": {"positive_jitter": "uniformm"}, "wandb": {"run_suffix": "-j"}},
+        {"asymmetric": {"jitter_edge_pad": 120}, "wandb": {"run_suffix": "-j"}},
+        {"asymmetric": {"crop_within_frame": True}},  # no suffix
+        {"asymmetric": {"positive_jitter": "uniform"}, "wandb": {"run_suffix": ""}},
+    ]
+    for cfg in bad:
+        with pytest.raises(ValueError):
+            check_crop_options(cfg)

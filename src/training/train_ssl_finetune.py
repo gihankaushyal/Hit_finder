@@ -38,6 +38,7 @@ from pathlib import Path
 import torch
 import torch.nn as nn
 
+from src.data.dataset import POSITIVE_JITTER_NONE
 from src.data.frame_cache import frame_cache_from_cfg
 from src.evaluation.benchmark import (
     build_lodo_folds,
@@ -51,7 +52,7 @@ from src.models.ssl import (
     build_ssl_classifier,
 )
 from src.training.recipe import DEFAULT_LAYER_DECAY, DEFAULT_WARMUP_EPOCHS, LR_CONSTANT
-from src.training.lodo import _train_fold, build_sessions
+from src.training.lodo import _train_fold, build_sessions, check_crop_options
 from src.training.run_naming import (
     SSL_FINETUNE_CONVENTION,
     SSL_FINETUNE_EXAMPLE,
@@ -82,6 +83,7 @@ def non_default_recipe_keys(cfg: dict, reference: dict | None = None) -> list[st
     (or, with --override-training, delete) the directory of the genuine v2 run.
     """
     training, ssl = cfg.get("training", {}), cfg.get("ssl", {})
+    asym = cfg.get("asymmetric", {})
     checks = {
         "warmup_epochs": training.get("warmup_epochs", DEFAULT_WARMUP_EPOCHS)
         != DEFAULT_WARMUP_EPOCHS,
@@ -94,6 +96,9 @@ def non_default_recipe_keys(cfg: dict, reference: dict | None = None) -> list[st
         "drop_path_rate": ssl.get("drop_path_rate", DROP_PATH_RATE_DEFAULT)
         != DROP_PATH_RATE_DEFAULT,
         "head_init": ssl.get("head_init", HEAD_INIT_DEFAULT) != HEAD_INIT_DEFAULT,
+        "positive_jitter": asym.get("positive_jitter", POSITIVE_JITTER_NONE)
+        != POSITIVE_JITTER_NONE,
+        "crop_within_frame": bool(asym.get("crop_within_frame", False)),
     }
     if reference is not None:
         ref_training = reference.get("training", {})
@@ -348,6 +353,10 @@ def main() -> None:
         # argparse reads a value starting with "-" as a flag, so accept "lpft" and add the dash.
         suffix = args.run_suffix.lstrip("-")
         cfg.setdefault("wandb", {})["run_suffix"] = f"-{suffix}"
+    try:
+        check_crop_options(cfg)
+    except ValueError as e:
+        p.error(str(e))
 
     validate_run_name_prefix(
         args.run_name_prefix,
