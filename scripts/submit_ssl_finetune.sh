@@ -33,6 +33,7 @@
 #                   TRAIN_CONFIG=configs/ssl/mae_finetune_jitter.yaml \
 #                     sbatch scripts/submit_ssl_finetune.sh 4 vits16-mae-v2 mae-vits16-v2 --run-suffix jitter
 #   TRAIN_SEED    Fine-tune seed (default: the config's seed, 42). Names the run ...-seed<S>[suffix].
+#                 Single-fold scripts only: the *_all.sh orchestrators do not forward it.
 #                 The pretrain checkpoint is NOT re-seeded: it is always the config-seed one.
 #   CACHE_NVME    Path to this fold's NVMe-staged frame-cache tier
 #                 (default /tmp/sfx_frame_cache). See scripts/stage_frame_cache.sh.
@@ -101,7 +102,10 @@ elif [ ! -f "${PRETRAIN_CKPT}" ]; then
 fi
 
 SEED_ARGS=()
-[[ -n "${TRAIN_SEED:-}" ]] && SEED_ARGS=(--seed "${TRAIN_SEED}")
+if [[ -n "${TRAIN_SEED:-}" ]]; then
+    [[ "${TRAIN_SEED}" =~ ^[0-9]+$ ]] || { echo "Error: TRAIN_SEED must be a non-negative integer, got '${TRAIN_SEED}'." >&2; exit 1; }
+    SEED_ARGS=(--seed "${TRAIN_SEED}")
+fi
 
 module load mamba/latest
 source activate sfx-hitfinder

@@ -15,7 +15,7 @@
 # Environment variables:
 #   FOLDS    folds to sweep (default "4 1")
 #   SEED     training seed of the checkpoints (default 42)
-#   SUFFIX   run suffix of the checkpoints, e.g. SUFFIX=-jitter for the jittered runs (default none);
+#   SUFFIX   run suffix of the checkpoints, e.g. SUFFIX=-jitter for the jittered runs (default none; the leading dash is optional);
 #            the careful arm reads <prefix>-careful<SUFFIX>. Output files carry seed and suffix.
 #SBATCH --job-name=sfx-crop-diag
 #SBATCH -p general
@@ -48,6 +48,7 @@ mkdir -p logs "${OUT_DIR}"
 FOLDS="${FOLDS:-4 1}"
 SEED="${SEED:-42}"
 SUFFIX="${SUFFIX:-}"
+[[ -z "${SUFFIX}" || "${SUFFIX}" == -* ]] || SUFFIX="-${SUFFIX}"  # accept jitter and -jitter alike
 N_OK=0; N_SKIP=0; N_FAIL=0
 
 for FOLD in ${FOLDS}; do
@@ -70,6 +71,12 @@ for FOLD in ${FOLDS}; do
             N_SKIP=$((N_SKIP + 1))
             continue
         fi
+        # the default baseline keeps its original file name so earlier results line up
+        if [ "${SEED}" = 42 ] && [ -z "${SUFFIX}" ]; then
+            OUT="${OUT_DIR}/fold${FOLD}_${ARM}_${RUN_VERSION}_cross.json"
+        else
+            OUT="${OUT_DIR}/fold${FOLD}_${ARM}_${RUN_VERSION}_seed${SEED}${SUFFIX}_cross.json"
+        fi
         echo "=============== fold ${FOLD} / ${ARM} ==============="
         # One failing arm must not abort the rest, but it is counted and fails the job at the end.
         if python -u scripts/diagnose_crop_shortcut.py \
@@ -79,7 +86,7 @@ for FOLD in ${FOLDS}; do
             --fold "${FOLD}" \
             --split cross_detector_eval \
             --max-frames "${MAX_FRAMES}" \
-            --out "${OUT_DIR}/fold${FOLD}_${ARM}_${RUN_VERSION}_seed${SEED}${SUFFIX}_cross.json"; then
+            --out "${OUT}"; then
             N_OK=$((N_OK + 1))
         else
             echo "[FAILED] fold ${FOLD} ${ARM}"

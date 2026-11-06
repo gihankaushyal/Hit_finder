@@ -37,6 +37,7 @@
 #                 Training config (default configs/supervised/resnet18_asymmetric.yaml), e.g.
 #                 configs/supervised/resnet18_asymmetric_jitter.yaml (writes ...-seed<S>-jitter).
 #   TRAIN_SEED    Training seed (default: the config's seed, 42). Names the run ...-seed<S>[suffix].
+#                 Single-fold scripts only: the *_all.sh orchestrators do not forward it.
 #   CACHE_NVME    Path to this fold's NVMe-staged frame-cache tier
 #                 (default /tmp/sfx_frame_cache). See scripts/stage_frame_cache.sh.
 #   RESUME_FLAG   --resume-training (default), --override-training or
@@ -78,7 +79,10 @@ FOLD="${1:?fold id required (1-4)}"
 RUN_NAME_PREFIX="${2:?run_name_prefix required, e.g. resnet18-asymmetric-v2}"
 RESUME_FLAG="${RESUME_FLAG:---resume-training}"
 SEED_ARGS=()
-[[ -n "${TRAIN_SEED:-}" ]] && SEED_ARGS=(--seed "${TRAIN_SEED}")
+if [[ -n "${TRAIN_SEED:-}" ]]; then
+    [[ "${TRAIN_SEED}" =~ ^[0-9]+$ ]] || { echo "Error: TRAIN_SEED must be a non-negative integer, got '${TRAIN_SEED}'." >&2; exit 1; }
+    SEED_ARGS=(--seed "${TRAIN_SEED}")
+fi
 
 module load mamba/latest
 source activate sfx-hitfinder
