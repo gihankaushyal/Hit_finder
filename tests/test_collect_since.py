@@ -47,3 +47,16 @@ def test_latest_report_is_the_newest_dated_folder(tmp_path):
         (tmp_path / name).mkdir()
     folder, when = cs.latest_report(tmp_path)
     assert folder.name == "2026-11-06" and when == date(2026, 11, 6)
+
+
+def test_body_dates_do_not_make_an_old_section_recent():
+    block = "## 12. Old result (2026-09-01)\nrerun planned 2026-11-20\n"
+    assert cs.section_last_date(block) == date(2026, 9, 1)
+
+
+def test_latest_report_skips_impossible_dates(tmp_path, capsys):
+    (tmp_path / "2026-11-31").mkdir()
+    (tmp_path / "2026-10-05").mkdir()
+    folder, when = cs.latest_report(tmp_path)
+    assert (folder.name, when) == ("2026-10-05", date(2026, 10, 5))
+    assert "not a real calendar date" in capsys.readouterr().out

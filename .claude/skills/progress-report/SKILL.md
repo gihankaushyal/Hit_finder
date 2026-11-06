@@ -1,6 +1,6 @@
 ---
 name: progress-report
-description: Produce the Hit_finder stakeholder progress report as three audience-tailored write-ups and slide decks (domain PI with little AI background; domain expert with moderate AI knowledge; AI expert with light domain knowledge), each continuing the previous report. Builds a verified fact base from docs/progress_notes.md, re-aggregated results, merged PRs and the kanban, then publishes decks as private Slides artifacts. On the first run it interviews the user and sets up the local, gitignored reports/ folder. Use whenever the user asks for a progress report, status update, PI update, stakeholder or group-meeting slides, a project summary deck, or "what have we done since the last report", even if they do not say "report".
+description: Produce the Hit_finder stakeholder progress report as three audience-tailored write-ups and slide decks (domain PI with little AI background; domain expert with moderate AI knowledge; AI expert with light domain knowledge), each continuing the previous report. Builds a verified fact base from docs/progress_notes.md, re-aggregated results, merged PRs and the kanban, then publishes decks as private Slides artifacts. On the first run it interviews the user and sets up the local, gitignored reports/ folder. Manual only: run /progress-report.
 disable-model-invocation: true
 ---
 
@@ -16,6 +16,8 @@ Read `references/audiences.md` before writing anything and `references/known-pit
 - Reports (local only, gitignored): `reports/` at the repo root. Layout and file templates are in `references/report-folder.md`. Tracked docs and code must never link into `reports/`.
 
 ## Workflow
+
+Run everything from the **main checkout** (`/data/bioxfel/user/gihan/Hit_finder`). `reports/`, `docs/progress_notes.md`, `phase-05-kanban.md` and `PLANNING.md` are gitignored, so a worktree does not have them; there the skill would think it is the first run and build an empty digest. From a worktree, `cd "$(git rev-parse --git-common-dir)/.."` first.
 
 ### 0. First run: set up the folder
 If `reports/INSTRUCTIONS.md` does not exist, this is the first run. Do not guess the stakeholders. Run `superpowers:brainstorming` and use `AskUserQuestion` following `references/first-run-interview.md` until the answers cover roughly 95% of what you need (who the three audiences are, meeting format, tone, length, figures, terms to avoid, whether links may be shared). Then create `reports/INSTRUCTIONS.md`, `reports/glossary.md` and `reports/index.md` from the templates in `references/report-folder.md`, and check `git check-ignore reports/x`. If `reports/` is not ignored, tell the user the one line to add to `.gitignore` and ask before editing it (their `.gitignore` often has unrelated uncommitted edits; stage nothing else).

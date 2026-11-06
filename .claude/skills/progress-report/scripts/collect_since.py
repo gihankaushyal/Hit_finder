@@ -33,12 +33,17 @@ SECTION_HEADING_RE = re.compile(r"^## ", re.MULTILINE)
 PLANNING_HEAD_LINES = 60
 GH_PR_LIMIT = 100
 COMMIT_LIMIT = 200
+COMMAND_TIMEOUT_S = 120
+KANBAN_MARKER_RE = re.compile(r"\s*<!--\s*gh:#\d+\s*-->")
+PLANNING_STATUS_RE = re.compile(r"CURRENT|IN PROGRESS", re.IGNORECASE)
 
 
 def _run(cmd: list[str]) -> str | None:
     """Stdout of a command, or None if it is missing or fails."""
     try:
-        out = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        out = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=COMMAND_TIMEOUT_S
+        )
     except (OSError, subprocess.TimeoutExpired):
         return None
     return out.stdout if out.returncode == 0 else None
@@ -46,14 +51,18 @@ def _run(cmd: list[str]) -> str | None:
 
 def latest_report(reports_dir: Path) -> tuple[Path, date] | None:
     """Newest dated report folder, or None if there is none yet."""
-    dirs = sorted(
-        d
-        for d in reports_dir.glob("*")
-        if d.is_dir() and REPORT_DIR_RE.fullmatch(d.name)
-    )
-    if not dirs:
+    found = []
+    for d in reports_dir.glob("*"):
+        if not (d.is_dir() and REPORT_DIR_RE.fullmatch(d.name)):
+            continue
+        try:
+            found.append((date.fromisoformat(d.name), d))
+        except ValueError:
+            print(f"WARNING: ignoring {d}: not a real calendar date")
+    if not found:
         return None
-    return dirs[-1], date.fromisoformat(dirs[-1].name)
+    when, folder = max(found)
+    return folder, when
 
 
 def split_sections(text: str) -> list[tuple[str, str]]:
@@ -69,8 +78,13 @@ def split_sections(text: str) -> list[tuple[str, str]]:
 
 
 def section_last_date(block: str) -> date | None:
-    """Latest ISO date mentioned in a section's heading line or body."""
-    found = ISO_DATE_RE.findall(block)
+    """Latest ISO date in a section's heading line; the body only if the heading has none.
+
+    A body routinely mentions later dates ("rerun planned 2026-11-20", "superseded by the
+    2026-11-04 run"), which would make an old section look recent.
+    """
+    heading = block.partition("\n")[0]
+    found = ISO_DATE_RE.findall(heading) or ISO_DATE_RE.findall(block)
     valid = []
     for d in found:
         try:
@@ -107,6 +121,10 @@ def print_reports_state(reports_dir: Path) -> None:
 
 def print_notes(since: date, full: bool) -> None:
     print(f"\n=== Progress-note sections dated {since} or later ===")
+    print(
+        f"(boundary day {since} is included on purpose so nothing is missed; anything "
+        "dated that day may already be in the previous report's facts.md: dedupe against it)"
+    )
     if not NOTES_PATH.exists():
         print(f"{NOTES_PATH} not found (local, untracked): skipped.")
         return
@@ -124,7 +142,7 @@ def print_notes(since: date, full: bool) -> None:
 
 
 def print_prs(since: date) -> None:
-    print(f"\n=== Pull requests merged since {since} ===")
+    print(f"\n=== Pull requests merged since {since} (all base branches) ===")
     out = _run(
         [
             "gh",
@@ -143,6 +161,8 @@ def print_prs(since: date) -> None:
         ]
     )
     print(out.strip() if out and out.strip() else "none (or gh unavailable)")
+    if out and len(out.strip().splitlines()) >= GH_PR_LIMIT:
+        print(f"WARNING: hit the --limit {GH_PR_LIMIT}; older merged PRs are missing.")
 
 
 def print_commits(since: date) -> None:
@@ -158,18 +178,34 @@ def print_commits(since: date) -> None:
         ]
     )
     print(out.strip() if out and out.strip() else "none")
+    if out and len(out.strip().splitlines()) >= COMMIT_LIMIT:
+        print(f"WARNING: hit --max-count={COMMIT_LIMIT}; older commits are missing.")
 
 
 def print_plan_state() -> None:
     print("\n=== Kanban and planning (local, untracked) ===")
-    for path, limit in ((KANBAN_PATH, None), (PLANNING_PATH, PLANNING_HEAD_LINES)):
-        if not path.exists():
-            print(f"{path}: not found, skipped")
-            continue
-        lines = path.read_text().splitlines()
-        shown = lines if limit is None else lines[:limit]
-        print(f"\n--- {path}{'' if limit is None else f' (first {limit} lines)'} ---")
-        print("\n".join(shown))
+    if KANBAN_PATH.exists():
+        print(f"\n--- {KANBAN_PATH} ---")
+        for line in KANBAN_PATH.read_text().splitlines():
+            print(KANBAN_MARKER_RE.sub("", line))
+    else:
+        print(f"{KANBAN_PATH}: not found, skipped")
+    if PLANNING_PATH.exists():
+        lines = PLANNING_PATH.read_text().splitlines()
+        print(f"\n--- {PLANNING_PATH} (first {PLANNING_HEAD_LINES} lines) ---")
+        print("\n".join(lines[:PLANNING_HEAD_LINES]))
+        later = [
+            f"{n}: {line}"
+            for n, line in enumerate(
+                lines[PLANNING_HEAD_LINES:], PLANNING_HEAD_LINES + 1
+            )
+            if PLANNING_STATUS_RE.search(line)
+        ]
+        if later:
+            print("\n--- later lines marking current / in-progress work ---")
+            print("\n".join(later))
+    else:
+        print(f"{PLANNING_PATH}: not found, skipped")
 
 
 def main() -> None:

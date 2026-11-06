@@ -79,4 +79,4 @@ phase-05-kanban.md
 *.pre-sync.bak
 
 # Local stakeholder progress reports (written by the progress-report skill)
-reports/
+/reports/
