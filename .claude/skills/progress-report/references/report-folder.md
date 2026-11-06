@@ -5,7 +5,7 @@ reports/
   INSTRUCTIONS.md      audiences, occasion, tone, figure and sharing rules (from the first-run interview)
   index.md             running log: | date | title | one-line summary | deck A/B/C links |
   glossary.md          plain-language definitions reused every report
-  YYYY-MM-DD/
+  YYYY-MM-DD/   (or YYYY-MM-DD-2 for a further report on the same day)
     facts.md           verified claims table + "Since last report" status block + "not verified" list
     audience-A.md  audience-B.md  audience-C.md
     deck-A.md  deck-B.md  deck-C.md        slide content, speaker notes, artifact URL

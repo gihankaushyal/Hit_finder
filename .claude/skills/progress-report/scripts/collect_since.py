@@ -25,11 +25,14 @@ from datetime import date
 from pathlib import Path
 
 NOTES_PATH = Path("docs/progress_notes.md")
-KANBAN_PATH = Path("phase-05-kanban.md")
+KANBAN_GLOB = "phase-*-kanban.md"
 PLANNING_PATH = Path("PLANNING.md")
-REPORT_DIR_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
+REPORT_DIR_RE = re.compile(
+    r"(\d{4}-\d{2}-\d{2})(?:-(\d+))?"
+)  # -N: extra report on one day
 ISO_DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
-SECTION_HEADING_RE = re.compile(r"^## ", re.MULTILINE)
+FENCE_RE = re.compile(r"^\s*(```|~~~)")
+ENCODING = "utf-8"
 PLANNING_HEAD_LINES = 60
 GH_PR_LIMIT = 100
 COMMIT_LIMIT = 200
@@ -38,60 +41,81 @@ KANBAN_MARKER_RE = re.compile(r"\s*<!--\s*gh:#\d+\s*-->")
 PLANNING_STATUS_RE = re.compile(r"CURRENT|IN PROGRESS", re.IGNORECASE)
 
 
-def _run(cmd: list[str]) -> str | None:
-    """Stdout of a command, or None if it is missing or fails."""
+def _run(cmd: list[str]) -> tuple[str, str | None]:
+    """(stdout, error). error is None on success; a failed command is never read as 'no results'."""
     try:
         out = subprocess.run(
             cmd, capture_output=True, text=True, timeout=COMMAND_TIMEOUT_S
         )
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    return out.stdout if out.returncode == 0 else None
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return "", f"{cmd[0]} could not run ({exc.__class__.__name__})"
+    if out.returncode != 0:
+        detail = out.stderr.strip().splitlines()[-1:] or ["no message"]
+        return "", f"{cmd[0]} failed (exit {out.returncode}): {detail[0]}"
+    return out.stdout, None
 
 
 def latest_report(reports_dir: Path) -> tuple[Path, date] | None:
-    """Newest dated report folder, or None if there is none yet."""
+    """Newest complete report folder (one that has a state.md), or None.
+
+    Folders are YYYY-MM-DD, or YYYY-MM-DD-N for a further report on the same day. A folder
+    without state.md is an unfinished run: it is reported and never taken as the baseline.
+    """
     found = []
     for d in reports_dir.glob("*"):
-        if not (d.is_dir() and REPORT_DIR_RE.fullmatch(d.name)):
+        m = REPORT_DIR_RE.fullmatch(d.name)
+        if not (d.is_dir() and m):
             continue
         try:
-            found.append((date.fromisoformat(d.name), d))
+            when = date.fromisoformat(m.group(1))
         except ValueError:
             print(f"WARNING: ignoring {d}: not a real calendar date")
+            continue
+        if not (d / "state.md").exists():
+            print(
+                f"WARNING: {d} has no state.md (unfinished run): not used as baseline"
+            )
+            continue
+        found.append(((when, int(m.group(2) or 0)), d))
     if not found:
         return None
-    when, folder = max(found)
+    (when, _), folder = max(found)
     return folder, when
 
 
 def split_sections(text: str) -> list[tuple[str, str]]:
-    """(heading, body) for each '## ' section of a markdown file."""
-    starts = [m.start() for m in SECTION_HEADING_RE.finditer(text)]
-    sections = []
-    for i, s in enumerate(starts):
-        end = starts[i + 1] if i + 1 < len(starts) else len(text)
-        block = text[s:end]
-        heading, _, _ = block.partition("\n")
-        sections.append((heading.lstrip("# ").strip(), block))
-    return sections
+    """(heading, body) for each '## ' section; '## ' lines inside code fences are not headings."""
+    sections: list[tuple[str, list[str]]] = []
+    in_fence = False
+    for line in text.splitlines(keepends=True):
+        if FENCE_RE.match(line):
+            in_fence = not in_fence
+        if line.startswith("## ") and not in_fence:
+            sections.append((line.lstrip("# ").strip(), []))
+        if sections:
+            sections[-1][1].append(line)
+    return [(heading, "".join(lines)) for heading, lines in sections]
+
+
+def _valid_dates(text: str) -> list[date]:
+    out = []
+    for d in ISO_DATE_RE.findall(text):
+        try:
+            out.append(date.fromisoformat(d))
+        except ValueError:
+            continue
+    return out
 
 
 def section_last_date(block: str) -> date | None:
-    """Latest ISO date in a section's heading line; the body only if the heading has none.
+    """Latest ISO date in a section's heading line, or None if the heading has none.
 
-    A body routinely mentions later dates ("rerun planned 2026-11-20", "superseded by the
-    2026-11-04 run"), which would make an old section look recent.
+    Only the heading is trusted: a body mentions later dates for other reasons ("rerun planned
+    2026-11-20", "superseded by the 2026-11-04 run"). Sections whose heading has no date, or
+    an older one, are listed separately by print_notes with their body dates for a human check.
     """
-    heading = block.partition("\n")[0]
-    found = ISO_DATE_RE.findall(heading) or ISO_DATE_RE.findall(block)
-    valid = []
-    for d in found:
-        try:
-            valid.append(date.fromisoformat(d))
-        except ValueError:
-            continue
-    return max(valid) if valid else None
+    dates = _valid_dates(block.partition("\n")[0])
+    return max(dates) if dates else None
 
 
 def print_reports_state(reports_dir: Path) -> None:
@@ -114,7 +138,7 @@ def print_reports_state(reports_dir: Path) -> None:
     print(f"Latest report: {folder}  (period for the next report starts {when})")
     state = folder / "state.md"
     if state.exists():
-        print(f"\n--- {state} ---\n{state.read_text()}")
+        print(f"\n--- {state} ---\n{state.read_text(encoding=ENCODING)}")
     else:
         print(f"WARNING: {state} is missing: the next report cannot continue from it.")
 
@@ -129,21 +153,36 @@ def print_notes(since: date, full: bool) -> None:
         print(f"{NOTES_PATH} not found (local, untracked): skipped.")
         return
     shown = 0
-    for heading, block in split_sections(NOTES_PATH.read_text()):
+    to_check = []
+    for heading, block in split_sections(NOTES_PATH.read_text(encoding=ENCODING)):
         last = section_last_date(block)
-        if last is None or last < since:
+        if last is not None and last >= since:
+            shown += 1
+            print(f"\n## {heading}   (heading date {last}, {len(block)} chars)")
+            if full:
+                print(block)
             continue
-        shown += 1
-        print(f"\n## {heading}   (latest date {last}, {len(block)} chars)")
-        if full:
-            print(block)
+        later = sorted({d for d in _valid_dates(block) if d >= since})
+        if later:
+            to_check.append((heading, last, later))
     if not shown:
         print("none")
+    if to_check:
+        print(
+            "\n--- Older or undated headings whose body mentions dates in the period: "
+            "read these yourself (a section may have been appended to, or only mention a "
+            "planned or superseded date) ---"
+        )
+        for heading, last, later in to_check:
+            tag = f"heading date {last}" if last else "undated heading"
+            print(
+                f"## {heading}   ({tag}; body dates: {', '.join(map(str, later[-3:]))})"
+            )
 
 
 def print_prs(since: date) -> None:
     print(f"\n=== Pull requests merged since {since} (all base branches) ===")
-    out = _run(
+    out, err = _run(
         [
             "gh",
             "pr",
@@ -160,14 +199,17 @@ def print_prs(since: date) -> None:
             "{{range .}}#{{.number}} {{.mergedAt}} [{{.baseRefName}}] {{.title}}\n{{end}}",
         ]
     )
-    print(out.strip() if out and out.strip() else "none (or gh unavailable)")
-    if out and len(out.strip().splitlines()) >= GH_PR_LIMIT:
+    if err:
+        print(f"ERROR: PR list unavailable ({err}); do NOT read this as 'no PRs'.")
+    else:
+        print(out.strip() or "none")
+    if len(out.strip().splitlines()) >= GH_PR_LIMIT:
         print(f"WARNING: hit the --limit {GH_PR_LIMIT}; older merged PRs are missing.")
 
 
 def print_commits(since: date) -> None:
     print(f"\n=== Commit subjects since {since} (current branch) ===")
-    out = _run(
+    out, err = _run(
         [
             "git",
             "log",
@@ -177,21 +219,30 @@ def print_commits(since: date) -> None:
             "--date=short",
         ]
     )
-    print(out.strip() if out and out.strip() else "none")
-    if out and len(out.strip().splitlines()) >= COMMIT_LIMIT:
+    if err:
+        print(f"ERROR: git log failed ({err}); do NOT read this as 'no commits'.")
+    else:
+        print(out.strip() or "none")
+    if len(out.strip().splitlines()) >= COMMIT_LIMIT:
         print(f"WARNING: hit --max-count={COMMIT_LIMIT}; older commits are missing.")
+
+
+def _newest_kanban() -> Path | None:
+    files = sorted(Path(".").glob(KANBAN_GLOB))
+    return files[-1] if files else None
 
 
 def print_plan_state() -> None:
     print("\n=== Kanban and planning (local, untracked) ===")
-    if KANBAN_PATH.exists():
-        print(f"\n--- {KANBAN_PATH} ---")
-        for line in KANBAN_PATH.read_text().splitlines():
+    kanban = _newest_kanban()
+    if kanban:
+        print(f"\n--- {kanban} ---")
+        for line in kanban.read_text(encoding=ENCODING).splitlines():
             print(KANBAN_MARKER_RE.sub("", line))
     else:
-        print(f"{KANBAN_PATH}: not found, skipped")
+        print(f"{KANBAN_GLOB}: none found, skipped")
     if PLANNING_PATH.exists():
-        lines = PLANNING_PATH.read_text().splitlines()
+        lines = PLANNING_PATH.read_text(encoding=ENCODING).splitlines()
         print(f"\n--- {PLANNING_PATH} (first {PLANNING_HEAD_LINES} lines) ---")
         print("\n".join(lines[:PLANNING_HEAD_LINES]))
         later = [

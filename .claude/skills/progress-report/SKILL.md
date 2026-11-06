@@ -28,7 +28,7 @@ Later runs skip the interview. Re-ask only if the user says an audience, meeting
 ```bash
 python .claude/skills/progress-report/scripts/collect_since.py --reports-dir reports
 ```
-It prints the latest report folder, its `state.md` and the period start. Read `reports/INSTRUCTIONS.md`, `reports/index.md` and the latest `state.md` first. The new report covers everything since the previous report's date; if there is none, ask the user how far back the first report should reach. Confirm the period with the user in one line.
+It prints the latest report folder, its `state.md` and the period start. Read `reports/INSTRUCTIONS.md`, `reports/index.md` and the latest `state.md` first. The new report covers everything since the previous report's date; if there is none, ask the user how far back the first report should reach. Confirm the period with the user in one line. The baseline is the newest report folder that has a `state.md`; an unfinished folder is flagged and skipped. Folders are `YYYY-MM-DD`, or `YYYY-MM-DD-2`, `-3` for a further report on the same day: never overwrite an existing report folder.
 
 ### 2. Gather (read-only, in parallel)
 ```bash
