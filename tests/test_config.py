@@ -2,7 +2,7 @@
 
 import pytest
 import yaml
-from src.utils.config import load_config
+from src.utils.config import apply_seed_override, load_config
 
 
 def test_load_config_returns_dict(tmp_path):
@@ -62,3 +62,9 @@ def test_load_config_malformed_yaml_raises(tmp_path):
     bad.write_text("key: [unclosed\n")
     with pytest.raises(yaml.YAMLError):
         load_config(bad, base_path=base)
+
+
+def test_apply_seed_override_replaces_only_when_given():
+    assert apply_seed_override({"seed": 42}, 43)["seed"] == 43
+    assert apply_seed_override({"seed": 42}, None)["seed"] == 42
+    assert apply_seed_override({}, 7)["seed"] == 7

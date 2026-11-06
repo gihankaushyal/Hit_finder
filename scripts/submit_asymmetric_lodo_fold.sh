@@ -36,6 +36,7 @@
 #   TRAIN_CONFIG  (direct sbatch only; submit_asymmetric_lodo_all.sh always checks the baseline run)
 #                 Training config (default configs/supervised/resnet18_asymmetric.yaml), e.g.
 #                 configs/supervised/resnet18_asymmetric_jitter.yaml (writes ...-seed<S>-jitter).
+#   TRAIN_SEED    Training seed (default: the config's seed, 42). Names the run ...-seed<S>[suffix].
 #   CACHE_NVME    Path to this fold's NVMe-staged frame-cache tier
 #                 (default /tmp/sfx_frame_cache). See scripts/stage_frame_cache.sh.
 #   RESUME_FLAG   --resume-training (default), --override-training or
@@ -76,6 +77,8 @@ fi
 FOLD="${1:?fold id required (1-4)}"
 RUN_NAME_PREFIX="${2:?run_name_prefix required, e.g. resnet18-asymmetric-v2}"
 RESUME_FLAG="${RESUME_FLAG:---resume-training}"
+SEED_ARGS=()
+[[ -n "${TRAIN_SEED:-}" ]] && SEED_ARGS=(--seed "${TRAIN_SEED}")
 
 module load mamba/latest
 source activate sfx-hitfinder
@@ -88,4 +91,5 @@ python -u -m src.training.train_asymmetric \
     --folds "${FOLD}" \
     --cache-nvme "${CACHE_NVME:-/tmp/sfx_frame_cache}" \
     "${RESUME_FLAG}" \
+    "${SEED_ARGS[@]}" \
     --tags supervised,resnet18,asymmetric-pipeline,lodo-cached
