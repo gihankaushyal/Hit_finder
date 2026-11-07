@@ -35,7 +35,7 @@ else
 fi
 
 # 3. Activate
-if ! conda activate sfx-hitfinder; then
+if ! source activate sfx-hitfinder; then
     echo "[setup_env] ERROR: conda activate failed. Try: conda init bash, then open a new terminal."
     return 1
 fi
