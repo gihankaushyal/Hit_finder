@@ -105,3 +105,72 @@ def test_latest_report_skips_impossible_dates(tmp_path, capsys):
     folder, when = cs.latest_report(tmp_path)
     assert (folder.name, when) == ("2026-10-05", date(2026, 10, 5))
     assert "not a real calendar date" in capsys.readouterr().out
+
+
+def test_heading_takes_only_the_leading_date_or_range():
+    f = cs.section_last_date
+    assert f("## 12. Old (2026-09-01, rerun planned 2026-11-20)") == date(2026, 9, 1)
+    assert f("## 23. X (2026-11-01 … 2026-11-03)") == date(2026, 11, 3)
+
+
+def test_fence_must_close_with_the_same_character_and_length():
+    text = "## 1. A (2026-11-01)\n````\n```\n## fake\n```\n````\n## 2. B (2026-11-02)\n"
+    assert [h for h, _ in cs.split_sections(text)] == [
+        "1. A (2026-11-01)",
+        "2. B (2026-11-02)",
+    ]
+
+
+def test_planning_status_regex_ignores_prose():
+    assert cs.PLANNING_STATUS_RE.search("| **5** | SSL | **CURRENT** |")
+    assert not cs.PLANNING_STATUS_RE.search("the current threshold; currently idle")
+
+
+def test_newest_kanban_is_numeric(tmp_path, monkeypatch):
+    for n in ("phase-9-kanban.md", "phase-10-kanban.md", "notes.md"):
+        (tmp_path / n).write_text("x")
+    monkeypatch.chdir(tmp_path)
+    assert cs._newest_kanban().name == "phase-10-kanban.md"
+
+
+def test_failed_gh_prints_error_not_none(monkeypatch, capsys):
+    monkeypatch.setattr(cs, "_run", lambda cmd: ("", "gh failed (exit 4): auth"))
+    cs.print_prs(date(2026, 11, 1))
+    out = capsys.readouterr().out
+    assert "ERROR" in out and "none" not in out
+
+
+def test_pr_limit_warning(monkeypatch, capsys):
+    lines = "\n".join(f"#{i} t" for i in range(cs.GH_PR_LIMIT))
+    monkeypatch.setattr(cs, "_run", lambda cmd: (lines, None))
+    cs.print_prs(date(2026, 11, 1))
+    assert "older merged PRs are missing" in capsys.readouterr().out
+
+
+def test_anchor_goes_to_the_main_checkout_from_a_worktree(tmp_path, monkeypatch):
+    import subprocess
+
+    main = tmp_path / "main"
+    main.mkdir()
+    git = ["git", "-C", str(main)]
+    subprocess.run(git + ["init", "-q"], check=True)
+    subprocess.run(
+        git
+        + [
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "i",
+        ],
+        check=True,
+    )
+    wt = tmp_path / "wt"
+    subprocess.run(git + ["worktree", "add", "-q", str(wt), "-b", "b"], check=True)
+    monkeypatch.chdir(wt)
+    cs.anchor_to_main_checkout()
+    assert Path.cwd().resolve() == main.resolve()

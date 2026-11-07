@@ -19,6 +19,7 @@ and skipped, never fatal.
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import subprocess
 from datetime import date
@@ -31,21 +32,30 @@ REPORT_DIR_RE = re.compile(
     r"(\d{4}-\d{2}-\d{2})(?:-(\d+))?"
 )  # -N: extra report on one day
 ISO_DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
-FENCE_RE = re.compile(r"^\s*(```|~~~)")
+FENCE_RE = re.compile(r"^\s*(`{3,}|~{3,})")
+HEADING_RANGE_RE = re.compile(
+    r"(\d{4}-\d{2}-\d{2})(?:\s*(?:…|\.\.\.|–|—|-|to)\s*(\d{4}-\d{2}-\d{2}))?"
+)
 ENCODING = "utf-8"
 PLANNING_HEAD_LINES = 60
 GH_PR_LIMIT = 100
 COMMIT_LIMIT = 200
 COMMAND_TIMEOUT_S = 120
 KANBAN_MARKER_RE = re.compile(r"\s*<!--\s*gh:#\d+\s*-->")
-PLANNING_STATUS_RE = re.compile(r"CURRENT|IN PROGRESS", re.IGNORECASE)
+PLANNING_STATUS_RE = re.compile(r"\b(CURRENT|IN PROGRESS)\b")
+KANBAN_PHASE_RE = re.compile(r"phase-(\d+)-kanban\.md")
 
 
 def _run(cmd: list[str]) -> tuple[str, str | None]:
     """(stdout, error). error is None on success; a failed command is never read as 'no results'."""
     try:
         out = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=COMMAND_TIMEOUT_S
+            cmd,
+            capture_output=True,
+            text=True,
+            encoding=ENCODING,
+            errors="replace",
+            timeout=COMMAND_TIMEOUT_S,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         return "", f"{cmd[0]} could not run ({exc.__class__.__name__})"
@@ -73,7 +83,8 @@ def latest_report(reports_dir: Path) -> tuple[Path, date] | None:
             continue
         if not (d / "state.md").exists():
             print(
-                f"WARNING: {d} has no state.md (unfinished run): not used as baseline"
+                f"WARNING: {d} has no state.md (unfinished run): not used as baseline. "
+                "Ask the user whether to resume it (reuse its facts.md) or delete it."
             )
             continue
         found.append(((when, int(m.group(2) or 0)), d))
@@ -84,13 +95,21 @@ def latest_report(reports_dir: Path) -> tuple[Path, date] | None:
 
 
 def split_sections(text: str) -> list[tuple[str, str]]:
-    """(heading, body) for each '## ' section; '## ' lines inside code fences are not headings."""
+    """(heading, body) for each '## ' section; '## ' lines inside code fences are not headings.
+
+    A fence closes only on the same character, at least as long as the one that opened it.
+    """
     sections: list[tuple[str, list[str]]] = []
-    in_fence = False
+    fence: str | None = None
     for line in text.splitlines(keepends=True):
-        if FENCE_RE.match(line):
-            in_fence = not in_fence
-        if line.startswith("## ") and not in_fence:
+        m = FENCE_RE.match(line)
+        if m:
+            marker = m.group(1)
+            if fence is None:
+                fence = marker
+            elif marker[0] == fence[0] and len(marker) >= len(fence):
+                fence = None
+        if line.startswith("## ") and fence is None:
             sections.append((line.lstrip("# ").strip(), []))
         if sections:
             sections[-1][1].append(line)
@@ -108,13 +127,16 @@ def _valid_dates(text: str) -> list[date]:
 
 
 def section_last_date(block: str) -> date | None:
-    """Latest ISO date in a section's heading line, or None if the heading has none.
+    """Latest date of the heading's leading date or date range, or None if it has none.
 
     Only the heading is trusted: a body mentions later dates for other reasons ("rerun planned
     2026-11-20", "superseded by the 2026-11-04 run"). Sections whose heading has no date, or
     an older one, are listed separately by print_notes with their body dates for a human check.
     """
-    dates = _valid_dates(block.partition("\n")[0])
+    m = HEADING_RANGE_RE.search(block.partition("\n")[0])
+    if not m:
+        return None
+    dates = _valid_dates(" ".join(g for g in m.groups() if g))
     return max(dates) if dates else None
 
 
@@ -228,8 +250,13 @@ def print_commits(since: date) -> None:
 
 
 def _newest_kanban() -> Path | None:
-    files = sorted(Path(".").glob(KANBAN_GLOB))
-    return files[-1] if files else None
+    """Kanban file of the highest phase number (numeric, so phase-10 beats phase-9)."""
+    files = [
+        (int(m.group(1)), f)
+        for f in Path(".").glob(KANBAN_GLOB)
+        if (m := KANBAN_PHASE_RE.fullmatch(f.name))
+    ]
+    return max(files)[1] if files else None
 
 
 def print_plan_state() -> None:
@@ -259,6 +286,16 @@ def print_plan_state() -> None:
         print(f"{PLANNING_PATH}: not found, skipped")
 
 
+def anchor_to_main_checkout() -> None:
+    """chdir to the main checkout: the notes, kanban, planning and reports/ are gitignored, so
+    they exist only there, and `git log` should describe the main branch, not a worktree.
+    """
+    out, err = _run(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"])
+    if err:
+        raise SystemExit(f"not inside the Hit_finder repository ({err})")
+    os.chdir(Path(out.strip()).parent)
+
+
 def main() -> None:
     p = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawTextHelpFormatter
@@ -273,6 +310,7 @@ def main() -> None:
         "--full", action="store_true", help="print full text of matching note sections"
     )
     args = p.parse_args()
+    anchor_to_main_checkout()
     if args.reports_dir is None and args.since is None:
         p.error("give --reports-dir and/or --since")
     if args.reports_dir is not None:

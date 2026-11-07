@@ -17,7 +17,7 @@ Read `references/audiences.md` before writing anything and `references/known-pit
 
 ## Workflow
 
-Run everything from the **main checkout** (`/data/bioxfel/user/gihan/Hit_finder`). `reports/`, `docs/progress_notes.md`, `phase-05-kanban.md` and `PLANNING.md` are gitignored, so a worktree does not have them; there the skill would think it is the first run and build an empty digest. From a worktree, `cd "$(git rev-parse --git-common-dir)/.."` first.
+Run everything from the **main checkout** (`/data/bioxfel/user/gihan/Hit_finder`). `reports/`, `docs/progress_notes.md`, `phase-05-kanban.md` and `PLANNING.md` are gitignored, so a worktree does not have them; there the skill would think it is the first run and build an empty digest. The script moves to the main checkout itself; do the same for any other command.
 
 ### 0. First run: set up the folder
 If `reports/INSTRUCTIONS.md` does not exist, this is the first run. Do not guess the stakeholders. Run `superpowers:brainstorming` and use `AskUserQuestion` following `references/first-run-interview.md` until the answers cover roughly 95% of what you need (who the three audiences are, meeting format, tone, length, figures, terms to avoid, whether links may be shared). Then create `reports/INSTRUCTIONS.md`, `reports/glossary.md` and `reports/index.md` from the templates in `references/report-folder.md`, and check `git check-ignore reports/x`. If `reports/` is not ignored, tell the user the one line to add to `.gitignore` and ask before editing it (their `.gitignore` often has unrelated uncommitted edits; stage nothing else).
@@ -28,7 +28,7 @@ Later runs skip the interview. Re-ask only if the user says an audience, meeting
 ```bash
 python .claude/skills/progress-report/scripts/collect_since.py --reports-dir reports
 ```
-It prints the latest report folder, its `state.md` and the period start. Read `reports/INSTRUCTIONS.md`, `reports/index.md` and the latest `state.md` first. The new report covers everything since the previous report's date; if there is none, ask the user how far back the first report should reach. Confirm the period with the user in one line. The baseline is the newest report folder that has a `state.md`; an unfinished folder is flagged and skipped. Folders are `YYYY-MM-DD`, or `YYYY-MM-DD-2`, `-3` for a further report on the same day: never overwrite an existing report folder.
+It prints the latest report folder, its `state.md` and the period start. Read `reports/INSTRUCTIONS.md`, `reports/index.md` and the latest `state.md` first. The new report covers everything since the previous report's date; if there is none, ask the user how far back the first report should reach. Confirm the period with the user in one line. The baseline is the newest report folder that has a `state.md`; an unfinished folder is flagged and skipped: ask the user whether to resume it (its `facts.md` may hold verified claims) or delete it, rather than silently starting `-2` beside it. Folders are `YYYY-MM-DD`, or `YYYY-MM-DD-2`, `-3` for a further report on the same day: never overwrite an existing report folder.
 
 ### 2. Gather (read-only, in parallel)
 ```bash
