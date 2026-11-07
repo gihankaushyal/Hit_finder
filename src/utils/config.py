@@ -37,3 +37,14 @@ def load_config(
         model_cfg: dict[str, Any] = yaml.safe_load(f) or {}
 
     return _deep_merge(base_cfg, model_cfg)
+
+
+def apply_seed_override(cfg: dict, seed: int | None) -> dict:
+    """Set the top-level ``seed`` from a ``--seed`` CLI value (None keeps the config's).
+
+    The seed names the run directory (``-seed<S>``) and seeds training; the session split is
+    deterministic and does not depend on it, so seeds differ only in initialisation and sampling.
+    """
+    if seed is not None:
+        cfg["seed"] = seed
+    return cfg
