@@ -37,3 +37,28 @@ def test_suffixed_runs_do_not_mix_into_the_baseline(tmp_path):
 
 def test_missing_checkpoints_dir_gives_no_groups(tmp_path):
     assert agg.discover_prefixes(tmp_path / "does-not-exist") == []
+
+
+def test_other_seeds_are_separate_groups_not_pooled(tmp_path):
+    _run(tmp_path, "resnet18-asymmetric-v2-fold1-seed42", 1, 0.80)
+    _run(tmp_path, "resnet18-asymmetric-v2-fold1-seed43", 1, 0.90)
+    _run(tmp_path, "resnet18-asymmetric-v2-fold1-seed43-jitter", 1, 0.95)
+
+    groups = agg.discover_prefixes(tmp_path)
+    assert len(groups) == 3
+    assert [
+        r["cross"]["ap"] for r in agg.load_results(tmp_path, "resnet18-asymmetric-v2")
+    ] == [0.80]
+    s43 = "resnet18-asymmetric-v2-fold*-seed43"
+    assert [r["cross"]["ap"] for r in agg.load_results(tmp_path, s43)] == [0.90]
+    assert [r["cross"]["ap"] for r in agg.load_results(tmp_path, s43 + "-jitter")] == [
+        0.95
+    ]
+
+
+def test_seed_star_pools_every_seed_of_one_suffix(tmp_path):
+    _run(tmp_path, "m-fold1-seed42", 1, 0.80)
+    _run(tmp_path, "m-fold1-seed43", 1, 0.90)
+    _run(tmp_path, "m-fold1-seed43-jitter", 1, 0.95)
+    pooled = agg.load_results(tmp_path, "m-fold*-seed*")
+    assert sorted(r["cross"]["ap"] for r in pooled) == [0.80, 0.90]

@@ -300,7 +300,7 @@ def main() -> None:
         "--seed",
         type=int,
         default=None,
-        help="Override the config's top-level seed (run name suffix -seed<S> and fine-tune RNG). "
+        help="Override the config's top-level seed (run name suffix -seed<S>; seeds initialisation, shuffling and crop sampling). "
         "The MAE pretrain checkpoint is not re-seeded: pass the seed-42 one via "
         "--pretrain-checkpoint. The session split does not depend on the seed.",
     )

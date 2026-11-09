@@ -37,6 +37,14 @@ MAX_FRAMES="${1:-1200}"
 RUN_VERSION="${2:-v2}"
 OUT_DIR="docs/figures/crop_shortcut"
 
+SEED="${SEED:-42}"
+SUFFIX="${SUFFIX:-}"
+[[ -z "${SUFFIX}" || "${SUFFIX}" == -* ]] || SUFFIX="-${SUFFIX}"  # accept jitter and -jitter alike
+# Both go into checkpoint and output paths: reject anything but a plain integer / name.
+[[ "${SEED}" =~ ^[0-9]+$ ]] || { echo "Error: SEED must be a non-negative integer, got '${SEED}'." >&2; exit 1; }
+[[ -z "${SUFFIX}" || "${SUFFIX}" =~ ^-[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] || { echo "Error: SUFFIX must be letters, digits, '_', '.' or '-', got '${SUFFIX}'." >&2; exit 1; }
+[[ "${SUFFIX}" != *..* ]] || { echo "Error: SUFFIX must not contain '..', got '${SUFFIX}'." >&2; exit 1; }
+
 module load mamba/latest
 # sbatch inherits the submitting shell's active env; activating it a second time
 # silently falls back to the base python (no numpy). Submit from a fresh terminal
@@ -46,9 +54,6 @@ mkdir -p logs "${OUT_DIR}"
 
 # FOLDS env var overrides the default (fold 4 = largest fine-tune gap, fold 1 = hardest detector).
 FOLDS="${FOLDS:-4 1}"
-SEED="${SEED:-42}"
-SUFFIX="${SUFFIX:-}"
-[[ -z "${SUFFIX}" || "${SUFFIX}" == -* ]] || SUFFIX="-${SUFFIX}"  # accept jitter and -jitter alike
 N_OK=0; N_SKIP=0; N_FAIL=0
 
 for FOLD in ${FOLDS}; do
@@ -71,6 +76,8 @@ for FOLD in ${FOLDS}; do
             N_SKIP=$((N_SKIP + 1))
             continue
         fi
+        # The diagnostic only reads the config for the session split and the model shape, never the
+        # training options (jitter, recipe), so the baseline config is right for suffixed runs too.
         # the default baseline keeps its original file name so earlier results line up
         if [ "${SEED}" = 42 ] && [ -z "${SUFFIX}" ]; then
             OUT="${OUT_DIR}/fold${FOLD}_${ARM}_${RUN_VERSION}_cross.json"

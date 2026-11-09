@@ -110,3 +110,127 @@ def test_asymmetric_without_a_seed_still_hits_the_seed_42_gate(tmp_path, monkeyp
     with pytest.raises(SystemExit, match="seed42"):
         ta.main("c.yaml", "resnet18-asymmetric-v2", folds=[1], device="cpu")
     assert seen == []
+
+
+# --- the seed must reach the data pipeline, not only the run name ---------------------
+
+
+class _Stop(Exception):
+    pass
+
+
+def _loader_kwargs_for_seed(tmp_path, monkeypatch, seed):
+    """Run lodo._train_fold up to the training loader and return the kwargs it passed."""
+    from src.training import lodo
+
+    captured = {}
+
+    def fake_loader(**kwargs):
+        captured.update(kwargs)
+        raise _Stop
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(lodo, "asymmetric_loader", fake_loader)
+    cfg = {
+        "seed": seed,
+        "model": {"backbone": "resnet18"},
+        "training": {"batch_size": 2, "num_workers": 0, "epochs": 1},
+        "lodo": {},
+        "wandb": {},
+    }
+    split = {"splits": {"s1": "train"}}
+    with pytest.raises(_Stop):
+        lodo._train_fold(FOLD, split, {"s1": "x"}, cfg, None, "cpu")
+    return captured
+
+
+@pytest.mark.parametrize("seed", [42, 43, 44])
+def test_train_fold_hands_the_run_seed_to_the_training_loader(
+    tmp_path, monkeypatch, seed
+):
+    assert _loader_kwargs_for_seed(tmp_path, monkeypatch, seed)["seed"] == seed
+
+
+def test_asymmetric_loader_forwards_the_seed_to_the_dataset(monkeypatch):
+    from src.data import dataloader
+
+    seen = {}
+
+    class FakeDataset(list):
+        def __init__(self, **kwargs):
+            super().__init__([0])
+            seen.update(kwargs)
+
+    monkeypatch.setattr(dataloader, "AsymmetricCXIDataset", FakeDataset)
+    dataloader.asymmetric_loader({}, [], None, batch_size=1, num_workers=0, seed=44)
+    assert seen["seed"] == 44
+    dataloader.asymmetric_loader({}, [], None, batch_size=1, num_workers=0)
+    assert (
+        seen["seed"] == 42
+    )  # the default keeps every existing seed-42 run reproducible
+
+
+def test_different_seeds_draw_different_per_sample_streams():
+    from src.data.dataset import _epoch_seed
+
+    assert _epoch_seed(42, 0, 5, 100) != _epoch_seed(43, 0, 5, 100)
+
+
+# --- shell wrappers -------------------------------------------------------------------
+
+import os  # noqa: E402
+import subprocess  # noqa: E402
+from pathlib import Path  # noqa: E402
+
+REPO = Path(__file__).resolve().parents[1]
+
+
+def _bash(script, args, **env):
+    return subprocess.run(
+        ["bash", str(REPO / "scripts" / script), *args],
+        cwd=REPO,
+        env={**os.environ, **env},
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+
+@pytest.mark.parametrize(
+    "script,args",
+    [
+        (
+            "submit_asymmetric_lodo_all.sh",
+            ["--run-name-prefix", "resnet18-asymmetric-v2"],
+        ),
+        (
+            "submit_ssl_finetune_all.sh",
+            [
+                "--run-name-prefix",
+                "vits16-mae-v2",
+                "--pretrain-run-prefix",
+                "mae-vits16-v2",
+            ],
+        ),
+    ],
+)
+def test_orchestrators_refuse_train_seed(script, args):
+    r = _bash(script, args, TRAIN_SEED="43")
+    assert r.returncode == 1
+    assert "TRAIN_SEED" in r.stderr
+
+
+@pytest.mark.parametrize(
+    "env,msg",
+    [
+        ({"SEED": "43x"}, "SEED must be"),
+        ({"SUFFIX": "a/b"}, "SUFFIX must be"),
+        ({"SUFFIX": "../x"}, "SUFFIX must be"),
+        ({"SUFFIX": "a..b"}, "'..'"),
+    ],
+)
+def test_crop_diag_rejects_unsafe_seed_and_suffix(env, msg):
+    r = _bash("submit_crop_shortcut_diag.sh", [], **env)
+    assert r.returncode == 1
+    assert msg in r.stderr

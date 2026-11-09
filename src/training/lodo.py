@@ -332,6 +332,7 @@ def _train_fold(
             positive_jitter=positive_jitter,
             jitter_edge_pad=jitter_edge_pad,
             crop_within_frame=crop_within_frame,
+            seed=seed,
         )
 
     bench_cfg = cfg.get("benchmark", {})

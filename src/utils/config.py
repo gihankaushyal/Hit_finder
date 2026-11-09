@@ -39,12 +39,19 @@ def load_config(
     return _deep_merge(base_cfg, model_cfg)
 
 
+# numpy.random.seed accepts [0, 2**32); reject anything else before a run name or checkpoint exists.
+SEED_LIMIT = 2**32
+
+
 def apply_seed_override(cfg: dict, seed: int | None) -> dict:
     """Set the top-level ``seed`` from a ``--seed`` CLI value (None keeps the config's).
 
     The seed names the run directory (``-seed<S>``) and seeds training; the session split is
-    deterministic and does not depend on it, so seeds differ only in initialisation and sampling.
+    deterministic and does not depend on it, so seeds differ in initialisation, shuffling and the
+    per-sample crop/augmentation draws.
     """
     if seed is not None:
+        if not 0 <= seed < SEED_LIMIT:
+            raise ValueError(f"--seed must be in [0, {SEED_LIMIT}), got {seed}")
         cfg["seed"] = seed
     return cfg

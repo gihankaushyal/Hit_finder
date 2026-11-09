@@ -361,7 +361,7 @@ if __name__ == "__main__":
         "--seed",
         type=int,
         default=None,
-        help="Override the config's top-level seed (run name suffix -seed<S> and training RNG). "
+        help="Override the config's top-level seed (run name suffix -seed<S>; seeds initialisation, shuffling and crop sampling). "
         "The session split is deterministic and does not depend on the seed.",
     )
     parser.add_argument("--cache-root", default=None)
