@@ -62,12 +62,13 @@ DOC_BASELINES = {
 }
 
 
-def discover_prefixes(checkpoints_dir: Path) -> list[str]:
+def discover_prefixes(checkpoints_dir: Path, pool_seeds: bool = False) -> list[str]:
     """Find run groups with at least one completed fold on disk.
 
     A group key is the bare prefix for unsuffixed seed-42 runs and
     "<prefix>-fold*-seed<S><suffix>" for everything else, so suffixed runs and other seeds
-    never share a key with the baseline.
+    never share a key with the baseline. With pool_seeds every seed of a prefix and suffix
+    collapses into one "<prefix>-fold*-seed*<suffix>" group, so the menu lists it once.
     """
     groups: set[str] = set()
     if not checkpoints_dir.is_dir():
@@ -79,7 +80,9 @@ def discover_prefixes(checkpoints_dir: Path) -> list[str]:
         if m and (p / "results.json").exists():
             suffix = m.group("suffix")
             seed = m.group("seed")
-            if suffix or seed != DEFAULT_SEED:
+            if pool_seeds:
+                groups.add(m.group("prefix") + _GROUP_SEP + "*" + suffix)
+            elif suffix or seed != DEFAULT_SEED:
                 groups.add(m.group("prefix") + _GROUP_SEP + seed + suffix)
             else:
                 groups.add(m.group("prefix"))
@@ -121,7 +124,32 @@ def load_results(
             print(f"  Warning: fold {fold_id} has NaN metrics — skipping.")
             continue
         results.append(data)
+    if pool_seeds:
+        results = _pool_by_fold(results)
     return sorted(results, key=lambda r: r["fold_id"])
+
+
+def _pool_by_fold(results: list[dict]) -> list[dict]:
+    """Average the per-seed results of each fold into one record (n_seeds notes how many)."""
+    by_fold: dict[int, list[dict]] = {}
+    for r in results:
+        by_fold.setdefault(r["fold_id"], []).append(r)
+    pooled = []
+    for runs in by_fold.values():
+        rec = {
+            "fold_id": runs[0]["fold_id"],
+            "test_detector": runs[0]["test_detector"],
+            "n_seeds": len(runs),
+        }
+        for split in ("cross", "in_domain"):
+            rec[split] = {
+                k: float(np.mean([r[split][k] for r in runs]))
+                for k, v in runs[0].get(split, {}).items()
+                if isinstance(v, (int, float))
+                and all(isinstance(r[split].get(k), (int, float)) for r in runs)
+            }
+        pooled.append(rec)
+    return pooled
 
 
 def mean_std(values: list[float]) -> tuple[float, float]:
@@ -174,11 +202,11 @@ def print_doc_baseline_row(key: str) -> tuple[float, float]:
 
 
 def build_menu(
-    checkpoints_dir: Path,
+    checkpoints_dir: Path, pool_seeds: bool = False
 ) -> list[tuple[str, str, bool]]:
     """Return numbered menu entries as (key, display_label, is_live)."""
     entries = []
-    for prefix in discover_prefixes(checkpoints_dir):
+    for prefix in discover_prefixes(checkpoints_dir, pool_seeds):
         entries.append((prefix, f"{prefix}  (live, {checkpoints_dir}/)", True))
     for key, (label, *_rest) in DOC_BASELINES.items():
         entries.append((key, f"{label}  (doc)", False))
@@ -266,7 +294,7 @@ def main():
         print_variant_table(args.run_prefix, results)
         return
 
-    menu = build_menu(args.checkpoints_dir)
+    menu = build_menu(args.checkpoints_dir, args.pool_seeds)
     if not menu:
         print("No live run results or doc baselines available.")
         return

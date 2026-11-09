@@ -140,9 +140,13 @@ def save_split_artifact(artifact: dict, path: str | Path) -> None:
     # Write-then-rename so concurrent jobs (several seeds of one fold share this file) and
     # readers never see a truncated JSON.
     tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    with open(tmp, "w") as f:
-        json.dump(artifact, f, indent=2)
-    os.replace(tmp, path)
+    try:
+        with open(tmp, "w") as f:
+            json.dump(artifact, f, indent=2)
+        os.replace(tmp, path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 def load_split_artifact(path: str | Path) -> dict:

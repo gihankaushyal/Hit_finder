@@ -65,7 +65,7 @@ from src.training.run_naming import (
 )
 from src.training.inference_results import INFERENCE_RESULTS_NAME, RESULTS_NAME
 from src.training.wandb_identity import override_hook_from_cfg
-from src.utils.config import apply_seed_override, load_config
+from src.utils.config import apply_seed_override, load_config, seed_arg
 
 SPLIT_DIR = Path("checkpoints") / "asymmetric_splits"
 RUN_SUFFIX_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
@@ -298,7 +298,7 @@ def main() -> None:
     )
     p.add_argument(
         "--seed",
-        type=int,
+        type=seed_arg,
         default=None,
         help="Override the config's top-level seed (run name suffix -seed<S>; seeds initialisation, shuffling and crop sampling). "
         "The MAE pretrain checkpoint is not re-seeded: pass the seed-42 one via "
@@ -348,10 +348,7 @@ def main() -> None:
         check_head_checkpoint(args.head_checkpoint, args.fold)
 
     cfg = load_config(args.config)
-    try:
-        apply_seed_override(cfg, args.seed)
-    except ValueError as e:
-        p.error(str(e))
+    apply_seed_override(cfg, args.seed)
     reference = (
         load_config(V2_REFERENCE_CONFIG) if Path(V2_REFERENCE_CONFIG).exists() else None
     )

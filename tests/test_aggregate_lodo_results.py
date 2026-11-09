@@ -68,4 +68,25 @@ def test_pool_seeds_pools_every_seed_of_one_suffix(tmp_path):
     _run(tmp_path, "m-fold1-seed43", 1, 0.90)
     _run(tmp_path, "m-fold1-seed43-jitter", 1, 0.95)
     pooled = agg.load_results(tmp_path, "m-fold*-seed42", pool_seeds=True)
-    assert sorted(r["cross"]["ap"] for r in pooled) == [0.80, 0.90]
+    assert [(r["n_seeds"], round(r["cross"]["ap"], 6)) for r in pooled] == [(2, 0.85)]
+
+
+def test_pool_seeds_gives_one_averaged_row_per_fold(tmp_path):
+    for fold in (1, 2):
+        _run(tmp_path, f"m-fold{fold}-seed42", fold, 0.80)
+        _run(tmp_path, f"m-fold{fold}-seed43", fold, 0.90)
+        _run(tmp_path, f"m-fold{fold}-seed44", fold, 1.00)
+    rows = agg.load_results(tmp_path, "m-fold*-seed*", pool_seeds=True)
+    assert [r["fold_id"] for r in rows] == [1, 2]
+    assert all(r["n_seeds"] == 3 for r in rows)
+    assert all(abs(r["cross"]["ap"] - 0.90) < 1e-9 for r in rows)
+
+
+def test_pool_seeds_menu_lists_each_group_once(tmp_path):
+    _run(tmp_path, "m-fold1-seed42", 1, 0.80)
+    _run(tmp_path, "m-fold1-seed43", 1, 0.90)
+    _run(tmp_path, "m-fold1-seed43-jitter", 1, 0.95)
+    assert agg.discover_prefixes(tmp_path, pool_seeds=True) == [
+        "m-fold*-seed*",
+        "m-fold*-seed*-jitter",
+    ]

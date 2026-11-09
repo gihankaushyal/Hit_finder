@@ -62,7 +62,7 @@ from src.training.run_naming import (
 from src.training.inference_results import INFERENCE_RESULTS_NAME, RESULTS_NAME
 from src.training.wandb_identity import override_hook_from_cfg
 from src.training.lodo import check_crop_options
-from src.utils.config import apply_seed_override, load_config
+from src.utils.config import apply_seed_override, load_config, seed_arg
 
 
 def _fold_run_name(cfg: dict, run_name_prefix: str, fold_id: int) -> str:
@@ -359,7 +359,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--seed",
-        type=int,
+        type=seed_arg,
         default=None,
         help="Override the config's top-level seed (run name suffix -seed<S>; seeds initialisation, shuffling and crop sampling). "
         "The session split is deterministic and does not depend on the seed.",
@@ -368,12 +368,6 @@ if __name__ == "__main__":
     parser.add_argument("--cache-nvme", default=None)
     parser.add_argument("--no-cache", action="store_true")
     args = parser.parse_args()
-    try:
-        apply_seed_override(
-            {}, args.seed
-        )  # range check -> clean usage error, not a traceback
-    except ValueError as e:
-        parser.error(str(e))
     tags = [t.strip() for t in args.tags.split(",")] if args.tags else None
     main(
         args.config,

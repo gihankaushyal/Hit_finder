@@ -314,7 +314,7 @@ def test_out_of_range_seed_is_a_usage_error_not_a_traceback():
         stdin=subprocess.DEVNULL,
     )
     assert r.returncode == 2
-    assert "--seed must be" in r.stderr
+    assert "argument --seed: must be in" in r.stderr
     assert "Traceback" not in r.stderr
 
 
@@ -328,3 +328,11 @@ def test_save_split_artifact_is_atomic_and_leaves_no_temp_files(tmp_path):
     save_split_artifact({"a": 2}, target)
     assert json.loads(target.read_text()) == {"a": 2}
     assert [p.name for p in tmp_path.iterdir()] == ["fold_1.json"]
+
+
+def test_save_split_artifact_cleans_its_temp_file_on_failure(tmp_path):
+    from src.evaluation.benchmark import save_split_artifact
+
+    with pytest.raises(TypeError):
+        save_split_artifact({"bad": object()}, tmp_path / "fold_1.json")
+    assert list(tmp_path.iterdir()) == []

@@ -58,6 +58,10 @@ N_OK=0; N_SKIP=0; N_FAIL=0
 
 for FOLD in ${FOLDS}; do
     for ARM in finetune probe resnet careful; do
+        if [ "${ARM}" = "careful" ] && [[ "${SUFFIX}" == -careful* ]]; then
+            echo "[skip] fold ${FOLD} careful: SUFFIX ${SUFFIX} already selects the careful runs (the finetune arm)"
+            continue
+        fi
         if [ "${ARM}" = "resnet" ]; then
             CKPT="checkpoints/resnet18-asymmetric-${RUN_VERSION}-fold${FOLD}-seed${SEED}${SUFFIX}/best.pt"
             CONFIG="configs/supervised/resnet18_asymmetric.yaml"

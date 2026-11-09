@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 from pathlib import Path
 from typing import Any
 
@@ -44,6 +45,17 @@ SEED_LIMIT = 2**32
 # The seed configs/base.yaml ships with; the legacy per-sample RNG formula and the aggregator's bare
 # run-prefix key are both defined relative to it.
 DEFAULT_SEED = 42
+
+
+def seed_arg(text: str) -> int:
+    """argparse ``type=`` for ``--seed``: an integer in [0, SEED_LIMIT), else a usage error."""
+    try:
+        value = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"must be an integer, got {text!r}") from None
+    if not 0 <= value < SEED_LIMIT:
+        raise argparse.ArgumentTypeError(f"must be in [0, {SEED_LIMIT}), got {value}")
+    return value
 
 
 def apply_seed_override(cfg: dict, seed: int | None) -> dict:
