@@ -32,6 +32,9 @@
 #                 placement need a run suffix, passed as extra arguments, e.g.
 #                   TRAIN_CONFIG=configs/ssl/mae_finetune_jitter.yaml \
 #                     sbatch scripts/submit_ssl_finetune.sh 4 vits16-mae-v2 mae-vits16-v2 --run-suffix jitter
+#   TRAIN_SEED    Fine-tune seed (default: the config's seed, 42). Names the run ...-seed<S>[suffix].
+#                 Single-fold scripts only: the *_all.sh orchestrators do not forward it.
+#                 The pretrain checkpoint is NOT re-seeded: it is always the config-seed one.
 #   CACHE_NVME    Path to this fold's NVMe-staged frame-cache tier
 #                 (default /tmp/sfx_frame_cache). See scripts/stage_frame_cache.sh.
 #   RESUME_FLAG   --resume-training (default), --override-training or --inference-only.
@@ -98,6 +101,14 @@ elif [ ! -f "${PRETRAIN_CKPT}" ]; then
     exit 1
 fi
 
+SEED_ARGS=()
+if [[ -n "${TRAIN_SEED:-}" ]]; then
+    # Same range as apply_seed_override (numpy seeds are < 2**32); the length guard keeps bash
+    # arithmetic from overflowing on absurd input.
+    [[ "${TRAIN_SEED}" =~ ^[0-9]{1,10}$ ]] && (( 10#${TRAIN_SEED} < 4294967296 )) || { echo "Error: TRAIN_SEED must be an integer in [0, 4294967296), got '${TRAIN_SEED}'." >&2; exit 1; }
+    SEED_ARGS=(--seed "${TRAIN_SEED}")
+fi
+
 module load mamba/latest
 source activate sfx-hitfinder
 source .secrets/wandb.env
@@ -110,4 +121,5 @@ python -m src.training.train_ssl_finetune \
     "${PRETRAIN_ARGS[@]}" \
     --cache-nvme "${CACHE_NVME:-/tmp/sfx_frame_cache}" \
     "${RESUME_FLAG}" \
+    "${SEED_ARGS[@]}" \
     "${EXTRA[@]}"

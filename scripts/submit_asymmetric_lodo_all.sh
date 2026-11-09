@@ -77,6 +77,13 @@ CONFIG="configs/supervised/resnet18_asymmetric.yaml"
 # seed lives in base.yaml and may be overridden in the model config (load_config()
 # deep-merges base.yaml with model values winning) — check the model file first.
 # Only a top-level `seed:` counts (python reads cfg["seed"]); nested keys are ignored.
+# TRAIN_SEED belongs to the single-fold scripts. sbatch --export=ALL would hand it to every fold
+# job below, while the skip/resume checks here only look at the config-seed run, so refuse it.
+if [[ -n "${TRAIN_SEED:-}" ]]; then
+    echo "Error: TRAIN_SEED is set (${TRAIN_SEED}); this orchestrator does not support it. Unset it, or submit single folds with the *_fold.sh / submit_ssl_finetune.sh scripts." >&2
+    exit 1
+fi
+
 SEED="$({ grep -hE '^seed:' "${CONFIG}" configs/base.yaml 2>/dev/null || true; } | head -1 | awk '{print $2}')" || SEED=""
 if [[ ! "${SEED}" =~ ^[0-9]+$ ]]; then
     echo "Error: could not read a top-level integer 'seed:' from ${CONFIG} or configs/base.yaml." >&2

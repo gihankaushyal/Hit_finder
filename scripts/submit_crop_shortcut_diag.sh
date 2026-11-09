@@ -11,6 +11,12 @@
 #
 #   run_version  pipeline generation of the Stage B runs to inspect (default v2), i.e.
 #                checkpoints/vits16-mae-{finetune,probe}-<run_version>-fold<N>-seed42/best.pt
+#
+# Environment variables:
+#   FOLDS    folds to sweep (default "4 1")
+#   SEED     training seed of the checkpoints (default 42)
+#   SUFFIX   run suffix of the checkpoints, e.g. SUFFIX=-jitter for the jittered runs (default none; the leading dash is optional);
+#            the careful arm reads <prefix>-careful<SUFFIX>. Output files carry seed and suffix.
 #SBATCH --job-name=sfx-crop-diag
 #SBATCH -p general
 #SBATCH -q grp_cxfel
@@ -31,6 +37,14 @@ MAX_FRAMES="${1:-1200}"
 RUN_VERSION="${2:-v2}"
 OUT_DIR="docs/figures/crop_shortcut"
 
+SEED="${SEED:-42}"
+SUFFIX="${SUFFIX:-}"
+[[ -z "${SUFFIX}" || "${SUFFIX}" == -* ]] || SUFFIX="-${SUFFIX}"  # accept jitter and -jitter alike
+# Both go into checkpoint and output paths: reject anything but a plain integer / name.
+[[ "${SEED}" =~ ^[0-9]{1,10}$ ]] && (( 10#${SEED} < 4294967296 )) || { echo "Error: SEED must be an integer in [0, 4294967296), got '${SEED}'." >&2; exit 1; }
+[[ -z "${SUFFIX}" || "${SUFFIX}" =~ ^-[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] || { echo "Error: SUFFIX must be letters, digits, '_', '.' or '-', got '${SUFFIX}'." >&2; exit 1; }
+[[ "${SUFFIX}" != *..* ]] || { echo "Error: SUFFIX must not contain '..', got '${SUFFIX}'." >&2; exit 1; }
+
 module load mamba/latest
 # sbatch inherits the submitting shell's active env; activating it a second time
 # silently falls back to the base python (no numpy). Submit from a fresh terminal
@@ -43,13 +57,21 @@ FOLDS="${FOLDS:-4 1}"
 N_OK=0; N_SKIP=0; N_FAIL=0
 
 for FOLD in ${FOLDS}; do
-    for ARM in finetune probe resnet; do
+    for ARM in finetune probe resnet careful; do
+        if [ "${ARM}" = "careful" ] && [[ "${SUFFIX}" == -careful* ]]; then
+            echo "[skip] fold ${FOLD} careful: SUFFIX ${SUFFIX} already selects the careful runs (the finetune arm)"
+            continue
+        fi
         if [ "${ARM}" = "resnet" ]; then
-            CKPT="checkpoints/resnet18-asymmetric-${RUN_VERSION}-fold${FOLD}-seed42/best.pt"
+            CKPT="checkpoints/resnet18-asymmetric-${RUN_VERSION}-fold${FOLD}-seed${SEED}${SUFFIX}/best.pt"
             CONFIG="configs/supervised/resnet18_asymmetric.yaml"
             ARCH="resnet"
+        elif [ "${ARM}" = "careful" ]; then
+            CKPT="checkpoints/vits16-mae-finetune-${RUN_VERSION}-fold${FOLD}-seed${SEED}-careful${SUFFIX}/best.pt"
+            CONFIG="configs/ssl/mae_finetune_careful.yaml"
+            ARCH="vit"
         else
-            CKPT="checkpoints/vits16-mae-${ARM}-${RUN_VERSION}-fold${FOLD}-seed42/best.pt"
+            CKPT="checkpoints/vits16-mae-${ARM}-${RUN_VERSION}-fold${FOLD}-seed${SEED}${SUFFIX}/best.pt"
             CONFIG="configs/ssl/mae_finetune.yaml"
             ARCH="vit"
         fi
@@ -57,6 +79,15 @@ for FOLD in ${FOLDS}; do
             echo "[skip] fold ${FOLD} ${ARM}: no checkpoint at ${CKPT}"
             N_SKIP=$((N_SKIP + 1))
             continue
+        fi
+        # CONFIG is read only for the session split and the model shape, never the training options
+        # (jitter, recipe), so one config per arm family serves suffixed runs too (the careful arm
+        # keeps its own because its model shape comes from mae_finetune_careful.yaml).
+        # the default baseline keeps its original file name so earlier results line up
+        if [ "${SEED}" = 42 ] && [ -z "${SUFFIX}" ]; then
+            OUT="${OUT_DIR}/fold${FOLD}_${ARM}_${RUN_VERSION}_cross.json"
+        else
+            OUT="${OUT_DIR}/fold${FOLD}_${ARM}_${RUN_VERSION}_seed${SEED}${SUFFIX}_cross.json"
         fi
         echo "=============== fold ${FOLD} / ${ARM} ==============="
         # One failing arm must not abort the rest, but it is counted and fails the job at the end.
@@ -67,7 +98,7 @@ for FOLD in ${FOLDS}; do
             --fold "${FOLD}" \
             --split cross_detector_eval \
             --max-frames "${MAX_FRAMES}" \
-            --out "${OUT_DIR}/fold${FOLD}_${ARM}_${RUN_VERSION}_cross.json"; then
+            --out "${OUT}"; then
             N_OK=$((N_OK + 1))
         else
             echo "[FAILED] fold ${FOLD} ${ARM}"

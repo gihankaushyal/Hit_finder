@@ -37,3 +37,56 @@ def test_suffixed_runs_do_not_mix_into_the_baseline(tmp_path):
 
 def test_missing_checkpoints_dir_gives_no_groups(tmp_path):
     assert agg.discover_prefixes(tmp_path / "does-not-exist") == []
+
+
+def test_other_seeds_are_separate_groups_not_pooled(tmp_path):
+    _run(tmp_path, "resnet18-asymmetric-v2-fold1-seed42", 1, 0.80)
+    _run(tmp_path, "resnet18-asymmetric-v2-fold1-seed43", 1, 0.90)
+    _run(tmp_path, "resnet18-asymmetric-v2-fold1-seed43-jitter", 1, 0.95)
+
+    groups = agg.discover_prefixes(tmp_path)
+    assert len(groups) == 3
+    assert [
+        r["cross"]["ap"] for r in agg.load_results(tmp_path, "resnet18-asymmetric-v2")
+    ] == [0.80]
+    s43 = "resnet18-asymmetric-v2-fold*-seed43"
+    assert [r["cross"]["ap"] for r in agg.load_results(tmp_path, s43)] == [0.90]
+    assert [r["cross"]["ap"] for r in agg.load_results(tmp_path, s43 + "-jitter")] == [
+        0.95
+    ]
+
+
+def test_legacy_seed_star_key_still_means_seed_42(tmp_path):
+    _run(tmp_path, "m-fold1-seed42-careful", 1, 0.80)
+    _run(tmp_path, "m-fold1-seed43-careful", 1, 0.90)
+    legacy = agg.load_results(tmp_path, "m-fold*-seed*-careful")
+    assert [r["cross"]["ap"] for r in legacy] == [0.80]
+
+
+def test_pool_seeds_pools_every_seed_of_one_suffix(tmp_path):
+    _run(tmp_path, "m-fold1-seed42", 1, 0.80)
+    _run(tmp_path, "m-fold1-seed43", 1, 0.90)
+    _run(tmp_path, "m-fold1-seed43-jitter", 1, 0.95)
+    pooled = agg.load_results(tmp_path, "m-fold*-seed42", pool_seeds=True)
+    assert [(r["n_seeds"], round(r["cross"]["ap"], 6)) for r in pooled] == [(2, 0.85)]
+
+
+def test_pool_seeds_gives_one_averaged_row_per_fold(tmp_path):
+    for fold in (1, 2):
+        _run(tmp_path, f"m-fold{fold}-seed42", fold, 0.80)
+        _run(tmp_path, f"m-fold{fold}-seed43", fold, 0.90)
+        _run(tmp_path, f"m-fold{fold}-seed44", fold, 1.00)
+    rows = agg.load_results(tmp_path, "m-fold*-seed*", pool_seeds=True)
+    assert [r["fold_id"] for r in rows] == [1, 2]
+    assert all(r["n_seeds"] == 3 for r in rows)
+    assert all(abs(r["cross"]["ap"] - 0.90) < 1e-9 for r in rows)
+
+
+def test_pool_seeds_menu_lists_each_group_once(tmp_path):
+    _run(tmp_path, "m-fold1-seed42", 1, 0.80)
+    _run(tmp_path, "m-fold1-seed43", 1, 0.90)
+    _run(tmp_path, "m-fold1-seed43-jitter", 1, 0.95)
+    assert agg.discover_prefixes(tmp_path, pool_seeds=True) == [
+        "m-fold*-seed*",
+        "m-fold*-seed*-jitter",
+    ]

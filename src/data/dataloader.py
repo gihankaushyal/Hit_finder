@@ -96,6 +96,8 @@ def asymmetric_loader(
     positive_jitter: str = POSITIVE_JITTER_NONE,
     jitter_edge_pad: int = POSITIVE_JITTER_EDGE_PAD,
     crop_within_frame: bool = False,
+    *,
+    seed: int,
 ) -> DataLoader:
     """DataLoader for asymmetric hitfinder-guided training.
 
@@ -133,6 +135,9 @@ def asymmetric_loader(
             "uniform" places the peak uniformly inside the crop.
         jitter_edge_pad: Minimum peak distance from the crop border for "uniform".
         crop_within_frame: Keep every crop off the zero pad band.
+        seed: Base RNG seed for the per-sample crop, hard-negative, jitter and
+            augmentation draws (see AsymmetricCXIDataset). Pass the run's seed so
+            repeats of one experiment do not all see identical crops.
 
     Returns:
         DataLoader yielding (tensor(B*crops_per_frame,1,224,224), label(B*crops_per_frame,)) pairs.
@@ -162,6 +167,7 @@ def asymmetric_loader(
         positive_jitter=positive_jitter,
         jitter_edge_pad=jitter_edge_pad,
         crop_within_frame=crop_within_frame,
+        seed=seed,
     )
     return DataLoader(
         dataset,

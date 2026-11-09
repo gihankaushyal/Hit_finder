@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import warnings
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable
@@ -136,8 +137,16 @@ def save_split_artifact(artifact: dict, path: str | Path) -> None:
     """Write split artifact to a JSON file."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w") as f:
-        json.dump(artifact, f, indent=2)
+    # Write-then-rename so concurrent jobs (several seeds of one fold share this file) and
+    # readers never see a truncated JSON.
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        with open(tmp, "w") as f:
+            json.dump(artifact, f, indent=2)
+        os.replace(tmp, path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 def load_split_artifact(path: str | Path) -> dict:

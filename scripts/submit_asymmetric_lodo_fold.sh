@@ -36,6 +36,8 @@
 #   TRAIN_CONFIG  (direct sbatch only; submit_asymmetric_lodo_all.sh always checks the baseline run)
 #                 Training config (default configs/supervised/resnet18_asymmetric.yaml), e.g.
 #                 configs/supervised/resnet18_asymmetric_jitter.yaml (writes ...-seed<S>-jitter).
+#   TRAIN_SEED    Training seed (default: the config's seed, 42). Names the run ...-seed<S>[suffix].
+#                 Single-fold scripts only: the *_all.sh orchestrators do not forward it.
 #   CACHE_NVME    Path to this fold's NVMe-staged frame-cache tier
 #                 (default /tmp/sfx_frame_cache). See scripts/stage_frame_cache.sh.
 #   RESUME_FLAG   --resume-training (default), --override-training or
@@ -76,6 +78,13 @@ fi
 FOLD="${1:?fold id required (1-4)}"
 RUN_NAME_PREFIX="${2:?run_name_prefix required, e.g. resnet18-asymmetric-v2}"
 RESUME_FLAG="${RESUME_FLAG:---resume-training}"
+SEED_ARGS=()
+if [[ -n "${TRAIN_SEED:-}" ]]; then
+    # Same range as apply_seed_override (numpy seeds are < 2**32); the length guard keeps bash
+    # arithmetic from overflowing on absurd input.
+    [[ "${TRAIN_SEED}" =~ ^[0-9]{1,10}$ ]] && (( 10#${TRAIN_SEED} < 4294967296 )) || { echo "Error: TRAIN_SEED must be an integer in [0, 4294967296), got '${TRAIN_SEED}'." >&2; exit 1; }
+    SEED_ARGS=(--seed "${TRAIN_SEED}")
+fi
 
 module load mamba/latest
 source activate sfx-hitfinder
@@ -88,4 +97,5 @@ python -u -m src.training.train_asymmetric \
     --folds "${FOLD}" \
     --cache-nvme "${CACHE_NVME:-/tmp/sfx_frame_cache}" \
     "${RESUME_FLAG}" \
+    "${SEED_ARGS[@]}" \
     --tags supervised,resnet18,asymmetric-pipeline,lodo-cached

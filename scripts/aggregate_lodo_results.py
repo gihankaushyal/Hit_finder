@@ -17,17 +17,31 @@ Usage:
 import argparse
 import json
 import re
+import sys
 from pathlib import Path
 
 import numpy as np
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from src.utils.config import DEFAULT_SEED as CONFIG_DEFAULT_SEED  # noqa: E402
 
 DETECTOR_ORDER = {1: "AGIPD", 2: "JUNGFRAU_4M", 3: "ePix10k", 4: "Eiger4M"}
 
 # A run directory is "<prefix>-fold<N>-seed<S><suffix>". The optional suffix (e.g. "-v2" from
 # wandb.run_suffix, or "-careful" / "-lpft" from --run-suffix) is part of the group key, so a
 # recipe experiment never mixes into the unsuffixed baseline of the same prefix.
-_RUN_DIR_RE = re.compile(r"^(?P<prefix>.+)-fold\d+-seed\d+(?P<suffix>.*)$")
-_GROUP_SEP = "-fold*-seed*"
+_RUN_DIR_RE = re.compile(r"^(?P<prefix>.+)-fold\d+-seed(?P<seed>\d+)(?P<suffix>.*)$")
+_GROUP_SEP = "-fold*-seed"
+# The seed the configs default to. A seed-42 unsuffixed run is keyed by its bare prefix; every
+# other group names its seed ("<prefix>-fold*-seed43<suffix>"), because seeds of one prefix are
+# repeats of the same experiment and must never be averaged into one fold row. Pooling every seed
+# is an explicit opt-in (--pool-seeds); a legacy "seed*" key keeps its old meaning, seed 42 only.
+DEFAULT_SEED = str(CONFIG_DEFAULT_SEED)
+_KEY_RE = re.compile(
+    r"^(?P<prefix>.+?)(?:"
+    + re.escape(_GROUP_SEP)
+    + r"(?P<seed>\d+|\*)(?P<suffix>.*))?$"
+)
 
 # Doc-only generations that predate this checkpoint format or have since been
 # overwritten on disk. Source: docs/progress_notes.md. These never come from
@@ -48,11 +62,13 @@ DOC_BASELINES = {
 }
 
 
-def discover_prefixes(checkpoints_dir: Path) -> list[str]:
+def discover_prefixes(checkpoints_dir: Path, pool_seeds: bool = False) -> list[str]:
     """Find run groups with at least one completed fold on disk.
 
-    A group key is the bare prefix for unsuffixed runs and "<prefix>-fold*-seed*<suffix>"
-    for suffixed ones, so the two never share a key.
+    A group key is the bare prefix for unsuffixed seed-42 runs and
+    "<prefix>-fold*-seed<S><suffix>" for everything else, so suffixed runs and other seeds
+    never share a key with the baseline. With pool_seeds every seed of a prefix and suffix
+    collapses into one "<prefix>-fold*-seed*<suffix>" group, so the menu lists it once.
     """
     groups: set[str] = set()
     if not checkpoints_dir.is_dir():
@@ -63,14 +79,34 @@ def discover_prefixes(checkpoints_dir: Path) -> list[str]:
         m = _RUN_DIR_RE.match(p.name)
         if m and (p / "results.json").exists():
             suffix = m.group("suffix")
-            groups.add(m.group("prefix") + (_GROUP_SEP + suffix if suffix else ""))
+            seed = m.group("seed")
+            if pool_seeds:
+                groups.add(m.group("prefix") + _GROUP_SEP + "*" + suffix)
+            elif suffix or seed != DEFAULT_SEED:
+                groups.add(m.group("prefix") + _GROUP_SEP + seed + suffix)
+            else:
+                groups.add(m.group("prefix"))
     return sorted(groups)
 
 
-def load_results(checkpoints_dir: Path, run_prefix: str) -> list[dict]:
-    """Load results.json for every fold of one run group (see discover_prefixes)."""
-    prefix, _, suffix = run_prefix.partition(_GROUP_SEP)
-    dir_re = re.compile(re.escape(prefix) + r"-fold\d+-seed\d+" + re.escape(suffix))
+def load_results(
+    checkpoints_dir: Path, run_prefix: str, pool_seeds: bool = False
+) -> list[dict]:
+    """Load results.json for every fold of one run group (see discover_prefixes).
+
+    pool_seeds=True matches every seed of the group's prefix and suffix; otherwise a key names
+    exactly one seed (a legacy "seed*" key means the default seed, as it did before seeds existed).
+    """
+    key = _KEY_RE.match(run_prefix)
+    prefix = key.group("prefix")
+    seed = key.group("seed")
+    if seed is None or seed == "*":
+        seed = DEFAULT_SEED
+    seed_re = r"\d+" if pool_seeds else re.escape(seed)
+    suffix = key.group("suffix") or ""
+    dir_re = re.compile(
+        re.escape(prefix) + r"-fold\d+-seed" + seed_re + re.escape(suffix)
+    )
     results = []
     for path in sorted(checkpoints_dir.glob("*/results.json")):
         if not dir_re.fullmatch(path.parent.name):
@@ -88,7 +124,32 @@ def load_results(checkpoints_dir: Path, run_prefix: str) -> list[dict]:
             print(f"  Warning: fold {fold_id} has NaN metrics — skipping.")
             continue
         results.append(data)
+    if pool_seeds:
+        results = _pool_by_fold(results)
     return sorted(results, key=lambda r: r["fold_id"])
+
+
+def _pool_by_fold(results: list[dict]) -> list[dict]:
+    """Average the per-seed results of each fold into one record (n_seeds notes how many)."""
+    by_fold: dict[int, list[dict]] = {}
+    for r in results:
+        by_fold.setdefault(r["fold_id"], []).append(r)
+    pooled = []
+    for runs in by_fold.values():
+        rec = {
+            "fold_id": runs[0]["fold_id"],
+            "test_detector": runs[0]["test_detector"],
+            "n_seeds": len(runs),
+        }
+        for split in ("cross", "in_domain"):
+            rec[split] = {
+                k: float(np.mean([r[split][k] for r in runs]))
+                for k, v in runs[0].get(split, {}).items()
+                if isinstance(v, (int, float))
+                and all(isinstance(r[split].get(k), (int, float)) for r in runs)
+            }
+        pooled.append(rec)
+    return pooled
 
 
 def mean_std(values: list[float]) -> tuple[float, float]:
@@ -141,11 +202,11 @@ def print_doc_baseline_row(key: str) -> tuple[float, float]:
 
 
 def build_menu(
-    checkpoints_dir: Path,
+    checkpoints_dir: Path, pool_seeds: bool = False
 ) -> list[tuple[str, str, bool]]:
     """Return numbered menu entries as (key, display_label, is_live)."""
     entries = []
-    for prefix in discover_prefixes(checkpoints_dir):
+    for prefix in discover_prefixes(checkpoints_dir, pool_seeds):
         entries.append((prefix, f"{prefix}  (live, {checkpoints_dir}/)", True))
     for key, (label, *_rest) in DOC_BASELINES.items():
         entries.append((key, f"{label}  (doc)", False))
@@ -196,9 +257,17 @@ def main():
         default=None,
         help=(
             "Checkpoint directory prefix to aggregate (single-variant mode, no "
-            "menu); unsuffixed runs only. For a suffixed group pass the key the menu "
-            "prints, '<prefix>-fold*-seed*<suffix>'. Omit to use the interactive "
-            "menu or --select."
+            "menu); unsuffixed seed-42 runs only. For any other group pass the key the "
+            "menu prints, '<prefix>-fold*-seed<S><suffix>'. "
+            "Omit to use the interactive menu or --select."
+        ),
+    )
+    parser.add_argument(
+        "--pool-seeds",
+        action="store_true",
+        help=(
+            "Average every seed of each selected group into one fold row. Off by default: "
+            "seeds are repeats of one experiment and are reported separately."
         ),
     )
     parser.add_argument(
@@ -215,17 +284,17 @@ def main():
         # Single-variant mode: original behavior, bypasses the menu entirely.
         print(
             f"Aggregating: {args.checkpoints_dir}/{args.run_prefix}"
-            + ("" if _GROUP_SEP in args.run_prefix else _GROUP_SEP)
+            + ("" if _GROUP_SEP in args.run_prefix else _GROUP_SEP + DEFAULT_SEED)
             + "/results.json\n"
         )
-        results = load_results(args.checkpoints_dir, args.run_prefix)
+        results = load_results(args.checkpoints_dir, args.run_prefix, args.pool_seeds)
         if not results:
             print("No completed fold results found.")
             return
         print_variant_table(args.run_prefix, results)
         return
 
-    menu = build_menu(args.checkpoints_dir)
+    menu = build_menu(args.checkpoints_dir, args.pool_seeds)
     if not menu:
         print("No live run results or doc baselines available.")
         return
@@ -239,7 +308,7 @@ def main():
     for i in indices:
         key, label, is_live = menu[i - 1]
         if is_live:
-            results = load_results(args.checkpoints_dir, key)
+            results = load_results(args.checkpoints_dir, key, args.pool_seeds)
             if not results:
                 print(f"\n## {label}\n  No completed fold results found — skipping.")
                 continue

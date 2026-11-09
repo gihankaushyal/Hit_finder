@@ -62,7 +62,7 @@ from src.training.run_naming import (
 from src.training.inference_results import INFERENCE_RESULTS_NAME, RESULTS_NAME
 from src.training.wandb_identity import override_hook_from_cfg
 from src.training.lodo import check_crop_options
-from src.utils.config import load_config
+from src.utils.config import apply_seed_override, load_config, seed_arg
 
 
 def _fold_run_name(cfg: dict, run_name_prefix: str, fold_id: int) -> str:
@@ -108,6 +108,7 @@ def main(
     cache_root: str | None = None,
     cache_nvme: str | None = None,
     no_cache: bool = False,
+    seed: int | None = None,
 ) -> None:
     validate_run_name_prefix(
         run_name_prefix,
@@ -116,6 +117,7 @@ def main(
         ASYMMETRIC_EXAMPLE,
     )
     cfg = load_config(config_path)
+    apply_seed_override(cfg, seed)
     check_crop_options(cfg)  # before any collision gate can touch a run directory
     if tags is not None:
         cfg.setdefault("wandb", {})["tags"] = tags
@@ -355,6 +357,13 @@ if __name__ == "__main__":
             "and --override-training."
         ),
     )
+    parser.add_argument(
+        "--seed",
+        type=seed_arg,
+        default=None,
+        help="Override the config's top-level seed (run name suffix -seed<S>; seeds initialisation, shuffling and crop sampling). "
+        "The session split is deterministic and does not depend on the seed.",
+    )
     parser.add_argument("--cache-root", default=None)
     parser.add_argument("--cache-nvme", default=None)
     parser.add_argument("--no-cache", action="store_true")
@@ -373,4 +382,5 @@ if __name__ == "__main__":
         cache_root=args.cache_root,
         cache_nvme=args.cache_nvme,
         no_cache=args.no_cache,
+        seed=args.seed,
     )
