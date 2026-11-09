@@ -8,7 +8,10 @@ fails the gate here.
 
 from __future__ import annotations
 
+import os
+import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -164,10 +167,8 @@ def test_asymmetric_loader_forwards_the_seed_to_the_dataset(monkeypatch):
     monkeypatch.setattr(dataloader, "AsymmetricCXIDataset", FakeDataset)
     dataloader.asymmetric_loader({}, [], None, batch_size=1, num_workers=0, seed=44)
     assert seen["seed"] == 44
-    dataloader.asymmetric_loader({}, [], None, batch_size=1, num_workers=0)
-    assert (
-        seen["seed"] == 42
-    )  # the default keeps every existing seed-42 run reproducible
+    with pytest.raises(TypeError):  # a call site that forgets the seed must fail loudly
+        dataloader.asymmetric_loader({}, [], None, batch_size=1, num_workers=0)
 
 
 def test_different_seeds_draw_different_per_sample_streams():
@@ -176,20 +177,56 @@ def test_different_seeds_draw_different_per_sample_streams():
     assert _epoch_seed(42, 0, 5, 100) != _epoch_seed(43, 0, 5, 100)
 
 
-# --- shell wrappers -------------------------------------------------------------------
+def test_default_seed_keeps_the_legacy_stream():
+    from src.data.dataset import _SEED_PRIME, _epoch_seed
 
-import os  # noqa: E402
-import subprocess  # noqa: E402
-from pathlib import Path  # noqa: E402
+    assert _epoch_seed(42, 3, 7, 100) == 42 * _SEED_PRIME + 3 * 100 + 7
+
+
+def test_other_seeds_do_not_alias_across_epochs_and_frames():
+    """Under the linear formula seed 43 / epoch 0 equals seed 42 / epoch 20 shifted by 3 frames."""
+    import numpy as np
+
+    from src.data.dataset import _epoch_seed
+
+    n = 50_000
+    state = lambda s: np.random.default_rng(s).integers(2**62)  # noqa: E731
+    assert state(_epoch_seed(43, 0, 0, n)) != state(_epoch_seed(44, 0, 0, n))
+    legacy_alias = (
+        1_000_003 - 20 * n
+    ) % n  # frame offset where the linear mix would collide
+    assert state(_epoch_seed(43, 0, legacy_alias, n)) != state(
+        _epoch_seed(44, 20, 0, n)
+    )
+    seeds = {
+        state(_epoch_seed(s, e, i, n))
+        for s in (43, 44)
+        for e in range(40)
+        for i in range(0, 200, 7)
+    }
+    assert len(seeds) == 2 * 40 * len(range(0, 200, 7))
+
+
+# --- shell wrappers -------------------------------------------------------------------
 
 REPO = Path(__file__).resolve().parents[1]
 
 
-def _bash(script, args, **env):
+def _bash(script, args, shim_dir, **env):
+    """Run a submit script with `sbatch`/`module`/`python` shadowed by stubs that record a call.
+
+    The guards must fire before any of them; a guard moved too low would otherwise submit real
+    SLURM jobs from the test suite.
+    """
+    marker = shim_dir / "called"
+    for name in ("sbatch", "module", "python", "sinfo", "squeue"):
+        stub = shim_dir / name
+        stub.write_text(f"#!/bin/bash\necho {name} >> {marker}\nexit 99\n")
+        stub.chmod(0o755)
     return subprocess.run(
         ["bash", str(REPO / "scripts" / script), *args],
         cwd=REPO,
-        env={**os.environ, **env},
+        env={**os.environ, "PATH": f"{shim_dir}:{os.environ['PATH']}", **env},
         stdin=subprocess.DEVNULL,
         capture_output=True,
         text=True,
@@ -215,22 +252,79 @@ def _bash(script, args, **env):
         ),
     ],
 )
-def test_orchestrators_refuse_train_seed(script, args):
-    r = _bash(script, args, TRAIN_SEED="43")
+def test_orchestrators_refuse_train_seed(script, args, tmp_path):
+    r = _bash(script, args, tmp_path, TRAIN_SEED="43")
     assert r.returncode == 1
     assert "TRAIN_SEED" in r.stderr
+    assert not (tmp_path / "called").exists()
 
 
 @pytest.mark.parametrize(
     "env,msg",
     [
         ({"SEED": "43x"}, "SEED must be"),
+        ({"SEED": "99999999999"}, "SEED must be"),
+        ({"SEED": "4294967296"}, "SEED must be"),
         ({"SUFFIX": "a/b"}, "SUFFIX must be"),
         ({"SUFFIX": "../x"}, "SUFFIX must be"),
         ({"SUFFIX": "a..b"}, "'..'"),
     ],
 )
-def test_crop_diag_rejects_unsafe_seed_and_suffix(env, msg):
-    r = _bash("submit_crop_shortcut_diag.sh", [], **env)
+def test_crop_diag_rejects_unsafe_seed_and_suffix(env, msg, tmp_path):
+    r = _bash("submit_crop_shortcut_diag.sh", [], tmp_path, **env)
     assert r.returncode == 1
     assert msg in r.stderr
+    assert not (tmp_path / "called").exists()
+
+
+@pytest.mark.parametrize("seed", ["-1", "43x", "99999999999", "4294967296"])
+@pytest.mark.parametrize(
+    "script", ["submit_asymmetric_lodo_fold.sh", "submit_ssl_finetune.sh"]
+)
+def test_fold_scripts_bound_train_seed_before_any_work(script, seed, tmp_path):
+    r = _bash(
+        script,
+        ["1", "x", "y"],
+        tmp_path,
+        TRAIN_SEED=seed,
+        RESUME_FLAG="--inference-only",
+    )
+    assert r.returncode == 1
+    assert "TRAIN_SEED must be" in r.stderr
+    assert not (tmp_path / "called").exists()
+
+
+def test_out_of_range_seed_is_a_usage_error_not_a_traceback():
+    r = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "src.training.train_asymmetric",
+            "--config",
+            "c.yaml",
+            "--run-name-prefix",
+            "resnet18-asymmetric-v2",
+            "--seed",
+            "4294967296",
+        ],
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        stdin=subprocess.DEVNULL,
+    )
+    assert r.returncode == 2
+    assert "--seed must be" in r.stderr
+    assert "Traceback" not in r.stderr
+
+
+def test_save_split_artifact_is_atomic_and_leaves_no_temp_files(tmp_path):
+    import json
+
+    from src.evaluation.benchmark import save_split_artifact
+
+    target = tmp_path / "fold_1.json"
+    save_split_artifact({"a": 1}, target)
+    save_split_artifact({"a": 2}, target)
+    assert json.loads(target.read_text()) == {"a": 2}
+    assert [p.name for p in tmp_path.iterdir()] == ["fold_1.json"]

@@ -96,7 +96,8 @@ def asymmetric_loader(
     positive_jitter: str = POSITIVE_JITTER_NONE,
     jitter_edge_pad: int = POSITIVE_JITTER_EDGE_PAD,
     crop_within_frame: bool = False,
-    seed: int = 42,
+    *,
+    seed: int,
 ) -> DataLoader:
     """DataLoader for asymmetric hitfinder-guided training.
 

@@ -368,6 +368,12 @@ if __name__ == "__main__":
     parser.add_argument("--cache-nvme", default=None)
     parser.add_argument("--no-cache", action="store_true")
     args = parser.parse_args()
+    try:
+        apply_seed_override(
+            {}, args.seed
+        )  # range check -> clean usage error, not a traceback
+    except ValueError as e:
+        parser.error(str(e))
     tags = [t.strip() for t in args.tags.split(",")] if args.tags else None
     main(
         args.config,

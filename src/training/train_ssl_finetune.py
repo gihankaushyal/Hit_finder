@@ -348,7 +348,10 @@ def main() -> None:
         check_head_checkpoint(args.head_checkpoint, args.fold)
 
     cfg = load_config(args.config)
-    apply_seed_override(cfg, args.seed)
+    try:
+        apply_seed_override(cfg, args.seed)
+    except ValueError as e:
+        p.error(str(e))
     reference = (
         load_config(V2_REFERENCE_CONFIG) if Path(V2_REFERENCE_CONFIG).exists() else None
     )

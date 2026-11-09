@@ -41,6 +41,9 @@ def load_config(
 
 # numpy.random.seed accepts [0, 2**32); reject anything else before a run name or checkpoint exists.
 SEED_LIMIT = 2**32
+# The seed configs/base.yaml ships with; the legacy per-sample RNG formula and the aggregator's bare
+# run-prefix key are both defined relative to it.
+DEFAULT_SEED = 42
 
 
 def apply_seed_override(cfg: dict, seed: int | None) -> dict:

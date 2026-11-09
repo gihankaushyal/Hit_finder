@@ -41,7 +41,7 @@ SEED="${SEED:-42}"
 SUFFIX="${SUFFIX:-}"
 [[ -z "${SUFFIX}" || "${SUFFIX}" == -* ]] || SUFFIX="-${SUFFIX}"  # accept jitter and -jitter alike
 # Both go into checkpoint and output paths: reject anything but a plain integer / name.
-[[ "${SEED}" =~ ^[0-9]+$ ]] || { echo "Error: SEED must be a non-negative integer, got '${SEED}'." >&2; exit 1; }
+[[ "${SEED}" =~ ^[0-9]{1,10}$ ]] && (( 10#${SEED} < 4294967296 )) || { echo "Error: SEED must be an integer in [0, 4294967296), got '${SEED}'." >&2; exit 1; }
 [[ -z "${SUFFIX}" || "${SUFFIX}" =~ ^-[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] || { echo "Error: SUFFIX must be letters, digits, '_', '.' or '-', got '${SUFFIX}'." >&2; exit 1; }
 [[ "${SUFFIX}" != *..* ]] || { echo "Error: SUFFIX must not contain '..', got '${SUFFIX}'." >&2; exit 1; }
 
@@ -76,8 +76,9 @@ for FOLD in ${FOLDS}; do
             N_SKIP=$((N_SKIP + 1))
             continue
         fi
-        # The diagnostic only reads the config for the session split and the model shape, never the
-        # training options (jitter, recipe), so the baseline config is right for suffixed runs too.
+        # CONFIG is read only for the session split and the model shape, never the training options
+        # (jitter, recipe), so one config per arm family serves suffixed runs too (the careful arm
+        # keeps its own because its model shape comes from mae_finetune_careful.yaml).
         # the default baseline keeps its original file name so earlier results line up
         if [ "${SEED}" = 42 ] && [ -z "${SUFFIX}" ]; then
             OUT="${OUT_DIR}/fold${FOLD}_${ARM}_${RUN_VERSION}_cross.json"

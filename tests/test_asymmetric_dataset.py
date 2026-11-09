@@ -280,6 +280,7 @@ def test_dataset_with_jitter_and_within_frame_yields_valid_items(
         label_key=LABEL_KEY,
         positive_jitter="uniform",
         crop_within_frame=True,
+        seed=42,
     )
     labels = set()
     for epoch in range(6):
@@ -922,6 +923,7 @@ def test_loader_forwards_jitter_options_and_base_config_defaults(
         positive_jitter="uniform",
         jitter_edge_pad=40,
         crop_within_frame=True,
+        seed=42,
     )
     ds = loader.dataset
     assert (ds._positive_jitter, ds._jitter_edge_pad, ds._crop_within_frame) == (

@@ -103,7 +103,9 @@ fi
 
 SEED_ARGS=()
 if [[ -n "${TRAIN_SEED:-}" ]]; then
-    [[ "${TRAIN_SEED}" =~ ^[0-9]+$ ]] || { echo "Error: TRAIN_SEED must be a non-negative integer, got '${TRAIN_SEED}'." >&2; exit 1; }
+    # Same range as apply_seed_override (numpy seeds are < 2**32); the length guard keeps bash
+    # arithmetic from overflowing on absurd input.
+    [[ "${TRAIN_SEED}" =~ ^[0-9]{1,10}$ ]] && (( 10#${TRAIN_SEED} < 4294967296 )) || { echo "Error: TRAIN_SEED must be an integer in [0, 4294967296), got '${TRAIN_SEED}'." >&2; exit 1; }
     SEED_ARGS=(--seed "${TRAIN_SEED}")
 fi
 

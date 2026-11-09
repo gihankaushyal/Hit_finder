@@ -56,9 +56,16 @@ def test_other_seeds_are_separate_groups_not_pooled(tmp_path):
     ]
 
 
-def test_seed_star_pools_every_seed_of_one_suffix(tmp_path):
+def test_legacy_seed_star_key_still_means_seed_42(tmp_path):
+    _run(tmp_path, "m-fold1-seed42-careful", 1, 0.80)
+    _run(tmp_path, "m-fold1-seed43-careful", 1, 0.90)
+    legacy = agg.load_results(tmp_path, "m-fold*-seed*-careful")
+    assert [r["cross"]["ap"] for r in legacy] == [0.80]
+
+
+def test_pool_seeds_pools_every_seed_of_one_suffix(tmp_path):
     _run(tmp_path, "m-fold1-seed42", 1, 0.80)
     _run(tmp_path, "m-fold1-seed43", 1, 0.90)
     _run(tmp_path, "m-fold1-seed43-jitter", 1, 0.95)
-    pooled = agg.load_results(tmp_path, "m-fold*-seed*")
+    pooled = agg.load_results(tmp_path, "m-fold*-seed42", pool_seeds=True)
     assert sorted(r["cross"]["ap"] for r in pooled) == [0.80, 0.90]

@@ -17,9 +17,13 @@ Usage:
 import argparse
 import json
 import re
+import sys
 from pathlib import Path
 
 import numpy as np
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from src.utils.config import DEFAULT_SEED as CONFIG_DEFAULT_SEED  # noqa: E402
 
 DETECTOR_ORDER = {1: "AGIPD", 2: "JUNGFRAU_4M", 3: "ePix10k", 4: "Eiger4M"}
 
@@ -30,9 +34,9 @@ _RUN_DIR_RE = re.compile(r"^(?P<prefix>.+)-fold\d+-seed(?P<seed>\d+)(?P<suffix>.
 _GROUP_SEP = "-fold*-seed"
 # The seed the configs default to. A seed-42 unsuffixed run is keyed by its bare prefix; every
 # other group names its seed ("<prefix>-fold*-seed43<suffix>"), because seeds of one prefix are
-# repeats of the same experiment and must never be averaged into one fold row. "seed*" is the
-# explicit opt-in to pool every seed.
-DEFAULT_SEED = "42"
+# repeats of the same experiment and must never be averaged into one fold row. Pooling every seed
+# is an explicit opt-in (--pool-seeds); a legacy "seed*" key keeps its old meaning, seed 42 only.
+DEFAULT_SEED = str(CONFIG_DEFAULT_SEED)
 _KEY_RE = re.compile(
     r"^(?P<prefix>.+?)(?:"
     + re.escape(_GROUP_SEP)
@@ -82,12 +86,20 @@ def discover_prefixes(checkpoints_dir: Path) -> list[str]:
     return sorted(groups)
 
 
-def load_results(checkpoints_dir: Path, run_prefix: str) -> list[dict]:
-    """Load results.json for every fold of one run group (see discover_prefixes)."""
+def load_results(
+    checkpoints_dir: Path, run_prefix: str, pool_seeds: bool = False
+) -> list[dict]:
+    """Load results.json for every fold of one run group (see discover_prefixes).
+
+    pool_seeds=True matches every seed of the group's prefix and suffix; otherwise a key names
+    exactly one seed (a legacy "seed*" key means the default seed, as it did before seeds existed).
+    """
     key = _KEY_RE.match(run_prefix)
     prefix = key.group("prefix")
-    seed = key.group("seed") or DEFAULT_SEED
-    seed_re = r"\d+" if seed == "*" else re.escape(seed)
+    seed = key.group("seed")
+    if seed is None or seed == "*":
+        seed = DEFAULT_SEED
+    seed_re = r"\d+" if pool_seeds else re.escape(seed)
     suffix = key.group("suffix") or ""
     dir_re = re.compile(
         re.escape(prefix) + r"-fold\d+-seed" + seed_re + re.escape(suffix)
@@ -218,8 +230,16 @@ def main():
         help=(
             "Checkpoint directory prefix to aggregate (single-variant mode, no "
             "menu); unsuffixed seed-42 runs only. For any other group pass the key the "
-            "menu prints, '<prefix>-fold*-seed<S><suffix>' ('seed*' pools every seed). "
+            "menu prints, '<prefix>-fold*-seed<S><suffix>'. "
             "Omit to use the interactive menu or --select."
+        ),
+    )
+    parser.add_argument(
+        "--pool-seeds",
+        action="store_true",
+        help=(
+            "Average every seed of each selected group into one fold row. Off by default: "
+            "seeds are repeats of one experiment and are reported separately."
         ),
     )
     parser.add_argument(
@@ -239,7 +259,7 @@ def main():
             + ("" if _GROUP_SEP in args.run_prefix else _GROUP_SEP + DEFAULT_SEED)
             + "/results.json\n"
         )
-        results = load_results(args.checkpoints_dir, args.run_prefix)
+        results = load_results(args.checkpoints_dir, args.run_prefix, args.pool_seeds)
         if not results:
             print("No completed fold results found.")
             return
@@ -260,7 +280,7 @@ def main():
     for i in indices:
         key, label, is_live = menu[i - 1]
         if is_live:
-            results = load_results(args.checkpoints_dir, key)
+            results = load_results(args.checkpoints_dir, key, args.pool_seeds)
             if not results:
                 print(f"\n## {label}\n  No completed fold results found — skipping.")
                 continue

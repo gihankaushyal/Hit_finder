@@ -22,6 +22,7 @@ from src.preprocessing.io import (
 )
 from src.data.frame_cache import CacheMissError, FrameCache
 from src.hitfinders.base import Hitfinder
+from src.utils.config import DEFAULT_SEED
 from src.preprocessing.augment import (
     PAD_BORDER_DEFAULT,
     pad_border,
@@ -54,18 +55,25 @@ CROP_SIZE = 224
 # that measure or probe the negative sampler.
 HARD_NEG_MARGIN_DEFAULT = 50
 
-# 1_000_003 is prime, chosen so the seed/epoch/idx components of the formula
-# below don't alias into each other's ranges.
 _SEED_PRIME = 1_000_003
 
 
-def _epoch_seed(seed: int, epoch: int, idx: int, n: int) -> int:
+def _epoch_seed(
+    seed: int, epoch: int, idx: int, n: int
+) -> int | np.random.SeedSequence:
     """Per-sample RNG seed shared by AsymmetricCXIDataset and
     SSLPretrainCXIDataset so every crops_per_frame draw inside one
     __getitem__ call shares one advancing Generator, while different
     (epoch, idx) pairs get different seeds.
+
+    DEFAULT_SEED keeps the original linear formula so every existing seed-42 run stays exactly
+    reproducible. The linear formula aliases across seeds (seed s+1 at epoch 0 equals seed s at
+    epoch _SEED_PRIME / n, shifted by a few frames), so any other seed mixes (seed, epoch, idx)
+    through a SeedSequence, whose streams do not collide.
     """
-    return seed * _SEED_PRIME + epoch * n + idx
+    if seed == DEFAULT_SEED:
+        return seed * _SEED_PRIME + epoch * n + idx
+    return np.random.SeedSequence([seed, epoch, idx])
 
 
 class UnlabeledDataset(Dataset):
@@ -516,7 +524,7 @@ class AsymmetricCXIDataset(Dataset):
         session_map: dict[str, str | Path],
         hitfinder: Hitfinder,
         label_key: str = "entry_1/labels/hit",
-        seed: int = 42,
+        seed: int = DEFAULT_SEED,
         frame_cache: FrameCache | None = None,
         hit_frac: float = 0.5,
         hard_neg_max_attempts: int = 50,
@@ -834,7 +842,7 @@ class SSLPretrainCXIDataset(Dataset):
         self,
         session_ids: list[str],
         session_map: dict[str, str | Path],
-        seed: int = 42,
+        seed: int = DEFAULT_SEED,
         crops_per_frame: int = 1,
         hitfinder: Hitfinder | None = None,
         min_valid_frac: float = SSL_MIN_VALID_FRAC_DEFAULT,
