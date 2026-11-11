@@ -130,14 +130,14 @@ Per-item pipeline (one item = one frame; it yields `crops_per_frame` crops):
 2. `_load_gcn_frame()` → `(gcn_frame, valid_mask, centroids)`: read → assemble → [hitfinder on the raw frame] → `gcn()` → `fill_gaps_after_gcn()`, from the cache or computed live
 3. `pad_border(112)` → padded canvas; centroids and mask are shifted to match
 4. Pick the crop for each of the `crops_per_frame` draws:
-   - **HIT frame with centroids:** 50/50 coin toss (`hit_frac`, default 0.5). **Path A** — 224×224 centred on a random centroid → `label = 1`. **Path B** — random crop ≥ 50 px from all centroids (up to `hard_neg_max_attempts` = 50 tries; falls back to Path A if none is found) → `label = 0`
+   - **HIT frame with centroids:** 50/50 coin toss (`hit_frac`, default 0.5). **Path A** — 224×224 centred on a random centroid → `label = 1` (opt-in `asymmetric.positive_jitter: uniform` instead places the peak uniformly inside the crop, at least `jitter_edge_pad` px from the border; `asymmetric.crop_within_frame: true` keeps every crop out of the zero-padded band). **Path B** — random crop ≥ 50 px from all centroids (up to `hard_neg_max_attempts` = 50 tries; falls back to Path A if none is found) → `label = 0`
    - **HIT frame, no centroids found, or NON-HIT frame:** random crop → `label = 0`
 5. `random_rot90()`, `random_flip()` — geometric augmentation
 6. `lcn(crop, mask)` — 9×9 masked local normalization (`ε = 1e-2`, variance form)
 7. `random_cutout(3 holes, 24×24, exact 0, 8 px margin from every centroid)` — after LCN; a hole is skipped after 20 failed draws
 8. Return `(crops_per_frame, 1, 224, 224)` float32 and `(crops_per_frame,)` int64 labels (or `None` if the crops could not be drawn within `crops_per_frame × 4` attempts)
 
-Crop positions are re-seeded per epoch: `set_epoch(epoch)` folds the epoch into the per-item RNG seed, so each epoch draws different crops from the same cached frame. `asymmetric_loader()` flattens the per-frame stacks into ordinary batches via `_flatten_collate`.
+Crop positions are re-seeded per epoch: `set_epoch(epoch)` folds the epoch into the per-item RNG seed, so each epoch draws different crops from the same cached frame. The per-item stream also depends on the run seed (`--seed`): seed 42 keeps the original linear formula `seed*prime + epoch*n + idx`, any other seed uses `np.random.SeedSequence([seed, epoch, idx])`, so repeats with different seeds draw different crops, jitter and augmentations (and cannot alias each other). `asymmetric_loader()` flattens the per-frame stacks into ordinary batches via `_flatten_collate`.
 
 **Output tensor contract:** `(B, 1, 224, 224)` float32, label `(B,)` int64, where `B = batch_size × crops_per_frame` for `asymmetric_loader()` (`batch_size` counts frames)
 
