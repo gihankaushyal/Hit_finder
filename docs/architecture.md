@@ -27,7 +27,7 @@ Hitfinder (PF8 / GPU / NumPy) ────────────────�
 Global Contrast Normalization (GCN) ────────────────────────►  (H, W) mean=0, std≈1
      │
      ├── TRAINING ──────────────────────────────────────────────────────────────
-     │   Hit crop  (centroid ±112px)   → rot90/flip → LCN → peak-aware cutout → (1,224,224) label=1
+     │   Hit crop  (centroid ±112px; opt-in jitter, see below) → rot90/flip → LCN → peak-aware cutout → (1,224,224) label=1
      │   Miss crop (≥50px clearance)   → rot90/flip → LCN → peak-aware cutout → (1,224,224) label=0
      │
      └── INFERENCE ─────────────────────────────────────────────────────────────
@@ -89,7 +89,7 @@ All preprocessing runs on CPU in DataLoader workers (GPU hitfinder is the except
 
 Classical SFX hit-finding assigns one binary label per frame. This is noisy as supervision: a frame labeled "hit" contains mostly background pixels, and a random 224×224 crop is unlikely to intersect a Bragg centroid. The asymmetric pipeline re-frames the problem at patch level:
 
-- **Hit patch (label = 1):** 224×224 crop centered on a randomly chosen Bragg centroid from the hitfinder.
+- **Hit patch (label = 1):** 224×224 crop centered on a randomly chosen Bragg centroid from the hitfinder. This is the default (`asymmetric.positive_jitter: none`). The opt-in `uniform` mode places the peak uniformly inside the crop (at least `jitter_edge_pad`, default 32 px, from the border), and `asymmetric.crop_within_frame: true` keeps every crop out of the zero-padded band around the frame. Both change the training crop distribution, so a run that sets either needs a run suffix (e.g. `-jitter`).
 - **Miss patch (label = 0, hard negative):** 224×224 crop sampled at least 50 px from all centroids (rejection-sampled, up to 50 attempts). This forces the model to distinguish true Bragg signal from background texture rather than memorizing frame-level intensity statistics.
 
 `hit_frac=0.5` controls the training balance between hit and miss patches, decoupled from the dataset's natural hit rate.
@@ -131,7 +131,7 @@ Track 2 adds a self-supervised pretraining stage to initialize representations f
 
 **Stage 1 — MAE Pretraining** (`src/training/train_ssl_pretrain.py`, `configs/ssl/mae_pretrain.yaml`)
 
-- **Architecture:** ViT-S/16 (`mae_vit_small_patch16`: embed dim 384, depth 12, 6 heads) with a 4-block, 256-dim decoder; 16×16 patch tokens → 196 patches per 224×224 crop. Built by `build_mae_model(cfg)` in `src/models/ssl.py`.
+- **Architecture:** ViT-S/16 (embed dim 384, depth 12, 6 heads; `model.backbone: mae_vit_small_patch16` in the configs is a bookkeeping string, not a constructor) with a 4-block, 256-dim decoder; 16×16 patch tokens → 196 patches per 224×224 crop. Built by `build_mae_model(cfg)` in `src/models/ssl.py`.
 - **Objective:** reconstruct randomly masked patches (`ssl.mask_ratio: 0.6`, lower than the MAE-standard 0.75; `norm_pix_loss: false` because LCN already locally normalizes). A `peak_aware` masking mode exists (`ssl.masking`) but `random` is the configured default.
 - **Training:** 400 epochs (20 warm-up), batch 256, lr 1.5e-4, weight decay 0.05, grad clip 1.0; `ssl.crops_per_frame: 4`; checkpoints (with reconstruction sample images) every 20 epochs.
 - **Data:** `SSLPretrainCXIDataset` / `ssl_crop_loader` (`src/data/dataset.py`, `dataloader.py`) draw several random valid-region crops per cached frame (`min_valid_frac: 0.5`); no labels are used. No cutout — MAE masking replaces it. Pretraining is run per LODO fold on the training detectors only, so a held-out detector is never seen.
@@ -141,12 +141,12 @@ Track 2 adds a self-supervised pretraining stage to initialize representations f
 
 - Replace the MAE decoder with a 2-class classification head on the encoder (`pretrain_checkpoint` points at the Stage-1 `last.pt`).
 - **Fine-tune:** all weights trainable; 100 epochs, lr 5e-5, early-stopping patience 10, same asymmetric patch pipeline and vote-aggregated frame-level evaluation as Track 1.
-- **Linear probe** (`--linear-probe`): encoder frozen, only the head trains. Result directories are named `<prefix>-probe-…` instead of `<prefix>-finetune-…` (`expand_finetune_prefix` in `run_naming.py`).
+- **Linear probe** (`--linear-probe`): encoder frozen, only the head trains. `expand_finetune_prefix` in `run_naming.py` inserts the mode before the version, so the prefix `vits16-mae-v2` resolves to `vits16-mae-probe-v2` for a probe and `vits16-mae-finetune-v2` for a fine-tune.
 - `--inference-only` re-evaluates a finished run from its `best.pt` without training (see [Evaluation: LODO Protocol](#evaluation-lodo-protocol)).
 
 **Orchestration:** `scripts/submit_ssl_pretrain_all.sh` and `scripts/submit_ssl_finetune_all.sh` stage the CXI files on local NVMe, train each fold, then clean up (`stage_ssl_data.sh`, `cleanup_ssl_stage.sh`).
 
-> **Status (2026-11-05):** The September 2026 generation completed fine-tune on 4/4 folds (mean cross AP 0.836) and linear probe on 3/4 folds (0.829; the fold-2 probe was cancelled). The rerun under the current run-naming standard (`mae-vits16-v2`) has finished 4/4 folds for both heads: fine-tune 0.858 ± 0.060 and linear probe 0.962 ± 0.024 mean cross AP. Single-seed recipe experiments on the `-v2` encoders (careful fine-tune recipe, LP-FT, probes on earlier pretrain snapshots, random-init encoder) are documented in the detailed notes: the careful recipe reaches 0.922 ± 0.052 and LP-FT 0.915 ± 0.040. The careful recipe lives in `src/training/recipe.py` (warmup + cosine schedule, layer-wise lr decay, drop-path, no weight decay on norm/bias, truncated-normal head init) and is selected by config (`configs/ssl/mae_finetune_careful.yaml`); `train_ssl_finetune.py` also takes `--run-suffix`, `--random-init` and `--head-checkpoint` (LP-FT head, with a fold-leak check), and `training.save_epochs` writes atomic `epochN.pt` snapshots. Results and caveats → [detailed_notes.md](detailed_notes.md).
+> **Status (2026-11-11):** The September 2026 generation completed fine-tune on 4/4 folds (mean cross AP 0.836) and linear probe on 3/4 folds (0.829; the fold-2 probe was cancelled). The rerun under the current run-naming standard (`mae-vits16-v2`) has finished 4/4 folds for both heads: fine-tune 0.858 ± 0.060 and linear probe 0.962 ± 0.024 mean cross AP. Seed-42 recipe experiments on the `-v2` encoders (careful fine-tune recipe, LP-FT, probes on earlier pretrain snapshots, random-init encoder) are documented in the detailed notes: the careful recipe reaches 0.922 ± 0.052 and LP-FT 0.915 ± 0.040. The careful recipe lives in `src/training/recipe.py` (warmup + cosine schedule, layer-wise lr decay, drop-path, no weight decay on norm/bias, truncated-normal head init) and is selected by config (`configs/ssl/mae_finetune_careful.yaml`); `train_ssl_finetune.py` also takes `--run-suffix`, `--random-init` and `--head-checkpoint` (LP-FT head, with a fold-leak check), and `training.save_epochs` writes atomic `epochN.pt` snapshots. Positive jitter and seed repeats (seeds 42/43/44 on folds 1 and 4; folds 2 and 3 are seed 42 only) are summarized in the detailed notes: jitter lifts the plain fine-tune on both folds, lowers the ResNet18 on Eiger4M, and leaves the probe about unchanged. Results and caveats → [detailed_notes.md](detailed_notes.md).
 
 ---
 
@@ -182,7 +182,7 @@ At inference time no hitfinder is needed. The full assembled, GCN-normalized fra
 frame_score = count(patches where softmax[:, 1] > 0.5) / total_patches
 ```
 
-A frame is a hit if `frame_score > threshold`, where the optimal threshold is determined on the validation set. Patches are processed in mini-batches of 64 by `run_patch_agg()` in `src/evaluation/benchmark.py`. `aggregation` accepts `"vote"` (default) or `"max"` (kept for backward compatibility); `min_hit_patches` is accepted but reserved and does not change the score.
+A frame is a hit if `frame_score >= threshold`, where the optimal threshold is determined on the validation set. Patches are processed in mini-batches of 64 by `run_patch_agg()` in `src/evaluation/benchmark.py`. `aggregation` accepts `"vote"` (default) or `"max"` (kept for backward compatibility); `min_hit_patches` is accepted but reserved and does not change the score.
 
 > **Why vote over max?** Max aggregation is sensitive to the single most confident patch and produces unstable frame scores. Vote aggregation treats the score as the fraction of patches exhibiting Bragg-like features, which correlates better with actual diffraction quality and allows calibrated threshold selection across detectors.
 
@@ -209,12 +209,12 @@ Ties are not handled alike: `average_precision` sorts by a stable argsort revers
 
 ### Run lifecycle
 
-- **Naming:** every run takes a required, versioned `--run-name-prefix`; the checkpoint directory is `checkpoints/<prefix>-fold<N>-seed<S><run_suffix>/` (the suffix, e.g. `-careful`, is empty for the default recipe; `train_ssl_finetune.py` takes it as `--run-suffix`, Track 1 as `wandb.run_suffix`, and only `train_ssl_finetune.py` enforces it for non-default recipes, `--random-init` and `--head-checkpoint`). An existing `best.pt` under the resolved name stops the run unless `--resume-training` or `--override-training` is given (`src/training/run_naming.py`).
+- **Naming:** every run takes a required, versioned `--run-name-prefix`; the checkpoint directory is `checkpoints/<prefix>-fold<N>-seed<S><run_suffix>/` (the suffix, e.g. `-careful`, is empty for the default recipe; `train_ssl_finetune.py` takes it as `--run-suffix`, Track 1 as `wandb.run_suffix`, and `train_ssl_finetune.py` enforces it for non-default recipes, `--random-init` and `--head-checkpoint`, and both entry points demand it when `asymmetric.positive_jitter` or `crop_within_frame` is set, via `check_crop_options` in `lodo.py`). `--seed S` (both entry points; 0 ≤ S < 2**32, default 42, `seed_arg` in `src/utils/config.py`) sets the initialization, the shuffle and the per-sample crop, jitter and augmentation draws, and puts `seed<S>` in the run name; seed 42 keeps the original sampling stream, other seeds use `np.random.SeedSequence([seed, epoch, idx])`. The session split does not depend on the seed. An existing `best.pt` under the resolved name stops the run unless `--resume-training` or `--override-training` is given (`src/training/run_naming.py`).
 - **Override once per SLURM job:** after an override deletes the old checkpoint, `override_applied.json` records the job id and restart count (`override_marker.py`), so a requeued job resumes instead of overriding again and destroying the new attempt's checkpoint.
-- **W&B identity:** each override attempt logs to a new run id (`<run>`, `<run>-o2`, …) stored in `<run_dir>/wandb_id.txt`; the superseded run is tagged `overridden` (`wandb_identity.py`).
+- **W&B identity:** each override attempt, and any fresh start whose run id already exists in W&B, logs to a new run id (`<run>`, `<run>-o2`, …) stored in `<run_dir>/wandb_id.txt`; the superseded run is tagged `overridden`. `--resume-training` keeps the current id even when the checkpoint directory was emptied, so relaunching an archived run with it overwrites the old W&B run; use `--override-training` for a fresh id (`wandb_identity.py`).
 - **Results:** each fold writes `results.json` with `fold_id`, `test_detector`, `inference_threshold` and `cross` / `in_domain` blocks (`ap`, `auc_roc`, `f1`, `threshold`); newer runs also carry a `training` block (e.g. `configured_epochs`, `last_epoch`, `best_epoch`, `early_stopped`).
 - **Inference-only:** `--inference-only` (Track 1 and SSL fine-tune/probe) re-evaluates `best.pt` without training. It writes `results.json` if none exists, otherwise `results.inference.json`, and logs `inference/*` summaries to W&B (`inference_results.py`).
-- **Aggregation:** `python scripts/aggregate_lodo_results.py` collects finished folds into per-variant tables, grouping runs by (prefix, suffix).
+- **Aggregation:** `python scripts/aggregate_lodo_results.py` collects finished folds into per-variant tables, grouping runs by (prefix, suffix, seed): a bare prefix means seed 42 with no suffix, other seeds are listed as `<prefix>-fold*-seed<S><suffix>`, and `--pool-seeds` averages the seeds of each group into one row per fold (it mixes seed counts across folds when only some folds were repeated).
 
 ---
 

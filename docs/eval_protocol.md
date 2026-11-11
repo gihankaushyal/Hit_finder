@@ -1,6 +1,6 @@
 # Cross-Detector Leave-One-Detector-Out Benchmark Protocol
 
-**Version:** 2.2 — Phase 5 update (2026-11-05); originally 1.0, Phase 1 finalization
+**Version:** 2.3 — Phase 5 update (2026-11-11); originally 1.0, Phase 1 finalization
 **Original design:** `docs/superpowers/plans/2026-05-13-benchmark-protocol.md` (the design spec file is no longer in the repo)
 **Implementation:** `src/evaluation/benchmark.py` (splits, patch aggregation, metrics), `src/training/lodo.py` (fold loop, sessions), `src/training/inference_results.py` (result files)
 
@@ -149,21 +149,22 @@ overwritten, and logs `inference/threshold` and
 (`src/training/inference_results.py`).
 
 `python scripts/aggregate_lodo_results.py` collects finished folds into
-per-variant tables, grouping runs by (prefix, suffix) (interactive menu, `--select`, or `--run-prefix`).
+per-variant tables, grouping runs by (prefix, suffix, seed) (interactive menu, `--select`, or `--run-prefix`, which reaches unsuffixed seed-42 runs only; `--pool-seeds` averages the seeds of each group per fold and mixes seed counts when only some folds were repeated).
 
 ## Run Identity
 
-Every run uses a required, versioned `--run-name-prefix` (`src/training/run_naming.py`) and an optional run suffix that names a recipe variant (`--run-suffix` on `train_ssl_finetune.py`, `wandb.run_suffix` in the config for Track 1; `checkpoints/<prefix>-fold<N>-seed<S><suffix>/`);
+Every run uses a required, versioned `--run-name-prefix` (`src/training/run_naming.py`) and an optional run suffix that names a recipe variant (`--run-suffix` on `train_ssl_finetune.py`, `wandb.run_suffix` in the config for Track 1; `checkpoints/<prefix>-fold<N>-seed<S><suffix>/`; a run that sets `asymmetric.positive_jitter` or `crop_within_frame` must carry a suffix such as `-jitter`). `--seed S` (default 42) sets initialization, shuffle and the per-sample crop, jitter and augmentation draws, so repeats differ in all of them;
 results from different generations (e.g. `resnet18-asymmetric` vs
 `resnet18-asymmetric-v2`, `mae-vits16` vs `mae-vits16-v2`) must never be mixed in one
 table. An existing checkpoint under the resolved name requires `--resume-training`
 or `--override-training`; an override is applied at most once per SLURM job
-(`override_marker.py`), and each override attempt logs to a new W&B run id
-(`wandb_identity.py`).
+(`override_marker.py`), and each override attempt (or fresh start with an id already in W&B) logs to a new W&B run id
+(`wandb_identity.py`); `--resume-training` keeps the id.
 
 ## Training Knobs That Affect Comparability
 
 - `asymmetric.hit_frac` (default 0.5, read in `lodo.py`; not an evaluation parameter) sets the hit/miss balance of training crops. `scripts/plot_hit_frac.py` plots the realized against the configured value from W&B.
+- `asymmetric.positive_jitter` (`none` default, or `uniform`), `asymmetric.jitter_edge_pad` (32 px) and `asymmetric.crop_within_frame` (false) change the training crop distribution and are therefore comparability factors; a run that sets them carries a run suffix. The careful fine-tune recipe (`src/training/recipe.py`, `configs/ssl/mae_finetune_careful*.yaml`) is likewise a labelled variant.
 - `asymmetric.crops_per_frame` (default 1) and the frame cache change the cost of an epoch, not the evaluation protocol.
 - Track 2 pretraining must exclude the fold's test detector (`train_ssl_pretrain --fold N`); a pretrain checkpoint is only valid for its own fold.
 
