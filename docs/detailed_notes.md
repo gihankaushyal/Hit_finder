@@ -1,6 +1,6 @@
 # Detailed Results — LODO Benchmark (Track 1 Supervised, Track 2 SSL; 4-fold)
 
-*Full per-fold breakdown referenced from README.md. Last updated: 2026-11-05. All "±" values are the sample standard deviation (n−1) over folds, as printed by `scripts/aggregate_lodo_results.py`.*
+*Full per-fold breakdown referenced from README.md. Last updated: 2026-11-11. All "±" values are the sample standard deviation (n−1) over folds, as printed by `scripts/aggregate_lodo_results.py`.*
 
 **Contents:** [Protocol](#evaluation-protocol) · [Pipeline comparison](#pipeline-comparison) · [Naive baseline](#phase-4-naive-baseline--frame-level-labels-random-crops) · [Asymmetric v1](#asymmetric-pipeline-baseline--hitfinder-guided-crops--all-pr-22-fixes) · [Asymmetric v2](#asymmetric-pipeline-v2--frame-cache-backed-training) · [Track 2 SSL](#track-2--self-supervised-mae-vit-s16) · [Track 2 recipe and pretraining checks](#track-2--fine-tune-recipe-and-pretraining-checks-v2-2026-11) · [Key findings](#key-findings) · [Thresholds](#inference-thresholds)
 
@@ -25,9 +25,9 @@
 
 **Data:** Resonet production dataset under `Resonet/production/<detector>_20k` — 5 CXI files (AGIPD, ePix10k, Eiger4M; 4000 frames each) or 10 files (JUNGFRAU 4M; 2000 frames each), i.e. 20k frames per detector, 80k frames total.
 
-**Run naming:** every run is launched with a required, versioned `--run-name-prefix`; checkpoints live in `checkpoints/<prefix>-fold<N>-seed42/`. Re-running an existing name needs `--resume-training` or `--override-training` (`src/training/run_naming.py`; the override is applied once per SLURM job, see `override_marker.py`). Each override attempt gets a fresh W&B run id (`wandb_identity.py`).
+**Run naming:** every run is launched with a required, versioned `--run-name-prefix`; checkpoints live in `checkpoints/<prefix>-fold<N>-seed<S><suffix>/` (seed 42 unless a repeat was run; suffixes `-jitter`, `-careful`, `-careful-jitter` mark arms). Re-running an existing name needs `--resume-training` or `--override-training` (`src/training/run_naming.py`; the override is applied once per SLURM job, see `override_marker.py`). Each override attempt gets a fresh W&B run id (`wandb_identity.py`).
 
-**Summarizing results:** `python scripts/aggregate_lodo_results.py` reads `checkpoints/<run>-fold*/results.json` and prints per-variant tables (interactive menu, `--select`, or `--run-prefix`).
+**Summarizing results:** `python scripts/aggregate_lodo_results.py` reads `checkpoints/<run>-fold*/results.json` and prints per-variant tables (interactive menu, `--select`, or `--run-prefix`, which reaches only unsuffixed seed-42 runs; `--pool-seeds` averages the seeds of each selected group per fold).
 
 ---
 
@@ -144,7 +144,7 @@ These numbers are the **September 2026 generation** (pretrain checkpoints `mae-v
 | 4 | Eiger4M | 0.8402 | 0.8314 | 0.7830 | 0.7397 | 0.7272 | 0.6977 |
 | **Mean** | | **0.836 ± 0.058** (4/4) | 0.870 ± 0.059 | 0.773 ± 0.030 | **0.829 ± 0.084** (3/4) | 0.843 ± 0.105 | 0.806 ± 0.107 |
 
-The fold-2 probe was cancelled at about epoch 79 of 100 (SLURM job 63035721) and never produced a `results.json`.
+The fold-2 probe was cancelled at about epoch 79 of 100 and never produced a `results.json`.
 
 ### In-domain results
 
@@ -264,6 +264,27 @@ Single-seed (42) runs on top of the `-v2` SSL generation above; all numbers from
 
 ---
 
+## Track 2 and Track 1 — positive jitter and seed repeats (v2, 2026-11)
+
+Opt-in positive jitter (`positive_jitter: uniform` with crops kept inside the frame; `configs/supervised/resnet18_asymmetric_jitter.yaml`, `configs/ssl/mae_finetune_jitter.yaml`, `configs/ssl/mae_finetune_careful_jitter.yaml`) was introduced to remove a crop-position shortcut: the fine-tuned ViT scored higher when the Bragg-peak crop sat at the centre, and its AP fell as the crop was shifted away (seed 42, v2 fine-tune: fold 1 0.888 at 0 px to 0.737 at 80 px; fold 4 0.996 to 0.853), while the frozen probe stayed nearly flat. Jitter and keeping crops inside the frame were introduced together, so their effects are not separated; there is no jitter-only or within-frame-only arm. Run names carry the arm as a suffix: `<prefix>-fold<N>-seed<S>-jitter` (and `-careful-jitter` for the careful recipe).
+
+Repeats use seeds 42, 43 and 44 on **folds 1 and 4 only**; folds 2 and 3 have seed 42 and no jitter arm. Each seed changes the initialization, the shuffle and the per-sample crop, hard-negative, jitter and augmentation draws (`--seed`, `src/utils/config.py`). Seed 42 keeps the original sampling stream, so seed-42 results are unchanged. An earlier set of seed 43/44 runs shared the seed-42 sampling stream (the run seed was not passed to the data loader); it was replaced by a re-run after the fix and is not quoted. The MAE pretraining checkpoint is a single run (seed 42), so the spread still understates total variance. Cross-detector AP, mean (sample sd over the three seeds):
+
+| Arm | Fold | Baseline | With jitter | Jitter effect |
+|---|---|---|---|---|
+| ResNet18 v2 | 1 (AGIPD) | 0.849 (0.054) | 0.898 (0.033) | +0.049 |
+| ResNet18 v2 | 4 (Eiger4M) | 0.990 (0.014) | 0.769 (0.049) | -0.221 |
+| ViT fine-tune | 1 | 0.802 (0.030) | 0.914 (0.045) | +0.112 |
+| ViT fine-tune | 4 | 0.920 (0.025) | 0.999 (0.000) | +0.078 |
+| ViT fine-tune, careful | 1 | 0.841 (0.056) | 0.879 (0.043) | +0.038 |
+| ViT fine-tune, careful | 4 | 0.982 (0.014) | 1.000 (0.000) | +0.017 |
+| ViT probe | 1 | 0.942 (0.000) | 0.941 (0.000) | -0.001 |
+| ViT probe | 4 | 0.970 (0.001) | 0.981 (0.001) | +0.011 |
+
+**Reading.** Jitter lifts the plain ViT fine-tune on both folds (positive in all three seeds; about 2.5 times the larger seed sd on fold 1 and 3 times on fold 4). The ResNet18 regression on Eiger4M is negative in all three seeds and its cause is unexplained. The ResNet18 gain on AGIPD (+0.049) and the careful recipe's gain on AGIPD (+0.038) are inside the seed spread and are not claimed as effects. The probe is unaffected on AGIPD and gains 0.011 on Eiger4M. These are two-fold results with n = 3; they say nothing about folds 2 and 3. The aggregator prints each seed as its own group (`<prefix>-fold*-seed43`, `...-seed44-jitter`); `--pool-seeds` averages seeds per fold, which mixes seed counts across folds here and must not be set beside four-fold seed-42 means.
+
+---
+
 ## Key Findings
 
 **AGIPD generalization gap closed:** Cross AP rose from 0.565 → 0.807 (+0.242). The naive pipeline likely learned panel-edge artifacts as detector-identity cues; the asymmetric pipeline's centroid-guided crops force learning of Bragg spot features instead.
@@ -294,7 +315,7 @@ The threshold is chosen over the unique frame scores. Values are discrete becaus
 | 3 (ePix10k) | 0.0123 |
 | 4 (Eiger4M) | 0.0123 |
 
-**Evaluated-split optimum, asymmetric v1** (recorded in the 2026-08 notes; `cross.threshold` / `in_domain.threshold`):
+**Evaluated-split optimum, asymmetric v1** (recorded in the 2026-08 notes; `cross.threshold` / `in_domain.threshold`). The `results.json` files now on disk give different thresholds for folds 2 to 4 (cross 0.080 / 0.012 / 0.102 / 0.184, in-domain 0.012 / 0.020 / 0.012 / 0.012), consistent with the re-evaluation described above; the August values are kept for the same reason as the AP table:
 
 | Fold | Cross threshold | In-domain threshold |
 |------|----------------|---------------------|
