@@ -130,7 +130,7 @@ Per-item pipeline (one item = one frame; it yields `crops_per_frame` crops):
 2. `_load_gcn_frame()` → `(gcn_frame, valid_mask, centroids)`: read → assemble → [hitfinder on the raw frame] → `gcn()` → `fill_gaps_after_gcn()`, from the cache or computed live
 3. `pad_border(112)` → padded canvas; centroids and mask are shifted to match
 4. Pick the crop for each of the `crops_per_frame` draws:
-   - **HIT frame with centroids:** 50/50 coin toss (`hit_frac`, default 0.5). **Path A** — 224×224 centred on a random centroid → `label = 1` (opt-in `asymmetric.positive_jitter: uniform` instead places the peak uniformly inside the crop, at least `jitter_edge_pad` px from the border; `asymmetric.crop_within_frame: true` keeps every crop out of the zero-padded band). **Path B** — random crop ≥ 50 px from all centroids (up to `hard_neg_max_attempts` = 50 tries; falls back to Path A if none is found) → `label = 0`
+   - **HIT frame with centroids:** 50/50 coin toss (`hit_frac`, default 0.5). **Path A** — 224×224 centred on a random centroid → `label = 1` (opt-in `asymmetric.positive_jitter: uniform` instead places the peak uniformly inside the crop, at least `jitter_edge_pad` px from the border, less near the real frame edge under `crop_within_frame`; `asymmetric.crop_within_frame: true` keeps every crop out of the zero-padded band). **Path B** — random crop ≥ 50 px from all centroids (up to `hard_neg_max_attempts` = 50 tries; falls back to Path A if none is found) → `label = 0`
    - **HIT frame, no centroids found, or NON-HIT frame:** random crop → `label = 0`
 5. `random_rot90()`, `random_flip()` — geometric augmentation
 6. `lcn(crop, mask)` — 9×9 masked local normalization (`ε = 1e-2`, variance form)

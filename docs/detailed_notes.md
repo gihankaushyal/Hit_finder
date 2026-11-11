@@ -27,7 +27,7 @@
 
 **Run naming:** every run is launched with a required, versioned `--run-name-prefix`; checkpoints live in `checkpoints/<prefix>-fold<N>-seed<S><suffix>/` (seed 42 unless a repeat was run; suffixes `-jitter`, `-careful`, `-careful-jitter` mark arms). Re-running an existing name needs `--resume-training` or `--override-training` (`src/training/run_naming.py`; the override is applied once per SLURM job, see `override_marker.py`). Each override attempt gets a fresh W&B run id (`wandb_identity.py`).
 
-**Summarizing results:** `python scripts/aggregate_lodo_results.py` reads `checkpoints/<run>-fold*/results.json` and prints per-variant tables (interactive menu, `--select`, or `--run-prefix`, which reaches only unsuffixed seed-42 runs; `--pool-seeds` averages the seeds of each selected group per fold).
+**Summarizing results:** `python scripts/aggregate_lodo_results.py` reads `checkpoints/<run>-fold*/results.json` and prints per-variant tables (interactive menu, `--select`, or `--run-prefix`, where a bare prefix means unsuffixed seed 42 and any other group is passed as the menu key `<prefix>-fold*-seed<S><suffix>`; `--pool-seeds` averages the seeds of each selected group per fold).
 
 ---
 
@@ -315,7 +315,7 @@ The threshold is chosen over the unique frame scores. Values are discrete becaus
 | 3 (ePix10k) | 0.0123 |
 | 4 (Eiger4M) | 0.0123 |
 
-**Evaluated-split optimum, asymmetric v1** (recorded in the 2026-08 notes; `cross.threshold` / `in_domain.threshold`). The `results.json` files now on disk give different thresholds for folds 2 to 4 (cross 0.080 / 0.012 / 0.102 / 0.184, in-domain 0.012 / 0.020 / 0.012 / 0.012), consistent with the re-evaluation described above; the August values are kept for the same reason as the AP table:
+**Evaluated-split optimum, asymmetric v1** (recorded in the 2026-08 notes; `cross.threshold` / `in_domain.threshold`). The `results.json` files now on disk give different thresholds for folds 2 to 4 (folds 1 to 4: cross 0.080 / 0.012 / 0.102 / 0.184, in-domain 0.012 / 0.020 / 0.012 / 0.012), consistent with the re-evaluation described above; the August values are kept for the same reason as the AP table:
 
 | Fold | Cross threshold | In-domain threshold |
 |------|----------------|---------------------|

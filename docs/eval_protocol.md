@@ -149,7 +149,7 @@ overwritten, and logs `inference/threshold` and
 (`src/training/inference_results.py`).
 
 `python scripts/aggregate_lodo_results.py` collects finished folds into
-per-variant tables, grouping runs by (prefix, suffix, seed) (interactive menu, `--select`, or `--run-prefix`, which reaches unsuffixed seed-42 runs only; `--pool-seeds` averages the seeds of each group per fold and mixes seed counts when only some folds were repeated).
+per-variant tables, grouping runs by (prefix, suffix, seed) (interactive menu, `--select`, or `--run-prefix`, where a bare prefix means unsuffixed seed 42 and any other group is passed as the menu key `<prefix>-fold*-seed<S><suffix>`; `--pool-seeds` averages the seeds of each group per fold and mixes seed counts when only some folds were repeated).
 
 ## Run Identity
 

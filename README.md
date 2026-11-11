@@ -250,7 +250,7 @@ python -u -m src.training.train_ssl_finetune --config configs/ssl/mae_finetune.y
 python -m src.training.train_asymmetric --config configs/supervised/resnet18_asymmetric.yaml \
     --run-name-prefix resnet18-asymmetric-v2 --folds 2 --inference-only
 
-# Summarize finished folds (interactive menu; --select all prints every run group, --run-prefix one unsuffixed seed-42 prefix,
+# Summarize finished folds (interactive menu; --select all prints every run group, --run-prefix one group (a bare prefix is unsuffixed seed 42; other groups use the menu key),
 # --pool-seeds averages the seeds of each group per fold)
 python scripts/aggregate_lodo_results.py
 python scripts/aggregate_lodo_results.py --select all
