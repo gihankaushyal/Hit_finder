@@ -31,7 +31,7 @@ reports/
 ## `docs/progress_notes.md` section template (appended by step 6)
 ```
 ## N. <title> (<period start> … <period end>)
-Report #<k> (`reports/<date>/`, local) carries the verified claims; ids below point into its `facts.md`.
+Report <date> (`reports/<date>/`, local) carries the verified claims; ids below point into its `facts.md`.
 ### N.1 What was done / found   (one subsection per topic; numbers recomputed <date>, sample sd n-1, seeds and folds stated)
 ### N.x Corrections to earlier sections   (say what changed and which section it supersedes)
 ### N.y Next   (open promises and pending user decisions)
