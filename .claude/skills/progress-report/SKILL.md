@@ -40,17 +40,18 @@ gives the progress-note sections, merged PRs, commits and kanban/plan state for 
 Create `reports/YYYY-MM-DD/facts.md`: one row per claim with value, source (file/line, run name, PR), date, and a confidence tag (seeds, folds finished, in-domain vs cross-detector). Re-check each claim against its source yourself before it goes in. Drop what you cannot confirm and list it under "not verified". Add a "Since last report" block: for every promise in the previous `state.md`, mark done, changed, dropped or still open, with the evidence.
 
 ### 4. Agree the message before building anything
-Show the user: the claims table, the one-sentence headline per audience, the promised-vs-delivered list, and what is deliberately left out. Wait for edits. Building three decks on a wrong headline is the expensive failure; this step is cheap.
+Show the user: the claims table, the one-sentence headline per audience, the promised-vs-delivered list, a draft of the progress-notes section (drafted from `facts.md` as described in step 5), and what is deliberately left out. One go-ahead covers the claims and that section. Wait for edits. Building three decks on a wrong headline is the expensive failure; this step is cheap.
 
-### 5. Write
+### 5. Update the project log
+On the user's go-ahead from step 4, append the drafted section to `docs/progress_notes.md` before building anything, so the lab record is current even if the session ends mid-build and so the notes, the write-ups and the decks all start from the same approved facts (it is the record the next run's digest and later sessions read first). The section is numbered and dated, `## N. <title> (<period start> … <period end>)`, and is written from the verified `facts.md` using the template in `references/report-folder.md` (the digest prints the next number). **Append only:** do not rewrite earlier sections; when this report supersedes one (an experiment that was open, a result that changed), say so in the new section's "Corrections to earlier sections" and add one `> Superseded in part by section N` line directly under the heading of the old section or subsection (never above a `## ` heading: the digest would attach it to the previous section). If building the write-ups or decks later turns up a wrong number, fix `facts.md` and append the correction to this same section, telling the user what changed. No job IDs. The file is local and gitignored, so there is nothing to commit.
+
+### 6. Write
 Write the three write-ups first (`audience-A.md`, `-B.md`, `-C.md`, one to two pages each): they are the source of truth. Then derive the three decks from them using the slide spine in `references/slide-spine.md`. Audiences differ in vocabulary, depth and which result leads, never in the numbers. Make figures with matplotlib into `figures/` (label seeds and error bars; no truncated axes that exaggerate).
 
 Build each deck as a Slides artifact: `Artifact action:"quickstart" intent:"slides"`, list and use the user's default design system, publish with the type's `type_url`, fill it, then view it. Save the slide content as `deck-A.md` etc. next to the write-up with the artifact URL. Artifacts are private by default; sharing them or exporting to .pptx/PDF for anyone else is the user's decision, so offer it, do not do it.
 
-### 6. Close the loop
+### 7. Close the loop
 Write `state.md` (what this report claimed, open questions, promises for next time, the metrics baseline) and add a line to `reports/index.md`.
-
-Then update the project log, `docs/progress_notes.md`, so it does not fall behind the reports (it is the lab record; the next run's digest and later sessions read it first). Draft one new numbered, dated section `## N. <title> (<period start> … <period end>)` from the verified `facts.md` using the template in `references/report-folder.md` (the digest prints the next number). Show the draft to the user and append it on their go-ahead. **Append only:** do not rewrite earlier sections; when this report supersedes one (an experiment that was open, a result that changed), say so in the new section's "Corrections to earlier sections" and add one `> Superseded in part by section N` line directly under the heading of the old section or subsection (never above a `## ` heading: the digest would attach it to the previous section). No job IDs. The file is local and gitignored, so there is nothing to commit.
 
 Report to the user: links, files, claims dropped, items you could not verify, and open promises. Stop there; do not publish, share, push or edit the kanban without their go-ahead.
 

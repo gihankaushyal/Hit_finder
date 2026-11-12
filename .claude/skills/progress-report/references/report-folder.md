@@ -28,7 +28,7 @@ reports/
 ## Dropped / changed since the previous report
 ```
 
-## `docs/progress_notes.md` section template (appended by step 6)
+## `docs/progress_notes.md` section template (appended by step 5, before the write-ups and decks)
 ```
 ## N. <title> (<period start> … <period end>)
 Report <date> (`reports/<date>/`, local) carries the verified claims; ids below point into its `facts.md`.

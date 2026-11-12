@@ -200,7 +200,7 @@ def print_notes(since: date, full: bool) -> None:
         print("none")
     if latest is not None:
         print(
-            f"\nLatest numbered section: {latest}. The report's own section (SKILL.md step 6) is "
+            f"\nLatest numbered section: {latest}. The report's own section (SKILL.md step 5) is "
             f"number {latest + 1}."
         )
     if to_check:

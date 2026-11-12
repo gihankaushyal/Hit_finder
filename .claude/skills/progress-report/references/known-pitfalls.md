@@ -18,4 +18,4 @@ Result-table and wording rules are kept in one place: read `.claude/skills/docs-
 
 ## Actions
 - Never publish, share, push, merge or edit the kanban without the user's go-ahead. Artifacts stay private.
-- Progress notes drift: a section written while a PR or run set was open ("open", "launched", "read the worktree") goes stale when it finishes or is redone. Close the loop in `docs/progress_notes.md` (SKILL.md step 6) every report, or the next digest starts from a false state.
+- Progress notes drift: a section written while a PR or run set was open ("open", "launched", "read the worktree") goes stale when it finishes or is redone. Update `docs/progress_notes.md` (SKILL.md step 5, right after the claims are agreed) every report, or the next digest starts from a false state.

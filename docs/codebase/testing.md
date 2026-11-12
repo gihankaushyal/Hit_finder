@@ -1,6 +1,6 @@
 # Testing Guide
 
-803 tests across 35 test files (counted with `pytest tests/ --collect-only -q` on 2026-11-11). Test counts per file are in the map below.
+805 tests across 35 test files (counted with `pytest tests/ --collect-only -q` on 2026-11-12). Test counts per file are in the map below.
 
 ## Running Tests
 
@@ -76,7 +76,7 @@ pytest tests/ -v
 | `test_vote_aggregation.py` | 4 | Vote aggregation: frame score formula, threshold behavior | synthetic patch scores |
 | `test_config.py` | 11 | `load_config()`: base merge, model values win, missing file; the seed helpers (`seed_arg`, `apply_seed_override`) | tmp YAML files |
 | `test_seed_override_wiring.py` | 30 | `--seed` end to end: `seed_arg` bounds, `apply_seed_override`, the legacy seed-42 sampling stream vs `SeedSequence` for other seeds (no cross-seed aliasing), the required loader `seed` (`TypeError`), orchestrators refusing a leaked `TRAIN_SEED`, usage-error exit 2, atomic `save_split_artifact` | stub `sbatch` / `module` / `python` / `sinfo` / `squeue` on `PATH` |
-| `test_collect_since.py` | 16 | `.claude/skills/progress-report/scripts/collect_since.py`: the read-only helpers of the digest script (date-window selection of progress-note sections and the PR/commit digest) | inline sample notes |
+| `test_collect_since.py` | 18 | `.claude/skills/progress-report/scripts/collect_since.py`: the read-only helpers of the digest script (date-window selection of progress-note sections and the PR/commit digest) | inline sample notes |
 | `test_measure_crop_stats.py` | 2 | `scripts/measure_crop_stats.py` jitter-mode statistics | — |
 | `test_measure_padding_effect.py` | 4 | `scripts/measure_padding_effect.py` gap-heavy tile exclusion | — |
 
