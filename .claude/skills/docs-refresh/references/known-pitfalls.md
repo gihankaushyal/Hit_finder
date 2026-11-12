@@ -18,7 +18,7 @@
 - State the number of finished folds for every arm; label tables that are partial.
 
 ## Links and files
-- `CLAUDE.md`, `PLANNING.md`, `MEMORY.md`, `session-tail.md`, `phase-05-kanban.md`, `docs/progress_notes.md` are gitignored. Tracked docs must not link to them or cite their section numbers. Say "local, untracked project log" if you must mention one.
+- `PLANNING.md`, `MEMORY.md`, `session-tail.md`, `phase-05-kanban.md`, `docs/progress_notes.md` are gitignored. Tracked docs must not link to them or cite their section numbers. Say "local, untracked project log" if you must mention one. `CLAUDE.md` is tracked (since 2026-11) and may be linked.
 - Tracked scripts may still cite `docs/progress_notes.md` (for example `scripts/aggregate_lodo_results.py`). That is a code change: put it in a follow-up PR and list it in the report.
 
 ## Git

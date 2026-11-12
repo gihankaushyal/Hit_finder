@@ -13,7 +13,7 @@ Result-table and wording rules are kept in one place: read `.claude/skills/docs-
 - Note sections the digest lists as "older or undated headings" may hold new work appended later: open them before deciding they are out of period.
 
 ## Links and files
-- `reports/`, `CLAUDE.md`, `PLANNING.md`, `MEMORY.md`, `session-tail.md`, the `phase-*-kanban.md` file and `docs/progress_notes.md` are gitignored. Tracked files must not link to them.
+- `reports/`, `PLANNING.md`, `MEMORY.md`, `session-tail.md`, the `phase-*-kanban.md` file and `docs/progress_notes.md` are gitignored. Tracked files must not link to them.
 - Do not put job IDs or `squeue` output in reports.
 
 ## Actions

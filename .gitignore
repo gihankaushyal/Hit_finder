@@ -36,11 +36,13 @@ data/synthetic/*
 # Brainstorming session files
 .superpowers/
 
-# Claude Code session data and graph output
-# Local Claude Code state is ignored, but the project-only skills are tracked so
-# dashboard worker worktrees (made from origin/phase-05) contain them.
-.claude/*
-!.claude/skills/
+# Claude Code. The project setup (.claude/ and CLAUDE.md) is tracked, and this repo
+# is public: never put a key, token or private note in those files. Only local,
+# per-machine state is ignored.
+.claude/settings.local.json
+.claude/scheduled_tasks.lock
+.claude/worktrees/
+.claude/skills.pre-merge-backup/
 graphify-out/
 
 # Reflection / scratch notes
@@ -48,7 +50,6 @@ reflection-notes-*.md
 
 # Project management and session docs (not for public repo)
 PLANNING.md
-CLAUDE.md
 MEMORY.md
 session-tail.md
 .session-next

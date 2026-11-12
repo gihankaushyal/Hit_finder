@@ -14,5 +14,5 @@ Use this to brief audit agents and to know where to verify a claim.
 | `docs/codebase/data-flow.md` | Frame journey, cache, geometry table | `src/data/dataset.py`, `src/data/frame_cache.py`, `src/preprocessing/{io,geometry,pipeline,normalize,augment}.py`, `src/evaluation/benchmark.py` |
 | `docs/codebase/extension-guide.md` | Recipes: detector, hitfinder, model, metric, submit scripts, cache | `src/preprocessing/geometry.py`, `src/hitfinders/__init__.py`, `src/models/`, `scripts/submit_*.sh`, `tests/test_submit_script_parity.py` |
 | `docs/codebase/testing.md` | Test map, CI, fixtures | `tests/`, `tests/conftest.py`, `.github/workflows/ci.yml`, `dashboard.yml` |
-| `CLAUDE.md` (local) | Tree, commands, shapes, stats | `ls`, `git ls-files`, graphify counts |
+| `CLAUDE.md` | Tree, commands, shapes, stats | `ls`, `git ls-files`, graphify counts |
 | `PLANNING.md` (local) | Phase checklist | `phase-05-kanban.md`, `sacct`, merged PRs (`gh pr list --state merged`) |
