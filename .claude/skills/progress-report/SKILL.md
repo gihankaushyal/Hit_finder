@@ -48,7 +48,11 @@ Write the three write-ups first (`audience-A.md`, `-B.md`, `-C.md`, one to two p
 Build each deck as a Slides artifact: `Artifact action:"quickstart" intent:"slides"`, list and use the user's default design system, publish with the type's `type_url`, fill it, then view it. Save the slide content as `deck-A.md` etc. next to the write-up with the artifact URL. Artifacts are private by default; sharing them or exporting to .pptx/PDF for anyone else is the user's decision, so offer it, do not do it.
 
 ### 6. Close the loop
-Write `state.md` (what this report claimed, open questions, promises for next time, the metrics baseline) and add a line to `reports/index.md`. Report to the user: links, files, claims dropped, items you could not verify, and open promises. Stop there; do not publish, share, push or edit the kanban without their go-ahead.
+Write `state.md` (what this report claimed, open questions, promises for next time, the metrics baseline) and add a line to `reports/index.md`.
+
+Then update the project log, `docs/progress_notes.md`, so it does not fall behind the reports (it is the lab record; the next run's digest and later sessions read it first). Draft one new numbered, dated section `## N. <title> (<period start> … <period end>)` from the verified `facts.md` using the template in `references/report-folder.md` (the digest prints the next number). Show the draft to the user and append it on their go-ahead. **Append only:** do not rewrite earlier sections; when this report supersedes one (an experiment that was open, a result that changed), say so in the new section's "Corrections to earlier sections" and add one `> Superseded in part by section N` line at the top of the old section. No job IDs. The file is local and gitignored, so there is nothing to commit.
+
+Report to the user: links, files, claims dropped, items you could not verify, and open promises. Stop there; do not publish, share, push or edit the kanban without their go-ahead.
 
 ## Principles that keep reports honest
 - Single-seed results are labelled as single-seed; unresolved or negative findings appear (a regression is information for the AI-expert audience and context for the domain PI).

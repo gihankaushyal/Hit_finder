@@ -44,6 +44,7 @@ COMMAND_TIMEOUT_S = 120
 KANBAN_MARKER_RE = re.compile(r"\s*<!--\s*gh:#\d+\s*-->")
 PLANNING_STATUS_RE = re.compile(r"\b(CURRENT|IN PROGRESS)\b")
 KANBAN_PHASE_RE = re.compile(r"phase-(\d+)-kanban\.md")
+SECTION_NUMBER_RE = re.compile(r"^(\d+)\.")  # "25. Title (dates)"
 
 
 def _run(cmd: list[str]) -> tuple[str, str | None]:
@@ -126,6 +127,12 @@ def _valid_dates(text: str) -> list[date]:
     return out
 
 
+def latest_section_number(headings: list[str]) -> int | None:
+    """Highest "N." leading number among the section headings, or None if none is numbered."""
+    numbers = [int(m.group(1)) for h in headings if (m := SECTION_NUMBER_RE.match(h))]
+    return max(numbers) if numbers else None
+
+
 def section_last_date(block: str) -> date | None:
     """Latest date of the heading's leading date or date range, or None if it has none.
 
@@ -176,7 +183,9 @@ def print_notes(since: date, full: bool) -> None:
         return
     shown = 0
     to_check = []
-    for heading, block in split_sections(NOTES_PATH.read_text(encoding=ENCODING)):
+    sections = split_sections(NOTES_PATH.read_text(encoding=ENCODING))
+    latest = latest_section_number([h for h, _ in sections])
+    for heading, block in sections:
         last = section_last_date(block)
         if last is not None and last >= since:
             shown += 1
@@ -189,6 +198,11 @@ def print_notes(since: date, full: bool) -> None:
             to_check.append((heading, last, later))
     if not shown:
         print("none")
+    if latest is not None:
+        print(
+            f"\nLatest numbered section: {latest}. The report's own section (SKILL.md step 6) is "
+            f"number {latest + 1}."
+        )
     if to_check:
         print(
             "\n--- Older or undated headings whose body mentions dates in the period: "
