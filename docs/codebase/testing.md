@@ -1,6 +1,6 @@
 # Testing Guide
 
-724 tests across 31 test files (counted with `pytest tests/ --collect-only -q` on 2026-11-05). Test counts per file are in the map below.
+803 tests across 35 test files (counted with `pytest tests/ --collect-only -q` on 2026-11-11). Test counts per file are in the map below.
 
 ## Running Tests
 
@@ -52,7 +52,7 @@ pytest tests/ -v
 | `test_preprocessing.py` | 48 | Integration: full preprocessing from raw frame to patch | synthetic CXI |
 | `test_hitfinders.py` | 23 | All hitfinder backends + `get_hitfinder()` factory + MockHitfinder | `MockHitfinder` |
 | `test_dataset.py` | 14 | `UnlabeledDataset`, `MultiFrameCXIDataset` (deprecated), loaders | synthetic CXI + `MockHitfinder` |
-| `test_asymmetric_dataset.py` | 28 | `AsymmetricCXIDataset`: centroid crops, miss crops, peak-aware cutout, `crops_per_frame`, epoch-varying crops | `MockHitfinder` |
+| `test_asymmetric_dataset.py` | 41 | `AsymmetricCXIDataset`: centroid crops, miss crops, peak-aware cutout, `crops_per_frame`, epoch-varying crops, positive jitter | `MockHitfinder` |
 | `test_frame_cache.py` | 45 | `_compute_gcn_frame` / `_load_gcn_frame` split, manifest staleness, two-tier resolution, cache-from-config, LODO wiring, bit-exactness gate (skipped without a real cache) | synthetic CXI fixture |
 | `test_models.py` | 4 | `build_supervised_model()` for resnet18/50 | `torch.zeros()` |
 | `test_train_supervised.py` | 3 | `train_one_epoch()`: loss decreases, returns metrics dict | small synthetic loader |
@@ -65,16 +65,20 @@ pytest tests/ -v
 | `test_inference_only.py` | 64 | `--inference-only`: result helpers, the `_train_fold` inference path, CLI wiring | faked `wandb`; the training loader raises if built |
 | `test_orchestrator_inference.py` | 30 | Orchestrator scripts' `inference` answer, run against a stub `sbatch` | temp dir with fake `sbatch` on `PATH` |
 | `test_ssl_dataset.py` | 13 | `SSLPretrainCXIDataset` — random valid-region crops for MAE pretraining | synthetic CXI + valid-pixel mask |
-| `test_ssl_model.py` | 40 | `src/models/ssl.py` — MAE ViT-S/16 builder, masking, pixel MSE loss | `torch.zeros()` |
+| `test_ssl_model.py` | 44 | `src/models/ssl.py` — MAE ViT-S/16 builder, masking, pixel MSE loss | `torch.zeros()` |
 | `test_train_ssl.py` | 42 | SSL pretraining and fine-tuning loops (CPU smoke test, `MockHitfinder`) | small synthetic loader |
 | `test_ssl_main_requeue.py` | 6 | A requeued SSL launch through the real `main()` entry points | tmp run dir |
-| `test_submit_script_parity.py` | 10 | The bash copies of the run-name prefix regexes and the seed lookup in the SSL submit scripts match `run_naming.py` and `load_config()` | — |
+| `test_submit_script_parity.py` | 10 | The bash copies of the run-name prefix regexes and the seed lookup in the SSL submit scripts match `run_naming.py` and `load_config()`; the seed block is identical across the orchestrators and logs are created after the seed check | — |
 | `test_deprecated_scripts.py` | 23 | The seven legacy v1 submit scripts refuse to run and name their replacement | temp dir with stub `sbatch` / `python` |
 | `test_evaluation.py` | 39 | `metrics.py`: AP, AUC-ROC, F1 edge cases; `benchmark.py` helpers | `np.array` fixtures |
-| `test_aggregate_lodo_results.py` | 2 | `scripts/aggregate_lodo_results.py` — grouping by (prefix, suffix) | temp checkpoint dirs |
+| `test_aggregate_lodo_results.py` | 7 | `scripts/aggregate_lodo_results.py` — grouping by (prefix, suffix, seed), the legacy `seed*` key, `--pool-seeds` pooling and menu listing | temp checkpoint dirs |
 | `test_patch_eval.py` | 22 | Patch-level centroid crop geometry, patch-grid evaluation | synthetic canvas + centroids |
 | `test_vote_aggregation.py` | 4 | Vote aggregation: frame score formula, threshold behavior | synthetic patch scores |
-| `test_config.py` | 6 | `load_config()`: base merge, model values win, missing file | tmp YAML files |
+| `test_config.py` | 11 | `load_config()`: base merge, model values win, missing file; the seed helpers (`seed_arg`, `apply_seed_override`) | tmp YAML files |
+| `test_seed_override_wiring.py` | 30 | `--seed` end to end: `seed_arg` bounds, `apply_seed_override`, the legacy seed-42 sampling stream vs `SeedSequence` for other seeds (no cross-seed aliasing), the required loader `seed` (`TypeError`), orchestrators refusing a leaked `TRAIN_SEED`, usage-error exit 2, atomic `save_split_artifact` | stub `sbatch` / `module` / `python` / `sinfo` / `squeue` on `PATH` |
+| `test_collect_since.py` | 16 | `.claude/skills/progress-report/scripts/collect_since.py`: the read-only helpers of the digest script (date-window selection of progress-note sections and the PR/commit digest) | inline sample notes |
+| `test_measure_crop_stats.py` | 2 | `scripts/measure_crop_stats.py` jitter-mode statistics | — |
+| `test_measure_padding_effect.py` | 4 | `scripts/measure_padding_effect.py` gap-heavy tile exclusion | — |
 
 Some files test behaviour that spans modules or scripts rather than mirroring one `src/` module (the run-lifecycle, orchestrator and submit-script tests).
 

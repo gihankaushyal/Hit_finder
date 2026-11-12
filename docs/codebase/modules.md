@@ -71,7 +71,7 @@ PyTorch Dataset and DataLoader wrappers, plus the on-disk frame cache. `Asymmetr
 | File | Purpose | Key exports |
 |------|---------|-------------|
 | `dataset.py` | Dataset classes | `AsymmetricCXIDataset` ⚡ (Track 1; `set_epoch()` re-seeds crops each epoch), `SSLPretrainCXIDataset` (Track 2; several random valid-region crops per frame, no labels), `UnlabeledDataset` (whole-image, no labels; only used by `ssl_pretrain_loader()` and tests), `MultiFrameCXIDataset` (deprecated) |
-| `dataloader.py` | DataLoader factory functions | `asymmetric_loader()`, `ssl_crop_loader()`, `ssl_pretrain_loader()` (legacy), `none_collate_fn()`; internal `_flatten_collate` / `_ssl_flatten_collate` flatten the per-frame crop stacks |
+| `dataloader.py` | DataLoader factory functions | `asymmetric_loader()` (required keyword `seed`; also `positive_jitter`, `jitter_edge_pad`, `crop_within_frame`), `ssl_crop_loader()`, `ssl_pretrain_loader()` (legacy), `none_collate_fn()`; internal `_flatten_collate` / `_ssl_flatten_collate` flatten the per-frame crop stacks |
 | `frame_cache.py` | Two-tier on-disk cache of the read → assemble → hitfinder → GCN prefix (Phase 5) | `FrameCache`, `frame_cache_from_cfg()`, `verify_cache_or_raise()`, `build_manifest()`, `write_manifest()`, `manifest_diff()`, `verify_manifest()`, `CacheStaleError`, `CacheMissError` |
 | `synthetic.py` | Synthetic data helpers | (unused — reserved for future tests) |
 
@@ -83,6 +83,7 @@ PyTorch Dataset and DataLoader wrappers, plus the on-disk frame cache. `Asymmetr
 
 **Imports from:** `src/preprocessing/*`, `src/hitfinders/*`; `dataset.py` and `dataloader.py` also import `frame_cache.py`
 **Imported by:** `asymmetric_loader` ← `src/training/lodo.py`; `ssl_crop_loader` ← `src/training/train_ssl_pretrain.py`; `frame_cache.py` ← `dataset.py`, `dataloader.py`, `src/evaluation/benchmark.py`, `lodo.py`, the three training entry points, `scripts/build_frame_cache.py`
+**Seed and crop placement:** `AsymmetricCXIDataset(seed=DEFAULT_SEED)` draws every per-sample crop, hard-negative, jitter and augmentation choice from `_epoch_seed(seed, epoch, idx, n)`. Seed 42 keeps the original linear formula (`seed*prime + epoch*n + idx`) so older seed-42 runs reproduce; other seeds use `np.random.SeedSequence([seed, epoch, idx])`, which cannot collide across seeds. `asymmetric_loader()` requires the seed (the run seed from `lodo._train_fold`); `positive_jitter` is `"none"` (peak-centred, default) or `"uniform"` (peak placed uniformly at least `jitter_edge_pad` px from the crop border, less near the real frame edge when `crop_within_frame` is set), and `crop_within_frame` keeps crops out of the zero-padded band.
 **Track separation:** `ssl_crop_loader` / `SSLPretrainCXIDataset` feed MAE pretraining (`train_ssl_pretrain.py`); `asymmetric_loader` / `AsymmetricCXIDataset` feed Track 1 and SSL fine-tuning (both go through `lodo.py`). Pretraining and supervised paths share the same `_load_gcn_frame` prefix.
 
 ---
@@ -93,23 +94,24 @@ Model factory functions. The classifiers return `(B, 2)` logit tensors from `(B,
 
 | File | Purpose | Key exports |
 |------|---------|-------------|
-| `supervised.py` | ResNet18/50 builder via timm | `build_supervised_model(backbone, pretrained, num_classes)` |
-| `ssl.py` | MAE ViT-S/16 autoencoder, masking, and the fine-tune classifier (Track 2) | `build_mae_model(cfg)` → `MAEViT`, `build_ssl_classifier(cfg, mae_checkpoint, freeze_encoder)` → `ViTClassifier`, `random_masking()`, `peak_aware_masking()`, `get_2d_sincos_pos_embed()` |
+| `supervised.py` | ResNet18/50 builder via timm | `build_supervised_model(backbone, pretrained, num_classes=2)` |
+| `ssl.py` | MAE ViT-S/16 autoencoder, masking, and the fine-tune classifier (Track 2) | `build_mae_model(cfg)` → `MAEViT`, `build_ssl_classifier(cfg, mae_checkpoint, freeze_encoder, head_checkpoint)` → `ViTClassifier`, `random_masking()`, `peak_aware_masking()`, `get_2d_sincos_pos_embed()` |
 
 **`build_supervised_model` signature:**
 ```python
-def build_supervised_model(backbone: str = "resnet18", pretrained: bool = True, num_classes: int = 2) -> nn.Module
+def build_supervised_model(backbone: str, pretrained: bool, num_classes: int = 2) -> nn.Module
 ```
 
 **`build_mae_model` / `build_ssl_classifier` signatures** (both read `cfg["ssl"]` for `embed_dim`, `depth`, `num_heads`, decoder sizes, `mask_ratio`, …):
 ```python
 def build_mae_model(cfg: dict) -> MAEViT
-def build_ssl_classifier(cfg: dict, mae_checkpoint: str | None = None, freeze_encoder: bool = False) -> ViTClassifier
+def build_ssl_classifier(cfg: dict, mae_checkpoint: str | Path | None = None, freeze_encoder: bool = False,
+                         head_checkpoint: str | Path | None = None) -> ViTClassifier
 ```
 `build_mae_model` returns the full MAE (encoder + decoder) used for pretraining. `build_ssl_classifier` loads the pretrained encoder from `mae_checkpoint`, attaches a 2-class head, and with `freeze_encoder=True` gives the linear-probe variant (`--linear-probe`). Output: `(B, 2)` logits — same contract as `build_supervised_model`.
 
 **Imports from:** `timm` (supervised only)
-**Imported by:** `supervised.py` ← `src/training/lodo.py`; `ssl.py` ← `src/training/train_ssl_pretrain.py` (`build_mae_model`), `src/training/train_ssl_finetune.py` (`build_ssl_classifier`), `scripts/visualize_mae_recon.py`, `scripts/diagnose_crop_shortcut.py`
+**Imported by:** `supervised.py` ← `src/training/lodo.py`, `scripts/diagnose_crop_shortcut.py`, `scripts/measure_padding_effect.py`; `ssl.py` ← `src/training/lodo.py`, `scripts/measure_padding_effect.py`, `src/training/train_ssl_pretrain.py` (`build_mae_model`), `src/training/train_ssl_finetune.py` (`build_ssl_classifier`), `scripts/visualize_mae_recon.py`, `scripts/diagnose_crop_shortcut.py`
 
 ---
 
@@ -119,15 +121,15 @@ Training loop functions and the primary entry-point scripts. Invoked as `python 
 
 | File | Purpose | Key exports |
 |------|---------|-------------|
-| `train_asymmetric.py` | **Primary Track 1 entry point** — LODO driver, hitfinder-guided crop pipeline, wandb logging. Flags: `--config`, `--run-name-prefix` (required), `--folds`, `--device`, `--intra`, `--tags`, `--resume-training` / `--override-training`, `--inference-only`, `--cache-root`, `--cache-nvme`, `--no-cache` | `main()` |
-| `lodo.py` | Shared LODO fold loop (train, evaluate, write `results.json`) and session builder, used by Track 1 and the SSL fine-tune | `build_sessions(lodo_cfg)`; private `_train_fold()`, `_build_intra_split()` |
+| `train_asymmetric.py` | **Primary Track 1 entry point** — LODO driver, hitfinder-guided crop pipeline, wandb logging. Flags: `--config`, `--run-name-prefix` (required), `--folds`, `--device`, `--intra`, `--tags`, `--resume-training` / `--override-training`, `--inference-only`, `--seed` (see Utilities), `--cache-root`, `--cache-nvme`, `--no-cache` | `main()` |
+| `lodo.py` | Shared LODO fold loop (train, evaluate, write `results.json`) and session builder, used by Track 1 and the SSL fine-tune | `build_sessions(lodo_cfg)`, `check_crop_options(cfg)` and `require_run_suffix_for_crop_options()` (a run that sets `asymmetric.positive_jitter` or `crop_within_frame` must carry a run suffix); private `_train_fold()` (passes the run seed to the loader), `_build_intra_split()` |
 | `train_supervised.py` | One-epoch supervised training loop (utility, called by `lodo.py`) | `train_one_epoch(model, loader, optimizer, criterion, device)` |
 | `train_ssl_pretrain.py` | MAE pretraining loop — mask patches (`ssl.mask_ratio`, default 0.6), reconstruct, log pixel MSE and sample reconstructions. Requires `--fold` (the fold's test detector is excluded) and `--run-name-prefix` | `main()` |
-| `train_ssl_finetune.py` | SSL fine-tuning or linear probe (`--linear-probe`) — attach classification head to the pretrained encoder (`--pretrain-checkpoint`), train on labeled CXI; also supports `--inference-only`, `--run-suffix`, `--random-init`, `--head-checkpoint` (LP-FT head, fold-leak check; these three need a run suffix) and `training.save_epochs` snapshots | `main()` |
+| `train_ssl_finetune.py` | SSL fine-tuning or linear probe (`--linear-probe`) — attach classification head to the pretrained encoder (`--pretrain-checkpoint`), train on labeled CXI; also supports `--inference-only`, `--seed`, `--run-suffix`, `--random-init`, `--head-checkpoint` (LP-FT head, fold-leak check; these three need a run suffix) and `training.save_epochs` snapshots | `main()` |
 | `recipe.py` | Careful fine-tune recipe, opt-in via config: layer-wise lr decay, no weight decay on norm/bias, linear warmup + cosine schedule | `build_optimizer()`, `lr_factor()`, `apply_lr_schedule()` |
 | `run_naming.py` | Versioned run-name prefix validation and the resume/override checkpoint gate shared by all entry points | `validate_run_name_prefix()`, `fold_run_name()`, `expand_finetune_prefix()`, `check_checkpoint_collisions()`, `effective_resume()` |
 | `override_marker.py` | `override_applied.json` in the run dir: a requeued SLURM job (same job id, higher restart count) resumes instead of re-running `--override-training` | `write_override_marker()`, `override_already_applied()`, `current_job_id()`, `current_restart_count()` |
-| `wandb_identity.py` | New W&B run id per override attempt (`<run>`, `<run>-o2`, …) kept in `<run_dir>/wandb_id.txt`; previous run tagged `overridden` | `resolve_wandb_id()`, `rotate_wandb_id()`, `next_wandb_id()`, `ensure_fresh_wandb_id()`, `wandb_id_for_training()`, `tag_overridden()`, `OverrideHook`, `override_hook_from_cfg()` |
+| `wandb_identity.py` | New W&B run id per override attempt (`<run>`, `<run>-o2`, …) kept in `<run_dir>/wandb_id.txt`; previous run tagged `overridden` | `resolve_wandb_id()`, `select_current_runs()`, `rotate_wandb_id()`, `next_wandb_id()`, `ensure_fresh_wandb_id()`, `wandb_id_for_training()`, `tag_overridden()`, `OverrideHook`, `override_hook_from_cfg()` |
 | `inference_results.py` | Result-file naming (`results.json` vs `results.inference.json`), the `training` / `inference` blocks, W&B summary updates, and the training-sanity check for `--inference-only` | `inference_result_path()`, `training_block()`, `inference_block()`, `summary_updates()`, `assess_training()`, `fetch_wandb_history()`, `loss_flatness()`, `wandb_enabled()` |
 
 **Imports from:** `torch`, `wandb`, `src/data/`, `src/models/`, `src/evaluation/`; `lodo.py` also imports `inference_results.py` and `wandb_identity.py`
@@ -146,7 +148,7 @@ Metric functions and LODO orchestration. `benchmark.py` is the highest-level ent
 
 **`run_patch_agg` signature:**
 ```python
-def run_patch_agg(model, session_map, session_ids, label_key, patch_size=224, patch_stride=224,
+def run_patch_agg(model, session_map, session_ids, label_key="entry_1/labels/hit", patch_size=224, patch_stride=224,
                   min_hit_patches=3, device="cpu", inference_batch_size=64,
                   aggregation="vote", frame_cache=None, return_breakdown=False) -> dict
 ```
@@ -161,11 +163,11 @@ Returns `{"ap": float, "auc_roc": float, "f1": float, "threshold": float}`. `min
 
 | File | Purpose | Key exports |
 |------|---------|-------------|
-| `config.py` | Deep-merge `configs/base.yaml` with a model YAML | `load_config(config_path, base_path) -> dict` |
+| `config.py` | Deep-merge `configs/base.yaml` with a model YAML; seed helpers for `--seed` | `load_config(config_path, base_path) -> dict`, `DEFAULT_SEED = 42`, `SEED_LIMIT = 2**32`, `seed_arg(text)` (argparse type, rejects values outside [0, 2**32)), `apply_seed_override(cfg, seed)` |
 
 `load_config` takes a path to the model YAML (e.g. `configs/supervised/resnet18_asymmetric.yaml`) and always deep-merges `configs/base.yaml` underneath it; the model YAML's values win. Do not add `defaults: [base]` to model YAMLs.
 
-**Imported by (at least):** `src/training/` entry points and the scripts `build_frame_cache.py`, `diagnose_crop_shortcut.py`, `plan_cache_staging.py`, `run_pipeline_debug.py` and `visualize_mae_recon.py` (the other scripts do not use it).
+**Imported by (at least):** `src/training/` entry points and the scripts `build_frame_cache.py`, `diagnose_crop_shortcut.py`, `plan_cache_staging.py`, `run_pipeline_debug.py`, `visualize_mae_recon.py`, `measure_crop_stats.py` and `measure_padding_effect.py`; the seed helpers are also imported by `src/data/dataset.py` and `scripts/aggregate_lodo_results.py` (`DEFAULT_SEED`).
 
 ---
 
@@ -182,11 +184,13 @@ Python utilities (files here that import from `src/` carry a `sys.path.insert` h
 | `visualize_assembled.py` | Save assembled detector images to PNG | `preprocessing.{geometry,io}`, `reborn`, `matplotlib` |
 | `visualize_mae_recon.py` | Masked input / reconstruction / target renders for an MAE checkpoint (output in `docs/figures/mae_recon/`) | `models.ssl`, `data.dataloader`, `evaluation.benchmark` |
 | `probe_hdf5.py` | Print HDF5/CXI file tree: keys, shapes, dtypes | (stdlib + h5py only) |
-| `aggregate_lodo_results.py` | Read `checkpoints/<run>-fold*/results.json`, print per-variant tables with sample std, grouping runs by (prefix, suffix); interactive menu, `--select`, `--run-prefix`, `--checkpoints-dir` | (stdlib + numpy; reads `results.json` files only) |
+| `aggregate_lodo_results.py` | Read `checkpoints/<run>-fold*/results.json`, print per-variant tables with sample std, grouping runs by (prefix, suffix, seed); interactive menu, `--select`, `--run-prefix` (a bare prefix is unsuffixed seed 42; other groups use the menu key `<prefix>-fold*-seed<S><suffix>`), `--checkpoints-dir`, `--pool-seeds` (average the seeds of each group per fold) | (stdlib + numpy; reads `results.json` files; imports `DEFAULT_SEED` from `src.utils.config`) |
 | `build_frame_cache.py` | Build the on-disk frame cache once per frame (float16, memory-mappable) | `data.dataset._compute_gcn_frame`, `data.frame_cache` |
 | `plan_cache_staging.py` | Emit one fold's cache entry directories in NVMe staging priority order (train sessions first, then val; in-domain and cross-detector sessions are never staged) | `evaluation.benchmark`, `training.lodo`, `utils.config` |
 | `plot_hit_frac.py` | Plot realized `train/realized_hit_frac` against the configured value from W&B (`wandb.Api()`) | `wandb`, `matplotlib`, `training.wandb_identity` |
 | `diagnose_crop_shortcut.py` | Measure how much a trained classifier relies on crop-construction shortcuts (peak-centred positives vs. clearance negatives) | `data.dataset`, `models.ssl`, `evaluation.benchmark` |
+| `measure_crop_stats.py` | Valid fraction, zero-pad band and peaks per crop under each positive-jitter mode | `data.dataset`, `hitfinders`, `evaluation.benchmark`, `utils.config` |
+| `measure_padding_effect.py` | Re-score frames while excluding gap-heavy tiles, to measure the padding effect | `models.supervised`, `models.ssl`, `evaluation.benchmark`, `utils.config` |
 
 SLURM wrappers (start from `scripts/templates/slurm_gpu_job.sh`; the training wrappers request one `h100` on node `scg020` and `source .secrets/wandb.env` before the training command):
 
@@ -195,5 +199,5 @@ SLURM wrappers (start from `scripts/templates/slurm_gpu_job.sh`; the training wr
 | Track 1 LODO (current) | `submit_asymmetric_lodo_all.sh` (orchestrates all folds: NVMe cache staging, training, cleanup), `submit_asymmetric_lodo_fold.sh` (one fold) |
 | Frame cache | `stage_frame_cache.sh` (stage one fold's entries to NVMe, `xargs -P 8`), `submit_eiger_cache.sh`, `submit_epix10k_cache.sh`, `submit_jungfrau_cache.sh` (per-detector builds) |
 | Track 2 (SSL) | `submit_ssl_pretrain.sh` / `submit_ssl_pretrain_all.sh`, `submit_ssl_finetune.sh` / `submit_ssl_finetune_all.sh` (orchestrators stage → train → cleanup per fold), `stage_ssl_data.sh`, `cleanup_ssl_stage.sh` |
-| Diagnostics and smoketests | `submit_epix_cache_smoketest.sh` (+ `_crops4`, `_crops8`), `submit_crop_shortcut_diag.sh`, `env_check.sh` |
+| Diagnostics and smoketests | `submit_epix_cache_smoketest.sh` (+ `_crops4`, `_crops8`), `submit_crop_shortcut_diag.sh` (position sweep), `submit_crop_shortcut_trial.sh` (100-frame smoke check), `submit_crop_shortcut_epochs_diag.sh` (per-epoch checkpoints), `submit_crop_shortcut_recipe_diag.sh` (recipe runs with a suffix), `submit_jitter_measurements.sh` (runs the two `measure_*` scripts), `env_check.sh` |
 | **Deprecated** (exit immediately and name their replacement; pinned by `tests/test_deprecated_scripts.py`) | `submit_all_lodo_folds.sh`, `submit_asymmetric_lodo.sh`, `submit_lodo_parallel.sh`, `submit_agipd_lodo.sh` → `submit_asymmetric_lodo_all.sh`; `submit_epix_smoketest.sh`, `submit_agipd_smoketest.sh`, `submit_resonet_smoketest.sh` → `submit_epix_cache_smoketest.sh` |

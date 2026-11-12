@@ -199,7 +199,8 @@ MAE pretraining (400 epochs) on pooled unlabeled frames, then either full fine-t
 | 4 | Eiger4M | 0.8913 | 0.9707 |
 
 - **v2 comparison:** the three `-v2` arms ran on the frame cache like Track 1 v2. The linear probe (0.962) is the best arm and its spread across detectors is the smallest (±0.024); the fine-tune (0.858) trails the supervised ResNet18 v2 (0.900) on the mean. The `-v2` encoders were pretrained in October 2026, after the crop-diversity fix (PR #34).
-- **Fine-tune recipe variants (single seed, `-v2` encoders):** a careful fine-tune recipe (`src/training/recipe.py`: warmup, cosine schedule, layer-wise lr decay, drop-path, no weight decay on norm/bias, truncated-normal head init; `configs/ssl/mae_finetune_careful.yaml`) lifts the fine-tune mean cross AP from 0.858 to 0.922 ± 0.052, and LP-FT (probe head first, then fine-tune) gives 0.915 ± 0.040. The probe (0.962) still leads. A crop-position diagnostic (`scripts/diagnose_crop_shortcut.py`) shows full fine-tuning becomes sensitive to where in the crop the Bragg peak sits, which the frozen-encoder probe is not. Details and the other variants (probe on earlier pretrain snapshots, random-init encoder) → [docs/detailed_notes.md](docs/detailed_notes.md).
+- **Fine-tune recipe variants (seed 42, `-v2` encoders; repeats in the next bullet):** a careful fine-tune recipe (`src/training/recipe.py`: warmup, cosine schedule, layer-wise lr decay, drop-path, no weight decay on norm/bias, truncated-normal head init; `configs/ssl/mae_finetune_careful.yaml`) lifts the fine-tune mean cross AP from 0.858 to 0.922 ± 0.052, and LP-FT (probe head first, then fine-tune) gives 0.915 ± 0.040. The probe (0.962) still leads. A crop-position diagnostic (`scripts/diagnose_crop_shortcut.py`) shows full fine-tuning becomes sensitive to where in the crop the Bragg peak sits, which the frozen-encoder probe is not. Details and the other variants (probe on earlier pretrain snapshots, random-init encoder) → [docs/detailed_notes.md](docs/detailed_notes.md).
+- **Positive jitter and seed repeats (folds 1 and 4, seeds 42/43/44, mean over seeds):** shifting the training crop around the Bragg peak (opt-in, `positive_jitter: uniform`; run suffix `-jitter`) removes a crop-position shortcut in the fine-tuned ViT: AGIPD 0.802 → 0.914 and Eiger4M 0.920 → 0.999 (positive in every seed). The same change lowers the ResNet18 on Eiger4M (0.990 → 0.769, every seed; cause unexplained) and its AGIPD gain (+0.049) is inside the seed spread; the frozen probe barely moves (0.942 → 0.941 AGIPD, 0.970 → 0.981 Eiger4M). Jitter and in-frame cropping were introduced together, so their effects are not separated. Folds 2 and 3 have seed 42 only and no jitter arm; the MAE pretraining is a single run, so the spread understates total variance. Full table → [docs/detailed_notes.md#track-2-and-track-1--positive-jitter-and-seed-repeats-v2-2026-11](docs/detailed_notes.md#track-2-and-track-1--positive-jitter-and-seed-repeats-v2-2026-11)
 - Per-fold detail → [docs/detailed_notes.md#track-2--self-supervised-mae-vit-s16](docs/detailed_notes.md#track-2--self-supervised-mae-vit-s16)
 
 ## Setup
@@ -225,7 +226,7 @@ python -c "import torch; print(torch.cuda.is_available(), torch.version.cuda)"
 **Supported image formats:** `.h5` / `.cxi` (HDF5, multi-panel detectors via Reborn) and `.img` (ADSC/MAR, pre-assembled, read via fabio).
 
 ```bash
-# Run tests (724 tests; CI runs black --check, then pytest)
+# Run tests (803 tests; CI runs black --check, then pytest)
 pytest tests/ -v
 
 # Check formatting before committing
@@ -249,9 +250,14 @@ python -u -m src.training.train_ssl_finetune --config configs/ssl/mae_finetune.y
 python -m src.training.train_asymmetric --config configs/supervised/resnet18_asymmetric.yaml \
     --run-name-prefix resnet18-asymmetric-v2 --folds 2 --inference-only
 
-# Summarize finished folds (interactive menu; --select all prints every run group, --run-prefix one unsuffixed prefix)
+# Summarize finished folds (interactive menu; --select all prints every run group, --run-prefix one group (a bare prefix is unsuffixed seed 42; other groups use the menu key),
+# --pool-seeds averages the seeds of each group per fold)
 python scripts/aggregate_lodo_results.py
 python scripts/aggregate_lodo_results.py --select all
+
+# Seed repeat (0 <= seed < 2**32, default 42; changes init, shuffle and the per-sample crop/jitter/augmentation draws)
+python -m src.training.train_asymmetric --config configs/supervised/resnet18_asymmetric.yaml \
+    --run-name-prefix resnet18-asymmetric-v2 --folds 1 --seed 43
 ```
 
 **Frame cache** (optional, enabled by the `cache:` block in a run config): caches the read → assemble → hitfinder → GCN prefix so it runs once per frame rather than once per epoch.

@@ -311,6 +311,15 @@ python -u -m src.training.train_ssl_finetune --config configs/ssl/mae_finetune.y
 
 The orchestrators (`submit_asymmetric_lodo_all.sh`, `submit_ssl_finetune_all.sh`) offer it as the `inference` answer when `best.pt` already exists.
 
+## Repeat a Run With Another Seed {#seed-repeat}
+
+`--seed S` (`train_asymmetric.py`, `train_ssl_finetune.py`; `S` in [0, 2**32), default 42) changes the model initialization, the shuffle and every per-sample crop, jitter and augmentation draw, and names the run `<prefix>-fold<N>-seed<S><suffix>`. Seed 42 reproduces the original sampling stream; other seeds draw from `np.random.SeedSequence([seed, epoch, idx])`. The session split and the MAE pretraining checkpoint do not depend on it.
+
+1. Single fold: `python -m src.training.train_asymmetric --config <yaml> --run-name-prefix resnet18-asymmetric-v2 --folds 1 --seed 43`, or for the SLURM wrappers set `TRAIN_SEED=43` in the environment of `scripts/submit_asymmetric_lodo_fold.sh` / `scripts/submit_ssl_finetune.sh` (they validate it and add `--seed`). `submit_asymmetric_lodo_all.sh` and `submit_ssl_finetune_all.sh` refuse a set `TRAIN_SEED`, because `sbatch --export=ALL` would hand it to every fold.
+2. Keep the arm's suffix (`-jitter`, `-careful`, `-careful-jitter`) so the repeat lands next to its seed-42 run.
+3. A new run name starts fresh. If you re-run an archived name, `--resume-training` (the wrapper default) keeps the old W&B run id and overwrites that run's history; use `--override-training` to get a new id.
+4. Aggregate: `python scripts/aggregate_lodo_results.py --select all` lists each seed as its own group; add `--pool-seeds` to average the seeds of a group per fold.
+
 ## W&B Run Ids After `--override-training` {#override-wandb-ids}
 
 Logging to an existing W&B run id with `step=epoch` after an override loses data (measured on
