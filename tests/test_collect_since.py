@@ -174,3 +174,20 @@ def test_anchor_goes_to_the_main_checkout_from_a_worktree(tmp_path, monkeypatch)
     monkeypatch.chdir(wt)
     cs.anchor_to_main_checkout()
     assert Path.cwd().resolve() == main.resolve()
+
+
+def test_latest_section_number_is_the_highest_numbered_heading():
+    f = cs.latest_section_number
+    assert f(["1. A (2026-11-01)", "12. B", "Preface", "3. C"]) == 12
+    assert f(["Preface", "Appendix"]) is None
+
+
+def test_print_notes_tells_the_next_section_number(tmp_path, monkeypatch, capsys):
+    notes = tmp_path / "notes.md"
+    notes.write_text(
+        "# N\n\n## 24. Old (2026-11-01)\nx\n\n## 25. New (2026-11-09)\ny\n"
+    )
+    monkeypatch.setattr(cs, "NOTES_PATH", notes)
+    cs.print_notes(date(2026, 11, 5), full=False)
+    out = capsys.readouterr().out
+    assert "25. New" in out and "number 26" in out
