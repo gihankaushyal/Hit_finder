@@ -69,6 +69,67 @@ def action(command, **ctx):
         "source .secrets/wandb.env && grep KEY .secrets/wandb.env",
         "export K=$(cat .secrets/wandb.env)",
         "bash -c 'head -1 .secrets/wandb.env'",
+        "grep -r . .secrets/",
+        "grep -r . .secrets",
+        "tar -cf - .secrets | tar -xO",
+        "cat .secret?/wandb.env",
+        "cat .s*/wandb.env",
+        "cat /repo/.secrets//wandb.env",
+        "cd .secrets && cat wandb.env",
+        "cd /repo/.secrets; head -1 *",
+        "source .secrets/wandb.env && printenv WANDB_API_KEY",
+        "source .secrets/wandb.env && echo $WANDB_API_KEY",
+        'source .secrets/wandb.env && printf "%s" "${WANDB_API_KEY}"',
+        "source .secrets/wandb.env && env",
+        "source .secrets/wandb.env && printenv",
+        "source .secrets/wandb.env && export -p",
+        "source .secrets/wandb.env && set",
+        "source .secrets/wandb.env && declare -p",
+        "set -x; source .secrets/wandb.env",
+        "set -o xtrace && . .secrets/wandb.env",
+        "echo $WANDB_API_KEY",
+        "printenv WANDB_API_KEY",
+        # quoting that only the shell removes
+        'cat ."secrets"/wandb.env',
+        "cat .\\secrets/wandb.env",
+        "cat '.'secrets/wandb.env",
+        "printenv WANDB_API''_KEY",
+        'echo $"WANDB_API_KEY"',
+        # cd options, pushd
+        "cd -P .secrets && cat wandb.env",
+        "cd -- .secrets; cat wandb.env",
+        "pushd .secrets && cat wandb.env",
+        # subshells and groups
+        "source .secrets/wandb.env; (env)",
+        "source .secrets/wandb.env && ( set )",
+        "(source .secrets/wandb.env; env)",
+        "{ source .secrets/wandb.env; env; }",
+        # other dumps and traces
+        "source .secrets/wandb.env && set -v",
+        "set -o verbose; source .secrets/wandb.env",
+        "set -euxo pipefail; source .secrets/wandb.env",
+        "source .secrets/wandb.env && declare -x",
+        "source .secrets/wandb.env && declare -px",
+        "source .secrets/wandb.env && typeset -x",
+        "source .secrets/wandb.env && export",
+        "source .secrets/wandb.env && env -u PATH",
+        "source .secrets/wandb.env && env FOO=1",
+        "declare -p WANDB_API_KEY",
+        "bash -xc 'source .secrets/wandb.env'",
+        "bash -x -c 'source .secrets/wandb.env'",
+        "bash -o xtrace -c '. .secrets/wandb.env'",
+        "sh -ec 'cat .secrets/wandb.env'",
+        # other ways in
+        "builtin echo $WANDB_API_KEY",
+        "eval 'echo $WANDB_API_KEY'",
+        'eval "cat .secrets/wandb.env"',
+        "cat /proc/self/environ",
+        "strings /proc/1234/environ",
+        "cat .{s,}ecrets/wandb.env",
+        "cat .secret{s,}/wandb.env",
+        "head {.secrets,x}/wandb.env",
+        "grep -r -e x .secrets/",
+        "git grep -n KEY -- .secrets/wandb.env",
     ],
 )
 def test_denied(command):
@@ -103,6 +164,15 @@ def test_force_push_without_refspec_uses_current_branch():
         "scancel 779452_[1-4]",
         "squeue -h -o %i | xargs scancel",
         "touch .secrets/new.env",
+        "cd .secrets && touch new.env",
+        'cat <<< "$WANDB_API_KEY"',
+        """awk 'BEGIN{print ENVIRON["WANDB_API_KEY"]}'""",
+        """python -c "import os; print(os.environ['WANDB_API_KEY'])\"""",
+        'source .secrets/wandb.env && python -c "import os; print(os.environ)"',
+        "d=.secrets; cat $d/wandb.env",
+        "F=.s*/wandb.env python x.py",
+        'git commit -m "$WANDB_API_KEY"',
+        "tr a a < .secrets/wandb.env",
     ],
 )
 def test_asks(command):
@@ -122,6 +192,36 @@ def test_asks(command):
         "stat -c %a .secrets/wandb.env",
         "git check-ignore -v .secrets/wandb.env",
         "ln -s /repo/.secrets .secrets",
+        "ls .secrets",
+        "ls -la .secrets/ && stat .secrets",
+        "mkdir -p .secrets && chmod 700 .secrets",
+        "cd .secrets && ls -l",
+        "cat *",
+        "cat docs/secrets.md",
+        "source .secrets/wandb.env && wandb login --relogin",
+        "set -euo pipefail; source .secrets/wandb.env && python -m src.training.lodo",
+        "echo done",
+        "env | grep CUDA",
+        # search patterns and message text are not file names
+        'grep -rn ".secrets" scripts/',
+        "grep -n '^\\.secrets' .gitignore",
+        "grep -rn -A 2 WANDB_API_KEY scripts/",
+        "rg -e .secrets -e WANDB_API_KEY docs/",
+        "git grep -n WANDB_API_KEY",
+        'git commit -m "guard: block reads of .secrets/ and WANDB_API_KEY"',
+        "git commit -am 'deny Read(**/.secrets)'",
+        "git log --grep .secrets --oneline",
+        'echo "WANDB_API_KEY not set"',
+        'test -n "$WANDB_API_KEY"',
+        '[ -z "$WANDB_API_KEY" ] && echo missing',
+        "unset WANDB_API_KEY",
+        "cd -P /tmp && ls",
+        "(cd /tmp && ls)",
+        "source .secrets/wandb.env && export WANDB_MODE=offline",
+        "source .secrets/wandb.env && env CUDA_VISIBLE_DEVICES=0 python x.py",
+        "source .secrets/wandb.env && bash -c 'python x.py'",
+        "source .secrets/wandb.env && set +x",
+        "echo ${HOME}",
         "rm -rf /tmp/scratch/run1",
         "rm -rf dashboard/node_modules",
         "rm checkpoints/run/tmp.pt",
@@ -157,6 +257,14 @@ def test_pr_create_allowed_with_ready_report():
     assert (
         action("gh pr create --base phase-05 --title t", report="ready") == guard.ALLOW
     )
+
+
+def test_pr_text_may_name_secrets():
+    command = (
+        'gh pr create --base phase-05 --title "guard: .secrets reads" '
+        '--body "blocks WANDB_API_KEY prints"'
+    )
+    assert action(command, report="ready") == guard.ALLOW
 
 
 def _write_report(directory, name, branch, commit, verdict):
@@ -220,6 +328,31 @@ def test_cli_emits_the_decision_json(tmp_path):
     assert out["hookEventName"] == "PreToolUse"
     assert out["permissionDecision"] == "deny"
     assert out["permissionDecisionReason"].startswith("guard: ")
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cat .secret?/wandb.env",
+        "echo $WANDB_API_KEY",
+        "head -1 .s*/w*",
+        'cat ."secrets"/wandb.env',
+        "printenv WANDB_API''_KEY",
+    ],
+)
+def test_cli_checks_every_spelling(tmp_path, command):
+    payload = {"tool_input": {"command": command}, "cwd": str(tmp_path)}
+    out = _run_hook(json.dumps(payload))["hookSpecificOutput"]
+    assert out["permissionDecision"] == "deny"
+
+
+def test_cli_checks_commands_run_inside_secrets(tmp_path):
+    payload = {
+        "tool_input": {"command": "cat wandb.env"},
+        "cwd": str(tmp_path / ".secrets"),
+    }
+    out = _run_hook(json.dumps(payload))["hookSpecificOutput"]
+    assert out["permissionDecision"] == "deny"
 
 
 def test_cli_asks_when_the_hook_itself_fails():
