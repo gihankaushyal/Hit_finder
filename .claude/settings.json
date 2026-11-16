@@ -1,4 +1,11 @@
 {
+  "permissions": {
+    "deny": [
+      "Read(./.secrets/**)",
+      "Read(**/.secrets/**)",
+      "Read(**/.secrets)"
+    ]
+  },
   "hooks": {
     "SessionStart": [
       {
@@ -54,6 +61,16 @@
       }
     ],
     "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/guard_destructive.py || echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\",\"permissionDecisionReason\":\"guard: hook could not run; check this command yourself\"}}'",
+            "timeout": 60
+          }
+        ]
+      },
       {
         "matcher": "Edit|Write",
         "hooks": [

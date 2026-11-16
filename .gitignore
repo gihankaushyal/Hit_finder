@@ -17,6 +17,8 @@ wandb/
 
 # Secrets — never commit (WANDB_API_KEY etc.)
 .secrets/
+# worktrees link .secrets to the main checkout; a link is not a directory
+/.secrets
 
 # Logs
 logs/

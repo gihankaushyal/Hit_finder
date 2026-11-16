@@ -38,7 +38,23 @@ Load these sections **on demand only** (not at session start):
 
 Skills: `/resume` (lazy context), `/checkpoint` (save pivot context),
 `/watch-slurm` (monitor jobs), `/graphify` (knowledge graph);
-project skills in `.claude/skills/`: `docs-refresh`, `progress-report`, `pipeline-check`, `slurm-job`
+project skills in `.claude/skills/`: `docs-refresh`, `progress-report`, `pipeline-check`, `slurm-job`,
+and the four workflows below
+
+### Workflows
+
+| Task | Start with |
+|---|---|
+| Add or change behaviour (code, scripts, configs, SLURM) | `/sfx-feature` |
+| A failed job, a failing test or CI run, a suspicious result, a data or pipeline bug | `/sfx-debug` |
+| Secrets, a risky diff, the Claude setup, dependencies | `/sfx-security diff` (`full` on demand and at phase close) |
+| Is this branch ready for a PR? | `/sfx-evaluate code` |
+| Can these numbers be reported? Should this experiment be trusted? | `/sfx-evaluate results`, `/sfx-evaluate validity` |
+
+The skills own the procedure; this file keeps the hard rules. Claude may start a workflow
+without the slash command and says so when it does. Shared references are in
+`.claude/skills/sfx-shared/`: `invariants.md` restates each rule of this file in one line
+with how to check it, and the phase-boundary audit (constraint 9) compares the two.
 
 > **Gotcha:** `PLANNING.md`, `MEMORY.md`, `session-tail.md` and `phase-05-kanban.md` are gitignored and live only on local disk. `PLANNING.md` and `MEMORY.md` were tracked until PR #28: if one goes missing, restore the last tracked version with `git show 7e9b940^:<file> > <file>` and re-apply recent updates (this happened once, restored 2026-09-01). `phase-05-kanban.md` has no tracked history to restore from. `CLAUDE.md` and `.claude/` (except `settings.local.json`) are tracked since 2026-11 and this repo is public: never put a key, token or private note in them.
 
@@ -255,6 +271,7 @@ sfx-hitfinder/
 │   ├── test_training_block.py, test_submit_script_parity.py
 │   ├── test_seed_override_wiring.py   # --seed override: bounds, per-seed sampling streams, loader seed required, atomic split save (PR #159)
 │   ├── test_collect_since.py, test_measure_crop_stats.py, test_measure_padding_effect.py
+│   ├── test_guard_hook.py       # PreToolUse guard hook: deny / ask / allow cases
 │   └── test_deprecated_scripts.py
 ├── notebooks/                   # exploration only, never source of truth
 │   ├── lcn_ablation.ipynb              # Phase 3 LCN window ablation study
@@ -276,6 +293,11 @@ sfx-hitfinder/
 │       ├── assembly_crosscheck/ # Reborn vs CrystFEL assembly comparison renders
 │       ├── crop_shortcut/       # crop-position sweep outputs (PR #157)
 │       └── mae_recon/           # MAE reconstruction quality renders (Phase 5)
+├── .claude/                     # tracked Claude Code setup (settings.local.json stays local)
+│   ├── settings.json            # hooks + permissions.deny
+│   ├── hooks/                   # activate-env, session tail, on-git-commit, guard_destructive.py (PreToolUse Bash guard)
+│   ├── agents/                  # slurm-log-analyzer, sfx-ml-reviewer, sfx-security-reviewer
+│   └── skills/                  # docs-refresh, progress-report, pipeline-check, slurm-job, sfx-feature, sfx-debug, sfx-security, sfx-evaluate; sfx-shared/ = shared references
 ├── dashboard/                   # local repo dashboard (TypeScript: Hono API + React/Vite); self-contained, not imported by src/ — see dashboard/README.md
 ├── checkpoints/                 # created at runtime; one sub-dir per run name
 │   └── <run-prefix>-fold<N>-seed<S>/   # e.g. resnet18-asymmetric-v2-fold1-seed42, mae-vits16-v2-fold1-seed42; plus asymmetric_splits/, intra_splits/
@@ -484,32 +506,22 @@ into scripts or configs.
    - **At phase start** (after creating the `phase-XX` branch) — catch any stale content from the previous phase before writing new code.
    - **At phase end** (before opening the `phase-XX` → `main` PR) — update directory tree, commands, and data conventions to reflect everything added during the phase.
 
-10. **Automated code review on every PR.** Whenever a pull request is created, triggered, or generated, run:
-   - `/code-review high` — for feature PRs
-   - `/code-review ultra` — for phase-closing PRs (`phase-XX` → `main`)
+10. **Automated review on every PR.** Before opening a PR, `/sfx-evaluate code` must have written a `ready` report for the branch and commit (the guard hook asks otherwise). After opening it, run `/code-review high` (feature PRs) or `/code-review ultra` (phase-closing PRs, `phase-XX` → `main`). A PR is not ready to merge until `/code-review` has run and its high-confidence issues are resolved.
 
-   Do not consider a PR ready to merge until `/code-review` has run and any high-confidence issues are resolved.
-
-11. **Feature planning workflow.** Before implementing any significant feature, follow this sequence in order:
-   1. Run `/superpowers:brainstorming` and `/feature-dev:feature-dev` to explore the design space and identify implementation options.
-   2. Use the `AskUserQuestion` tool to gather feedback — ask enough targeted questions to reach ≥95% task clarity before writing any code.
-   3. Run `/superpowers:writing-plans` to produce a concrete, confirmed plan based on the answers.
-   4. Run `/superpowers:executing-plans` to implement the plan step by step, updating `PLANNING.md` as each checklist item is completed.
-
-   Do not skip brainstorming for "small" features — the sequence applies to all non-trivial work within a phase.
+11. **No significant feature without an approved design and an approved plan.** The procedure lives in `/sfx-feature`: brainstorm, questions until the task is ≥95% clear, a written plan, step-by-step execution. Its fast tier covers docs, configs and small fixes. "Small" is not a reason to skip the design gate.
 
    Specs and plans under `docs/superpowers/` are gitignored: keep them local, never `git add -f`.
 
-12. **Branch and PR discipline.** Follow this workflow exactly:
+12. **Branch and PR discipline.**
 
-   - **Phase start:** Create a `phase-XX` branch from `main` when a new phase begins (e.g. `phase-03`). All phase work lands here first.
    - **Never switch branches in the main checkout** (`/data/bioxfel/user/gihan/Hit_finder`, on `phase-XX`). SLURM jobs and running pipelines read it live, so a checkout can break them.
-   - **Feature branches = git worktrees:** for any significant feature, run `git worktree add ../Hit_finder-wt/phase-XX-feature-name -b phase-XX-feature-name phase-XX` from the main checkout and do all work, tests and commits there. Naming is unchanged (`phase-03-normalize`, `phase-03-pipeline`). Small fixes and doc updates may land directly on `phase-XX`.
-   - **Worktree setup:** gitignored files are absent in a worktree. Symlink `data/` and `.secrets/` from the main checkout, run `npm install` in `dashboard/` if touching it, and use the same conda env.
-   - **Feature PR:** Once tests and CI pass on the feature branch, open a PR targeting `phase-XX` (not `main`) and merge through it. Do not merge directly.
-   - **After merge:** `git worktree remove ../Hit_finder-wt/<branch>`. Update the main checkout (`git pull`) only when no queued SLURM job depends on the files being changed.
-   - **Phase PR:** When all planned features for the phase are merged into `phase-XX` and the full test suite passes, open a PR from `phase-XX` → `main` to close out the phase.
-   - **Naming conventions:** Use lowercase kebab-case for feature names (e.g. `phase-03-lcn-ablation`, not `phase-3-LCN_Ablation`). Phase numbers are always zero-padded to two digits.
+   - **Phase start:** create `phase-XX` from `main`. All phase work lands there first.
+   - **Significant features** are built in a git worktree (`../Hit_finder-wt/phase-XX-feature-name`) and merged through a PR into `phase-XX` (not `main`), never directly. Small fixes and doc updates may land directly on `phase-XX`.
+   - **Main checkout updates** (`git pull`) happen only when no queued SLURM job depends on the files being changed.
+   - **Phase PR:** `phase-XX` → `main`, once all planned features are merged and the full test suite passes.
+   - **Naming:** lowercase kebab-case feature names (`phase-03-lcn-ablation`, not `phase-3-LCN_Ablation`); phase numbers zero-padded to two digits.
+
+   Worktree setup, the PR steps and cleanup are in `/sfx-feature`.
 
 ---
 
