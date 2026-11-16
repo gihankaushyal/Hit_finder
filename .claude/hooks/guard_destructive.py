@@ -3,10 +3,12 @@
 
 Reads the hook JSON on stdin and prints a PreToolUse permission decision.
 
-deny  - force-push to main or phase-NN
+deny  - force-push to, or remote deletion of, main or phase-NN (HEAD and @
+        are the current branch)
       - `git add -f` of docs/superpowers/, PLANNING.md, MEMORY.md, the kanban
         file, session-tail.md, docs/progress_notes.md, of a glob in the repo
-        root, docs/ or docs/superpowers/, or of a $(...) path list
+        root, docs/ or docs/superpowers/, of a $(...) path list, or of any
+        pathspec with magic (:/docs, ':(top)PLANNING.md')
       - `git add` of anything under .secrets/
       - a reader command (cat, grep, cp, git grep, ...) on .secrets, wandb.env
         or /proc/*/environ, however the path is written (quotes, trailing
@@ -23,7 +25,9 @@ ask   - any other command using WANDB_API_KEY (test, [, unset are fine), or
       - recursive rm touching checkpoints/, logs/, data/ or the frame cache
         (of this checkout, the main checkout, or the hook's own checkout), or
         any recursive rm when no checkout root can be found
-      - git reset --hard, git clean (unless dry-run)
+      - git reset --hard, git clean (unless dry-run), git stash clear, and
+        git checkout/restore of ., a directory, a glob or pathspec magic (a
+        single-file restore is allowed)
       - a branch switch in the main checkout; a force-push without a refspec
         when git cannot tell the branch; a git subcommand it cannot find
       - scancel on anything other than one plain job id
@@ -36,8 +40,11 @@ ask   - any other command using WANDB_API_KEY (test, [, unset are fine), or
 allow - everything else (no output). grep/rg/git grep patterns and git -m,
         --grep, gh --title/--body text are not treated as file names.
 
-Commands are split on ; | & and newline outside quotes; wrappers (sudo, env,
-timeout, nice, ionice, stdbuf, time, exec, nohup) are looked through. A git call
+Commands are split on ; | & and newline outside quotes; a backslash-newline
+joins lines. Wrappers (sudo, command, env, timeout, nice, ionice, stdbuf, time,
+exec, nohup, with their options) and the keywords if/elif/while/until/then/do/
+else are looked through; so are bash long options (--norc, --rcfile F) and the
+`--` before a -c body. A git call
 that fails counts as "unknown" (ask). All git calls of one decision share a 20 s
 budget, then the hook asks: a hook killed by its timeout would let the command run.
 
@@ -49,6 +56,9 @@ as $'\\x2esecrets', brace ranges ({r..t}) or more than 64 brace words. After a
 source on the same line these dumps still pass: `ps e`, `shopt -o xtrace`, a
 program that prints os.environ or runs `env`, `${!name}` indirection. Heredoc
 bodies are checked line by line, as commands; one with an unmatched quote asks.
+So a commit message or PR body written as a heredoc inside $(...) can ask (an
+apostrophe, or a line naming .secrets): write it to a file and use
+`git commit -F` / `gh pr create --body-file` instead.
 
 Keep this file Python 3.6 compatible and stdlib only: hooks may run under
 /usr/bin/python3. If the script itself fails, the decision is "ask".
@@ -130,10 +140,21 @@ SECRETS_READ_CMDS = (
     "tar", "zip", "gzip", "diff", "cmp", "tee", "dd", "vi", "vim", "nano",
     "emacs", "python", "python3", "perl", "curl", "wget", "md5sum", "sha256sum",
 )  # fmt: skip
-WRAPPERS = ("sudo", "command", "builtin", "nohup", "then", "do", "else", "!")
+WRAPPERS = (
+    "builtin", "nohup", "if", "elif", "then", "else", "while", "until", "do", "!",
+)  # fmt: skip
 # Wrappers with options: the options that take a value, and how many plain words
 # (timeout's DURATION) come before the wrapped command.
 OPTION_WRAPPERS = {
+    "sudo": (
+        (
+            "-u", "--user", "-g", "--group", "-U", "--other-user", "-p", "--prompt",
+            "-C", "--close-from", "-D", "--chdir", "-r", "--role", "-t", "--type",
+            "-T", "--command-timeout",
+        ),
+        0,
+    ),  # fmt: skip
+    "command": ((), 0),
     "env": (("-u", "--unset", "-C", "--chdir", "-S", "--split-string"), 0),
     "timeout": (("-s", "--signal", "-k", "--kill-after"), 1),
     "nice": (("-n", "--adjustment"), 0),
@@ -143,6 +164,7 @@ OPTION_WRAPPERS = {
     "exec": (("-a",), 0),
 }
 SHELLS = ("bash", "sh", "zsh")
+SHELL_VALUE_OPTS = ("--rcfile", "--init-file", "-O", "+O")
 GIT_VALUE_OPTS = ("-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env")
 GIT_SUBCMD_RE = re.compile(r"^[a-z][a-z0-9-]*$")
 GH_VALUE_OPTS = ("-R", "--repo")
@@ -164,12 +186,16 @@ class GuardTimeout(Exception):
 
 
 def _split_operators(command):
-    """Split on ; | & and newline outside quotes (&& and || split twice, harmlessly)."""
+    """Split on ; | & and newline outside quotes (&& and || split twice, harmlessly).
+
+    A backslash-newline outside single quotes is a line continuation: dropped.
+    """
     parts, buf, quote, i = [], [], None, 0
     while i < len(command):
         c = command[i]
         if c == "\\" and quote != "'" and i + 1 < len(command):
-            buf.append(command[i : i + 2])
+            if command[i + 1] != "\n":
+                buf.append(command[i : i + 2])
             i += 2
             continue
         if quote:
@@ -206,7 +232,7 @@ def _unwrap(toks):
             i += 2
         elif t.startswith("-") and t != "-":
             i += 1
-        elif toks[0] == "env" and ASSIGN_RE.match(t):
+        elif toks[0] in ("env", "sudo") and ASSIGN_RE.match(t):
             i += 1
         elif words:
             words -= 1
@@ -308,8 +334,24 @@ def _check_rm(args, cwd, ctx):
     return ALLOW, ""
 
 
+def _push_target(ref, cwd, ctx):
+    """The remote branch a refspec writes to; HEAD and @ are the current branch."""
+    dst = ref.lstrip("+").split(":")[-1]
+    if dst.startswith("refs/heads/"):
+        dst = dst[len("refs/heads/") :]
+    return ctx.current_branch(cwd) if dst in ("HEAD", "@") else dst
+
+
 def _check_git_push(args, cwd, ctx):
     refs = _positionals(args)[1:]
+    deleting = "--delete" in args or _has_short_flag(args, "d")
+    for ref in refs:
+        if deleting or ref.lstrip("+").startswith(":"):
+            target = _push_target(ref, cwd, ctx)
+            if target is None:
+                return ASK, "branch deletion, and git could not tell the current branch"
+            if PROTECTED_BRANCH_RE.match(target):
+                return DENY, "deleting %s on the remote is blocked" % target
     forced = (
         _has_short_flag(args, "f")
         or any(a.startswith("--force") for a in args)
@@ -319,12 +361,7 @@ def _check_git_push(args, cwd, ctx):
         return ALLOW, ""
     if "--all" in args or "--mirror" in args:
         return DENY, "force-push of all branches is blocked"
-    targets = []
-    for ref in refs:
-        dst = ref.lstrip("+").split(":")[-1]
-        if dst.startswith("refs/heads/"):
-            dst = dst[len("refs/heads/") :]
-        targets.append(ctx.current_branch(cwd) if dst == "HEAD" else dst)
+    targets = [_push_target(ref, cwd, ctx) for ref in refs]
     if not targets:
         targets = [ctx.current_branch(cwd)]
     for target in targets:
@@ -342,6 +379,8 @@ def _check_git_add(args):
     if not (_has_short_flag(args, "f") or "--force" in args):
         return ALLOW, ""
     for p in paths:
+        if p.startswith(":"):
+            return DENY, "git add -f with pathspec magic is blocked: %s" % p
         norm = os.path.normpath(p) if p not in FORCE_ADD_PARENTS else p
         if PRIVATE_DOC_RE.search(norm) or norm in FORCE_ADD_PARENTS:
             return DENY, "git add -f would stage a local-only document: %s" % p
@@ -352,6 +391,40 @@ def _check_git_add(args):
             return DENY, "git add -f of a computed path list"
     if not paths:
         return DENY, "git add -f with no path could stage local-only documents"
+    return ALLOW, ""
+
+
+def _broad_path(paths, cwd):
+    """The first path that covers many files: ., a directory, a glob, pathspec magic."""
+    for p in paths:
+        if (
+            p in (".", "./")
+            or p.startswith(":")
+            or p.endswith("/")
+            or any(c in p for c in GLOB_CHARS)
+            or os.path.isdir(os.path.join(cwd, p))
+        ):
+            return p
+    return None
+
+
+def _check_discard(sub, args, cwd):
+    """git checkout/restore of many files at once discards uncommitted work."""
+    if sub == "restore":
+        staged_only = ("--staged" in args or _has_short_flag(args, "S")) and not (
+            "--worktree" in args or _has_short_flag(args, "W")
+        )
+        paths = [] if staged_only else _positionals(args)
+    elif "--" in args:
+        paths = args[args.index("--") + 1 :]
+    else:
+        paths = _positionals(args)
+    broad = _broad_path(paths, cwd)
+    if broad is not None:
+        return ASK, "git %s %s discards uncommitted changes in many files" % (
+            sub,
+            broad,
+        )
     return ALLOW, ""
 
 
@@ -400,6 +473,12 @@ def _check_git(argv, cwd, ctx):
             ASK,
             "git clean deletes untracked files (local-only docs live untracked here)",
         )
+    if sub == "stash" and args[:1] == ["clear"]:
+        return ASK, "git stash clear deletes every stash"
+    if sub in ("checkout", "restore"):
+        discard = _check_discard(sub, args, cwd)
+        if discard[0] != ALLOW:
+            return discard
     if sub in ("checkout", "switch"):
         return _check_git_checkout(sub, args, cwd, ctx)
     return ALLOW, ""
@@ -518,9 +597,16 @@ def _shell_command(args):
         if a in ("-o", "+o") and i + 1 < len(args):
             flags += TRACE_OPTIONS.get(args[i + 1], "") if a == "-o" else ""
             i += 2
+        elif a in SHELL_VALUE_OPTS:
+            i += 2
+        elif a == "--":
+            i += 1
+            break
         elif re.match(r"^-[A-Za-z]+$", a):
             flags += a[1:]
             i += 1
+        elif re.match(r"^(\+[A-Za-z]+|--[a-z-]+)$", a):
+            i += 1  # +x turns an option off; --norc, --login, ...
         else:
             break
     if i >= len(args):
@@ -726,7 +812,8 @@ def decide(command, cwd, ctx, sourced=False):
 
 def _read_header(path):
     header = {}
-    with open(path, "r") as fh:
+    # Reports hold emoji; under Python 3.6 with LANG=C the default codec is ASCII.
+    with open(path, "r", encoding="utf-8", errors="replace") as fh:
         for _ in range(REPORT_HEADER_LINES):
             line = fh.readline()
             if ":" in line:

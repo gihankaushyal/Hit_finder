@@ -160,6 +160,25 @@ def action(command, **ctx):
         "git add -f $(git ls-files -o --exclude-standard)",
         # find -exec bodies are checked
         "find . -maxdepth 0 -exec cat .secrets/wandb.env \\;",
+        # shell keywords, long shell options, sudo/command options
+        "if git push -f origin main; then :; fi",
+        "while git push -f origin main; do :; done",
+        "until git push -f origin main; do :; done",
+        "bash --norc -c 'git push -f origin main'",
+        "bash -c -- 'git push -f origin main'",
+        "bash --rcfile x -c 'git push -f origin main'",
+        "sudo -u x git push -f origin main",
+        "command -p git push -f origin main",
+        "git push -f \\\norigin main",
+        # pathspec magic in git add -f
+        "git add -f :/docs",
+        "git add -f ':(top)PLANNING.md'",
+        "git add -f ':(glob)docs/**'",
+        # deleting a protected branch on the remote
+        "git push --delete origin main",
+        "git push -d origin phase-05",
+        "git push origin :phase-05",
+        "git push origin +:refs/heads/main",
     ],
 )
 def test_denied(command):
@@ -213,6 +232,18 @@ def test_force_push_without_refspec_uses_current_branch():
         "find . -name wandb.env | xargs cat",
         "find .secrets -type f -exec cat {} \\;",
         "find . -maxdepth 0 -exec rm -rf checkpoints \\;",
+        "if rm -rf checkpoints; then :; fi",
+        "sudo -u x rm -rf checkpoints",
+        "command -p rm -rf checkpoints",
+        "rm -rf \\\ncheckpoints",
+        # discarding uncommitted work in many files at once
+        "git checkout -- .",
+        "git checkout .",
+        "git checkout HEAD -- src/",
+        "git restore .",
+        "git restore --worktree --staged .",
+        "git restore -s HEAD~1 '*.py'",
+        "git stash clear",
     ],
 )
 def test_asks(command):
@@ -281,10 +312,31 @@ def test_asks(command):
         "git status && git log --oneline -3",
         "scancel 779452",
         "pytest tests/ -v 2>&1 | tail -5",
+        "if [ -f x ]; then echo y; fi",
+        "while read -r f; do echo $f; done < list.txt",
+        "sudo -u x ls",
+        "command -v git",
+        "bash --norc -c 'echo hi'",
+        "echo a \\\n  b",
+        "git push --delete origin phase-05-demo",
+        "git push origin :phase-05-demo",
+        "git restore src/models/ssl.py",
+        "git restore --staged .",
+        "git stash list",
     ],
 )
 def test_allowed(command):
     assert action(command) == guard.ALLOW
+
+
+def test_at_sign_is_the_current_branch():
+    assert action("git push -f origin @", branch="phase-05") == guard.DENY
+    assert action("git push -f origin @", branch="phase-05-demo") == guard.ALLOW
+    assert action("git push origin :@", branch="phase-05") == guard.DENY
+
+
+def test_line_continuation_does_not_hide_the_pr_gate():
+    assert action("gh \\\npr create --base phase-05", report="missing") == guard.ASK
 
 
 def test_failed_git_calls_ask():
@@ -395,6 +447,30 @@ def test_report_status_breaks_mtime_ties_by_name(tmp_path):
     os.utime(old, (1_000, 1_000))
     os.utime(new, (1_000, 1_000))
     assert guard.report_status(str(tmp_path), "b", sha) == "not-ready"
+
+
+def test_report_status_reads_utf8_under_an_ascii_locale(tmp_path):
+    sha = "0123456789abcdef0123456789abcdef01234567"
+    path = _write_report(tmp_path, "2026-11-11-evaluate-code-a.md", "b", sha, "ready")
+    path.write_text(path.read_text() + "| 🔴 | finding |\n" * 50, encoding="utf-8")
+    code = (
+        "import importlib.util, sys\n"
+        "s = importlib.util.spec_from_file_location('g', sys.argv[1])\n"
+        "g = importlib.util.module_from_spec(s); s.loader.exec_module(g)\n"
+        "print(g.report_status(sys.argv[2], 'b', sys.argv[3]))\n"
+    )
+    # Disable 3.7+ locale coercion and UTF-8 mode, as under Python 3.6 with LANG=C.
+    env = dict(
+        os.environ, LC_ALL="C", LANG="C", PYTHONCOERCECLOCALE="0", PYTHONUTF8="0"
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", code, str(HOOK), str(tmp_path), sha],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=30,
+    )
+    assert proc.stdout.strip() == "ready", proc.stderr
 
 
 def test_cache_dir_names_match_base_config():
