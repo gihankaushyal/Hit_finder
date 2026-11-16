@@ -4,37 +4,51 @@
 Reads the hook JSON on stdin and prints a PreToolUse permission decision.
 
 deny  - force-push to main or phase-NN
-      - `git add -f` of docs/superpowers/, PLANNING.md, MEMORY.md, the kanban file
+      - `git add -f` of docs/superpowers/, PLANNING.md, MEMORY.md, the kanban
+        file, session-tail.md, docs/progress_notes.md, of a glob in the repo
+        root, docs/ or docs/superpowers/, or of a $(...) path list
       - `git add` of anything under .secrets/
-      - a reader command (cat, grep, cp, git grep, ...) on .secrets or a file
-        inside it, or on /proc/*/environ, however the path is written (quotes,
-        trailing slash, dot-glob such as .secret?, {a,b} group), or after a
-        cd/pushd into .secrets; also inside `bash -c` and `eval`
-      - echo/printf expanding $WANDB_API_KEY; printenv/declare naming it
+      - a reader command (cat, grep, cp, git grep, ...) on .secrets, wandb.env
+        or /proc/*/environ, however the path is written (quotes, trailing
+        slash, dot-glob such as .secret?, {a,b} group), or after a cd/pushd
+        into .secrets; also inside `bash -c`, `eval` and `find -exec`
+      - echo/printf expanding $WANDB_API_KEY; printenv/declare naming it;
+        WANDB_API_KEY=<literal> anywhere on the line
       - when the command line sources a .secrets file: env, printenv,
         export/declare/typeset with no names, bare set, set -x/-v, bash -x
-        (they would print the key)
+        (they would print the key); `bash -x/-v script` whose script sources it
 ask   - any other command using WANDB_API_KEY (test, [, unset are fine), or
         reading the environment on a line that sources .secrets/
-      - a VAR=value assignment naming .secrets
+      - a VAR=value assignment naming .secrets or WANDB_API_KEY
       - recursive rm touching checkpoints/, logs/, data/ or the frame cache
+        (of this checkout, the main checkout, or the hook's own checkout), or
+        any recursive rm when no checkout root can be found
       - git reset --hard, git clean (unless dry-run)
-      - a branch switch in the main checkout
+      - a branch switch in the main checkout; a force-push without a refspec
+        when git cannot tell the branch; a git subcommand it cannot find
       - scancel on anything other than one plain job id
-      - `gh pr create` without a `ready` /sfx-evaluate code report for the
-        current branch and commit
+      - `gh pr create`/`gh pr new` (with or without -R) without a `ready`
+        /sfx-evaluate code report for the current branch and commit
       - any other command naming a file inside .secrets/ (source, ls, stat,
         test, chmod, ln and mkdir are allowed); a redirect such as
         `tr a a < .secrets/x` lands here
+      - a command whose quotes do not balance (it cannot be parsed)
 allow - everything else (no output). grep/rg/git grep patterns and git -m,
         --grep, gh --title/--body text are not treated as file names.
 
+Commands are split on ; | & and newline outside quotes; wrappers (sudo, env,
+timeout, nice, ionice, stdbuf, time, exec, nohup) are looked through. A git call
+that fails counts as "unknown" (ask). All git calls of one decision share a 20 s
+budget, then the hook asks: a hook killed by its timeout would let the command run.
+
 It matches command text only. A destructive command inside a script it does
-not read will pass; so will `find -delete` and `rsync --delete`. Reads of
-.secrets/ also pass when nothing on the line names it: `grep -r KEY .`, a
-symlink to it, `shopt -s dotglob`, ANSI-C quoting such as $'\\x2esecrets', a
-program that prints os.environ without sourcing on the same line. Heredoc
-bodies are checked line by line, as commands.
+not read will pass; so will `find -delete`, `rsync --delete` and
+`rm -rf "$VAR"`. Reads of .secrets/ also pass when nothing on the line names
+it: `grep -r KEY .`, a symlink to it, `shopt -s dotglob`, ANSI-C quoting such
+as $'\\x2esecrets', brace ranges ({r..t}) or more than 64 brace words. After a
+source on the same line these dumps still pass: `ps e`, `shopt -o xtrace`, a
+program that prints os.environ or runs `env`, `${!name}` indirection. Heredoc
+bodies are checked line by line, as commands; one with an unmatched quote asks.
 
 Keep this file Python 3.6 compatible and stdlib only: hooks may run under
 /usr/bin/python3. If the script itself fails, the decision is "ask".
@@ -47,6 +61,7 @@ import re
 import shlex
 import subprocess
 import sys
+import time
 
 ALLOW = "allow"
 ASK = "ask"
@@ -84,9 +99,16 @@ PROTECTED_DIR_NAMES = ("checkpoints", "logs", "data")
 # tests/test_guard_hook.py fails if the two drift apart.
 CACHE_DIR_NAMES = ("Hit_finder_cache", "sfx_frame_cache")
 PRIVATE_DOC_RE = re.compile(
-    r"(^|/)(docs/superpowers(/.*)?|PLANNING\.md|MEMORY\.md|phase-\d{2}-kanban\.md)$"
+    r"(^|/)(docs/superpowers(/.*)?|PLANNING\.md|MEMORY\.md|phase-\d{2}-kanban\.md"
+    r"|session-tail\.md|docs/progress_notes\.md)$"
 )
 FORCE_ADD_PARENTS = (".", "docs", ":/", "*")
+# A glob under one of these can expand to a local-only document.
+FORCE_ADD_GLOB_PARENTS = ("", ".", "docs", "docs/superpowers")
+INLINE_KEY_RE = re.compile(r"(^|[=,])WANDB_API_KEY=[^$,\s]")
+SECRET_FILE_RE = re.compile(r"(^|/)wandb\.env$")
+SECRET_SOURCE_MARK = "secrets/wandb.env"
+MAX_SCRIPT_BYTES = 1 << 20
 SECRETS_OK_CMDS = (
     "source",
     ".",
@@ -108,10 +130,23 @@ SECRETS_READ_CMDS = (
     "tar", "zip", "gzip", "diff", "cmp", "tee", "dd", "vi", "vim", "nano",
     "emacs", "python", "python3", "perl", "curl", "wget", "md5sum", "sha256sum",
 )  # fmt: skip
-WRAPPERS = (
-    "sudo", "command", "builtin", "time", "nohup", "exec", "then", "do", "else", "!",
-)  # fmt: skip
+WRAPPERS = ("sudo", "command", "builtin", "nohup", "then", "do", "else", "!")
+# Wrappers with options: the options that take a value, and how many plain words
+# (timeout's DURATION) come before the wrapped command.
+OPTION_WRAPPERS = {
+    "env": (("-u", "--unset", "-C", "--chdir", "-S", "--split-string"), 0),
+    "timeout": (("-s", "--signal", "-k", "--kill-after"), 1),
+    "nice": (("-n", "--adjustment"), 0),
+    "ionice": (("-c", "-n", "--class", "--classdata"), 0),
+    "stdbuf": (("-i", "-o", "-e"), 0),
+    "time": (("-f", "--format", "-o", "--output"), 0),
+    "exec": (("-a",), 0),
+}
 SHELLS = ("bash", "sh", "zsh")
+GIT_VALUE_OPTS = ("-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env")
+GIT_SUBCMD_RE = re.compile(r"^[a-z][a-z0-9-]*$")
+GH_VALUE_OPTS = ("-R", "--repo")
+FIND_EXEC_OPTS = ("-exec", "-execdir", "-ok", "-okdir")
 SCANCEL_HARMLESS_FLAGS = ("-v", "--verbose", "-Q", "--quiet")
 JOB_ID_RE = re.compile(r"^\d+$")
 GLOB_CHARS = "*?["
@@ -119,38 +154,99 @@ REPORT_HEADER_LINES = 20
 REPORT_MARKER = "-evaluate-code-"
 MIN_COMMIT_CHARS = 7
 GIT_TIMEOUT_S = 5
+# Total time for all git calls of one decision; stays well under the hook timeout
+# in settings.json, because a killed hook lets the command run unchecked.
+GIT_BUDGET_S = 20
+
+
+class GuardTimeout(Exception):
+    """The git calls of one decision took longer than GIT_BUDGET_S."""
+
+
+def _split_operators(command):
+    """Split on ; | & and newline outside quotes (&& and || split twice, harmlessly)."""
+    parts, buf, quote, i = [], [], None, 0
+    while i < len(command):
+        c = command[i]
+        if c == "\\" and quote != "'" and i + 1 < len(command):
+            buf.append(command[i : i + 2])
+            i += 2
+            continue
+        if quote:
+            quote = None if c == quote else quote
+        elif c in "'\"":
+            quote = c
+        elif c in ";|&\n":
+            parts.append("".join(buf))
+            buf = []
+            i += 1
+            continue
+        buf.append(c)
+        i += 1
+    parts.append("".join(buf))
+    return parts
 
 
 def _segments(command):
     """Split a command line into simple commands, including $(...) and `...` bodies."""
     inner = re.findall(r"\$\(([^()]*)\)", command) + re.findall(r"`([^`]*)`", command)
-    parts = re.split(r"&&|\|\||[;|\n&]", command)
-    return [p for p in parts + inner if p.strip()]
+    parts = _split_operators(command)
+    for body in inner:
+        parts.extend(_split_operators(body))
+    return [p for p in parts if p.strip()]
+
+
+def _unwrap(toks):
+    """Index of the command an option wrapper (env, timeout, ...) runs, or None."""
+    value_opts, words = OPTION_WRAPPERS[toks[0]]
+    i = 1
+    while i < len(toks):
+        t = toks[i]
+        if t in value_opts:
+            i += 2
+        elif t.startswith("-") and t != "-":
+            i += 1
+        elif toks[0] == "env" and ASSIGN_RE.match(t):
+            i += 1
+        elif words:
+            words -= 1
+            i += 1
+        else:
+            return i
+    return None
 
 
 def _split(segment):
-    """Return (leading VAR=value assignments, argv) for one simple command.
+    """Return (VAR=value assignments, argv, parsed) for one simple command.
 
-    Drops wrappers such as sudo, and the ( { ) } of subshells and groups.
+    Drops wrappers such as sudo, env or timeout (with their options), and the
+    ( { ) } of subshells and groups. `parsed` is False when the quotes do not
+    balance; the tokens are then a best guess with the quote marks removed.
     """
+    parsed = True
     try:
         toks = shlex.split(segment)
     except ValueError:
-        toks = segment.split()
+        parsed = False
+        toks = [t.strip("'\"") for t in segment.split()]
     assigns = []
     while toks:
         toks[0] = toks[0].lstrip("({")
+        start = _unwrap(toks) if toks[0] in OPTION_WRAPPERS else None
         if ASSIGN_RE.match(toks[0]):
             assigns.append(toks.pop(0))
         elif not toks[0] or toks[0] in WRAPPERS:
             toks.pop(0)
+        elif start is not None:
+            assigns.extend(t for t in toks[1:start] if ASSIGN_RE.match(t))
+            toks = toks[start:]
         else:
             break
     if toks:
         toks[-1] = toks[-1].rstrip(")}")
         if not toks[-1]:
             toks.pop()
-    return assigns, toks
+    return assigns, toks, parsed
 
 
 def _argv(segment):
@@ -204,6 +300,8 @@ def _check_rm(args, cwd, ctx):
     if not (_has_short_flag(args, "rR") or "--recursive" in args):
         return ALLOW, ""
     roots = ctx.checkout_roots(cwd)
+    if not roots:
+        return ASK, "recursive rm, and the checkout roots could not be found"
     for target in _positionals(args):
         if _touches_protected(target, cwd, roots):
             return ASK, "recursive rm touches a protected directory: %s" % target
@@ -230,7 +328,9 @@ def _check_git_push(args, cwd, ctx):
     if not targets:
         targets = [ctx.current_branch(cwd)]
     for target in targets:
-        if PROTECTED_BRANCH_RE.match(target or ""):
+        if target is None:
+            return ASK, "force-push, and git could not tell the current branch"
+        if PROTECTED_BRANCH_RE.match(target):
             return DENY, "force-push to %s is blocked" % target
     return ALLOW, ""
 
@@ -245,13 +345,19 @@ def _check_git_add(args):
         norm = os.path.normpath(p) if p not in FORCE_ADD_PARENTS else p
         if PRIVATE_DOC_RE.search(norm) or norm in FORCE_ADD_PARENTS:
             return DENY, "git add -f would stage a local-only document: %s" % p
+        globbed = any(c in p for c in GLOB_CHARS)
+        if globbed and os.path.dirname(norm) in FORCE_ADD_GLOB_PARENTS:
+            return DENY, "git add -f of a glob that can match local-only documents"
+        if "$(" in p or "`" in p or p.startswith("$"):
+            return DENY, "git add -f of a computed path list"
     if not paths:
         return DENY, "git add -f with no path could stage local-only documents"
     return ALLOW, ""
 
 
 def _check_git_checkout(sub, args, cwd, ctx):
-    if not ctx.is_main_checkout(cwd):
+    main = ctx.is_main_checkout(cwd)  # None: git failed, so assume the main checkout
+    if main is False:
         return ALLOW, ""
     reason = "branch switch in the main checkout (SLURM jobs read it live)"
     if sub == "switch":
@@ -272,7 +378,7 @@ def _git_subcommand(argv, cwd):
     while i < len(argv) and argv[i].startswith("-"):
         if argv[i] == "-C" and i + 1 < len(argv):
             cwd = os.path.normpath(os.path.join(cwd, argv[i + 1]))
-        i += 2 if argv[i] in ("-C", "-c") else 1
+        i += 2 if argv[i] in GIT_VALUE_OPTS else 1
     return (i if i < len(argv) else None), cwd
 
 
@@ -281,6 +387,8 @@ def _check_git(argv, cwd, ctx):
     if i is None:
         return ALLOW, ""
     sub, args = argv[i], argv[i + 1 :]
+    if not GIT_SUBCMD_RE.match(sub):
+        return ASK, "could not find the git subcommand in this command"
     if sub == "push":
         return _check_git_push(args, cwd, ctx)
     if sub == "add":
@@ -319,11 +427,12 @@ def _brace_words(token):
 
 
 def _names_secrets(token):
-    """True if `token` names .secrets, or a dot-glob or {a,b} group can expand to it."""
+    """True if `token` names .secrets or wandb.env, or a dot-glob or {a,b} group can
+    expand to .secrets."""
     for word in _brace_words(token):
         candidates = [word] + ([word.split("=", 1)[1]] if "=" in word else [])
         for cand in candidates:
-            if SECRETS_NAME_RE.search(cand):
+            if SECRETS_NAME_RE.search(cand) or SECRET_FILE_RE.search(cand):
                 return True
             for comp in cand.split("/"):
                 globbed = comp.startswith(".") and any(c in comp for c in GLOB_CHARS)
@@ -414,15 +523,55 @@ def _shell_command(args):
             i += 1
         else:
             break
-    if "c" not in flags or i >= len(args):
-        return None, flags
-    return args[i], flags
+    if i >= len(args):
+        return None, flags, None
+    if "c" in flags:
+        return args[i], flags, None
+    return None, flags, args[i]
+
+
+def _script_sources_secrets(path, cwd):
+    """True if the script at `path` names secrets/wandb.env."""
+    try:
+        with open(os.path.join(cwd, os.path.expanduser(path)), "rb") as fh:
+            text = fh.read(MAX_SCRIPT_BYTES)
+    except (IOError, OSError):
+        return False  # bash cannot run it either
+    return SECRET_SOURCE_MARK.encode() in text
+
+
+def _find_exec_bodies(args):
+    """The commands of find -exec/-execdir/-ok ... ; or +."""
+    bodies, i = [], 0
+    while i < len(args):
+        if args[i] in FIND_EXEC_OPTS:
+            j = i + 1
+            while j < len(args) and args[j] not in (";", "+"):
+                j += 1
+            bodies.append(" ".join(shlex.quote(a) for a in args[i + 1 : j]))
+            i = j
+        i += 1
+    return bodies
+
+
+def _is_gh_pr_create(argv):
+    words, i = [], 1
+    while i < len(argv) and len(words) < 2:
+        if argv[i] in GH_VALUE_OPTS:
+            i += 2
+            continue
+        if not argv[i].startswith("-"):
+            words.append(argv[i])
+        i += 1
+    return words in (["pr", "create"], ["pr", "new"])
 
 
 def _check_key(argv, text, sourced):
     """Deny commands that would print WANDB_API_KEY; ask on other uses of it."""
     cmd, args = os.path.basename(argv[0]), argv[1:]
     reason = "this would print WANDB_API_KEY"
+    if any(INLINE_KEY_RE.search(a) for a in argv):
+        return DENY, "a W&B key written into the command (use .secrets/wandb.env)"
     if cmd in ECHO_CMDS and any(KEY_EXPAND_RE.search(a) for a in args):
         return DENY, reason
     if cmd in KEY_NAME_PRINT_CMDS and any(KEY_NAME_RE.search(a) for a in args):
@@ -479,8 +628,16 @@ def _check_secrets(argv, text, in_secrets=False):
 
 
 def _check_segment(segment, cwd, ctx, in_secrets=False, sourced=False):
-    assigns, argv = _split(segment)
+    assigns, argv, parsed = _split(segment)
     results = [(ALLOW, "")]
+    if not parsed:
+        results.append((ASK, "could not parse the quotes in this command"))
+    if any(INLINE_KEY_RE.search(a) for a in assigns):
+        results.append(
+            (DENY, "a W&B key written into the command (use .secrets/wandb.env)")
+        )
+    elif any(KEY_NAME_RE.search(a) for a in assigns):
+        results.append((ASK, "a variable is set from WANDB_API_KEY"))
     if any(_names_secrets(a.split("=", 1)[1]) for a in assigns):
         results.append((ASK, "a variable is set to a path in .secrets/"))
     if not argv:
@@ -489,14 +646,20 @@ def _check_segment(segment, cwd, ctx, in_secrets=False, sourced=False):
     text = _text_args(argv, cwd)
     results.append(_check_secrets(argv, text, in_secrets))
     results.append(_check_key(argv, text, sourced))
-    body, flags = _shell_command(argv[1:]) if cmd in SHELLS else (None, "")
+    shell = _shell_command(argv[1:]) if cmd in SHELLS else (None, "", None)
+    body, flags, script = shell
+    traced = any(f in flags for f in TRACE_FLAGS)
     if body is not None:
         results.append(decide(body, cwd, ctx, sourced))
-        traced = any(f in flags for f in TRACE_FLAGS)
         if traced and _plan(body, cwd, sourced)[1]:
             results.append(
                 (DENY, "shell tracing would print the sourced .secrets/ file")
             )
+    elif traced and script and _script_sources_secrets(script, cwd):
+        results.append((DENY, "shell tracing of a script that sources .secrets/"))
+    elif cmd == "find":
+        for exec_body in _find_exec_bodies(argv[1:]):
+            results.append(decide(exec_body, cwd, ctx, sourced))
     elif cmd == "eval":
         results.append(decide(" ".join(argv[1:]), cwd, ctx, sourced))
     elif cmd == "xargs":
@@ -510,7 +673,7 @@ def _check_segment(segment, cwd, ctx, in_secrets=False, sourced=False):
         results.append(_check_git(argv, cwd, ctx))
     elif cmd == "scancel":
         results.append(_check_scancel(argv[1:]))
-    elif cmd == "gh" and argv[1:3] == ["pr", "create"]:
+    elif cmd == "gh" and _is_gh_pr_create(argv):
         status = ctx.eval_report_status(cwd)
         if status != "ready":
             results.append(
@@ -587,14 +750,32 @@ def report_status(reports_dir, branch, commit):
             continue
         if len(sha) < MIN_COMMIT_CHARS or not commit.startswith(sha):
             continue
-        matches.append((os.path.getmtime(path), header.get("verdict", "") or "missing"))
-    return max(matches)[1] if matches else "missing"
+        verdict = header.get("verdict", "") or "missing"
+        matches.append((os.path.getmtime(path), name, verdict))
+    return max(matches)[2] if matches else "missing"
+
+
+# The checkout this hook file lives in (<root>/.claude/hooks/guard_destructive.py).
+HOOK_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 class GitContext(object):
-    """Answers the questions decide() asks about the real checkout."""
+    """Answers the questions decide() asks about the real checkout.
+
+    A git call that fails returns None, and callers treat None as "unknown"
+    (ask), never as "no". All calls of one decision share GIT_BUDGET_S.
+    """
+
+    def __init__(self):
+        self.start = time.time()
+        self._cache = {}
 
     def _git(self, cwd, *args):
+        key = (cwd,) + args
+        if key in self._cache:
+            return self._cache[key]
+        if time.time() - self.start > GIT_BUDGET_S:
+            raise GuardTimeout("git calls took longer than %ds" % GIT_BUDGET_S)
         try:
             proc = subprocess.run(
                 ["git", "-C", cwd] + list(args),
@@ -603,23 +784,35 @@ class GitContext(object):
                 universal_newlines=True,
                 timeout=GIT_TIMEOUT_S,
             )
+            out = proc.stdout.strip() if proc.returncode == 0 else None
         except (OSError, subprocess.SubprocessError):
-            return ""
-        return proc.stdout.strip() if proc.returncode == 0 else ""
+            out = None
+        self._cache[key] = out
+        return out
 
     def main_root(self, cwd):
-        first = self._git(cwd, "worktree", "list", "--porcelain").split("\n", 1)[0]
-        return first[len("worktree ") :] if first.startswith("worktree ") else ""
+        out = self._git(cwd, "worktree", "list", "--porcelain")
+        first = (out or "").split("\n", 1)[0]
+        return first[len("worktree ") :] if first.startswith("worktree ") else None
 
     def checkout_roots(self, cwd):
-        roots = [self._git(cwd, "rev-parse", "--show-toplevel"), self.main_root(cwd)]
+        roots = [
+            self._git(cwd, "rev-parse", "--show-toplevel"),
+            self.main_root(cwd),
+            HOOK_ROOT,
+            self.main_root(HOOK_ROOT),
+        ]
         return [r for r in roots if r]
 
     def is_main_checkout(self, cwd):
+        """True/False, or None when git could not tell."""
         top, main = self._git(cwd, "rev-parse", "--show-toplevel"), self.main_root(cwd)
-        return bool(top) and os.path.realpath(top) == os.path.realpath(main)
+        if not top or not main:
+            return None
+        return os.path.realpath(top) == os.path.realpath(main)
 
     def current_branch(self, cwd):
+        """The branch name, "" when detached, None when git failed."""
         return self._git(cwd, "branch", "--show-current")
 
     def path_exists(self, cwd, name):

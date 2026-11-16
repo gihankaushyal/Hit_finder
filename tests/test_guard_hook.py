@@ -24,19 +24,29 @@ _spec.loader.exec_module(guard)
 class StubCtx:
     """Stands in for GitContext so decide() runs without a git repository."""
 
-    def __init__(self, main=True, branch="phase-05-demo", report="ready", existing=()):
-        self.main, self.branch, self.report, self.existing = (
+    """None for `main` or `branch` stands for a git call that failed."""
+
+    def __init__(
+        self,
+        main=True,
+        branch="phase-05-demo",
+        report="ready",
+        existing=(),
+        roots=(ROOT,),
+    ):
+        self.main, self.branch, self.report, self.existing, self.roots = (
             main,
             branch,
             report,
             existing,
+            roots,
         )
 
     def is_main_checkout(self, cwd):
         return self.main
 
     def checkout_roots(self, cwd):
-        return [ROOT]
+        return list(self.roots)
 
     def current_branch(self, cwd):
         return self.branch
@@ -130,6 +140,26 @@ def action(command, **ctx):
         "head {.secrets,x}/wandb.env",
         "grep -r -e x .secrets/",
         "git grep -n KEY -- .secrets/wandb.env",
+        # a quoted ; or | is not a command separator
+        "cat 'x| ls ' .secrets/wandb.env",
+        "cat 'x; source ' .secrets/wandb.env",
+        'git push -f origin "main" -o "x;y"',
+        # wrappers and git global options
+        "timeout 30 git push --force origin main",
+        "env git push -f origin main",
+        "env -u X git push -f origin main",
+        "git --git-dir .git push -f origin main",
+        # a key written into the command
+        "WANDB_API_KEY=abc123 python -m src.training.train_asymmetric",
+        "export WANDB_API_KEY=abc123",
+        "sbatch --export=ALL,WANDB_API_KEY=abc123 job.sh",
+        # git add -f of local-only files
+        "git add -f docs/*",
+        "git add -f session-tail.md",
+        "git add -f docs/progress_notes.md",
+        "git add -f $(git ls-files -o --exclude-standard)",
+        # find -exec bodies are checked
+        "find . -maxdepth 0 -exec cat .secrets/wandb.env \\;",
     ],
 )
 def test_denied(command):
@@ -169,10 +199,20 @@ def test_force_push_without_refspec_uses_current_branch():
         """awk 'BEGIN{print ENVIRON["WANDB_API_KEY"]}'""",
         """python -c "import os; print(os.environ['WANDB_API_KEY'])\"""",
         'source .secrets/wandb.env && python -c "import os; print(os.environ)"',
-        "d=.secrets; cat $d/wandb.env",
+        "d=.secrets; cat $d/other.env",
         "F=.s*/wandb.env python x.py",
         'git commit -m "$WANDB_API_KEY"',
         "tr a a < .secrets/wandb.env",
+        'rm -rf "checkpoints" "a;b"',
+        "nice rm -rf checkpoints",
+        "nice -n 10 rm -rf checkpoints",
+        'echo "unterminated',
+        "source .secrets/wandb.env; v=$WANDB_API_KEY; echo $v",
+        "k=WANDB_API_KEY; echo ${!k}",
+        "find . -name wandb.env -exec cat {} \\;",
+        "find . -name wandb.env | xargs cat",
+        "find .secrets -type f -exec cat {} \\;",
+        "find . -maxdepth 0 -exec rm -rf checkpoints \\;",
     ],
 )
 def test_asks(command):
@@ -222,6 +262,14 @@ def test_asks(command):
         "source .secrets/wandb.env && bash -c 'python x.py'",
         "source .secrets/wandb.env && set +x",
         "echo ${HOME}",
+        'echo "a; b | c && d"',
+        'git commit -m "fix: don\'t split on a quoted ; or |"',
+        "time -p python x.py",
+        "timeout 600 python -m pytest tests/ -q",
+        "nice -n 10 python x.py",
+        "env -u DISPLAY python x.py",
+        "git --git-dir .git status",
+        "find . -name '*.pyc' -exec rm {} +",
         "rm -rf /tmp/scratch/run1",
         "rm -rf dashboard/node_modules",
         "rm checkpoints/run/tmp.pt",
@@ -239,6 +287,40 @@ def test_allowed(command):
     assert action(command) == guard.ALLOW
 
 
+def test_failed_git_calls_ask():
+    assert action("git checkout phase-04", main=None) == guard.ASK
+    assert action("git push --force", branch=None) == guard.ASK
+    assert action("git push -f origin HEAD", branch=None) == guard.ASK
+
+
+def test_recursive_rm_asks_without_roots():
+    assert action("rm -rf build", roots=()) == guard.ASK
+
+
+def test_bash_trace_of_a_script_that_sources_secrets(tmp_path):
+    job = tmp_path / "job.sh"
+    job.write_text("source .secrets/wandb.env\npython x.py\n")
+    plain = tmp_path / "plain.sh"
+    plain.write_text("python x.py\n")
+    ctx = StubCtx()
+    assert guard.decide("bash -x job.sh", str(tmp_path), ctx)[0] == guard.DENY
+    assert guard.decide("sh -v %s" % job, ROOT, ctx)[0] == guard.DENY
+    assert guard.decide("bash -x plain.sh", str(tmp_path), ctx)[0] == guard.ALLOW
+    assert guard.decide("bash job.sh", str(tmp_path), ctx)[0] == guard.ALLOW
+
+
+def test_checkout_roots_include_the_hook_checkout():
+    roots = [os.path.realpath(r) for r in guard.GitContext().checkout_roots("/")]
+    assert os.path.realpath(str(REPO)) in roots
+
+
+def test_git_calls_stop_after_the_time_budget():
+    ctx = guard.GitContext()
+    ctx.start -= guard.GIT_BUDGET_S + 1
+    with pytest.raises(guard.GuardTimeout):
+        ctx.current_branch(str(REPO))
+
+
 def test_checkout_of_existing_file_is_a_restore():
     assert action("git checkout README.md", existing=("README.md",)) == guard.ALLOW
 
@@ -251,6 +333,14 @@ def test_branch_switch_is_allowed_in_a_worktree():
 @pytest.mark.parametrize("status", ["missing", "not-ready", "ready-after-fixes"])
 def test_pr_create_asks_without_ready_report(status):
     assert action("gh pr create --base phase-05 --title t", report=status) == guard.ASK
+
+
+@pytest.mark.parametrize(
+    "command",
+    ["gh pr new --fill", "gh -R o/r pr create --fill", "gh --repo o/r pr new"],
+)
+def test_pr_create_aliases_and_repo_flag_are_gated(command):
+    assert action(command, report="missing") == guard.ASK
 
 
 def test_pr_create_allowed_with_ready_report():
@@ -293,6 +383,17 @@ def test_report_status_takes_the_newest_report(tmp_path):
     )
     os.utime(old, (1_000, 1_000))
     os.utime(new, (2_000, 2_000))
+    assert guard.report_status(str(tmp_path), "b", sha) == "not-ready"
+
+
+def test_report_status_breaks_mtime_ties_by_name(tmp_path):
+    sha = "0123456789abcdef0123456789abcdef01234567"
+    old = _write_report(tmp_path, "2026-11-11-evaluate-code-a.md", "b", sha, "ready")
+    new = _write_report(
+        tmp_path, "2026-11-12-evaluate-code-a.md", "b", sha, "not-ready"
+    )
+    os.utime(old, (1_000, 1_000))
+    os.utime(new, (1_000, 1_000))
     assert guard.report_status(str(tmp_path), "b", sha) == "not-ready"
 
 
