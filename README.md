@@ -226,7 +226,7 @@ python -c "import torch; print(torch.cuda.is_available(), torch.version.cuda)"
 **Supported image formats:** `.h5` / `.cxi` (HDF5, multi-panel detectors via Reborn) and `.img` (ADSC/MAR, pre-assembled, read via fabio).
 
 ```bash
-# Run tests (805 tests; CI runs black --check, then pytest)
+# Run tests (1057 tests; CI runs black --check, then pytest)
 pytest tests/ -v
 
 # Check formatting before committing
@@ -268,6 +268,8 @@ sbatch scripts/stage_frame_cache.sh <fold_id>   # SLURM job (scg020): copies the
 ```
 
 SLURM submit scripts live in `scripts/` (start from `scripts/templates/slurm_gpu_job.sh`). A local repository dashboard (TypeScript, Hono API + React/Vite) is described in [dashboard/README.md](dashboard/README.md).
+
+**Claude Code setup.** `.claude/` is tracked. A PreToolUse guard hook (`.claude/hooks/guard_destructive.py`) blocks reading `.secrets/`, printing the W&B key, and force-pushing to `main` or `phase-NN`. It asks before a recursive `rm` of checkpoints, logs or data, before `git reset --hard` and similar commands, before a branch switch in the main checkout, and before `gh pr create` when there is no `ready` `/sfx-evaluate code` report. The four workflow skills (`/sfx-feature`, `/sfx-debug`, `/sfx-security`, `/sfx-evaluate`) are listed in [CLAUDE.md](CLAUDE.md#workflows).
 
 ## Documentation
 

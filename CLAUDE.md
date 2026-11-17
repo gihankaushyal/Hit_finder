@@ -60,7 +60,7 @@ with how to check it, and the phase-boundary audit (constraint 9) compares the t
 
 ## Knowledge Graph
 
-Graph exists at `graphify-out/graph.json` (3569 nodes, 7267 edges, 246 communities — rebuilt 2026-11-11; run `graphify update .` after code changes).
+Graph exists at `graphify-out/graph.json` (3787 nodes, 7570 edges, 274 communities — rebuilt 2026-11-16; run `graphify update .` after code changes).
 
 ```bash
 graphify query "how does the preprocessing pipeline work"

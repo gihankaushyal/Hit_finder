@@ -1,6 +1,6 @@
 # Testing Guide
 
-805 tests across 35 test files (counted with `pytest tests/ --collect-only -q` on 2026-11-12). Test counts per file are in the map below.
+1057 tests across 36 test files (counted with `pytest tests/ --collect-only -q` on 2026-11-16). Test counts per file are in the map below.
 
 ## Running Tests
 
@@ -79,6 +79,7 @@ pytest tests/ -v
 | `test_collect_since.py` | 18 | `.claude/skills/progress-report/scripts/collect_since.py`: the read-only helpers of the digest script (date-window selection of progress-note sections and the PR/commit digest) | inline sample notes |
 | `test_measure_crop_stats.py` | 2 | `scripts/measure_crop_stats.py` jitter-mode statistics | — |
 | `test_measure_padding_effect.py` | 4 | `scripts/measure_padding_effect.py` gap-heavy tile exclusion | — |
+| `test_guard_hook.py` | 252 | `.claude/hooks/guard_destructive.py`: the PreToolUse Bash guard, with deny / ask / allow tables (secrets reads and key printing, force-push, `git add -f` of local-only files, recursive `rm`, destructive git, branch switch in the main checkout, `scancel`, the `gh pr create` gate on a `ready` report) and the CLI's JSON output, including failing to `ask` when the hook itself errors | `StubCtx`, `action()`, `_run_hook()` |
 
 Some files test behaviour that spans modules or scripts rather than mirroring one `src/` module (the run-lifecycle, orchestrator and submit-script tests).
 
