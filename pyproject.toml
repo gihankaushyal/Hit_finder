@@ -23,7 +23,23 @@ files = ["src"]
 # make mypy use the same module names.
 mypy_path = "$MYPY_CONFIG_FILE_DIR"
 explicit_package_bases = true
-ignore_missing_imports = true
 check_untyped_defs = true
 warn_unused_ignores = true
 warn_redundant_casts = true
+
+# Missing imports are ignored for third-party packages only. A broken import of our own
+# `src.*` modules (a typo, a deleted module) must still be reported.
+[[tool.mypy.overrides]]
+module = [
+    "reborn.*",
+    "fabio.*",
+    "pyFAI.*",
+    "pyopencl.*",
+    "ssc.*",
+    "timm.*",
+    "wandb.*",
+    "h5py.*",
+    "scipy.*",
+    "yaml.*",
+]
+ignore_missing_imports = true
