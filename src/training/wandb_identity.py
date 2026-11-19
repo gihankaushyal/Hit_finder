@@ -162,7 +162,12 @@ def wandb_id_for_training(
     entity: str | None,
     resuming: bool,
 ) -> str:
-    """Id for the training `wandb.init`: current id when resuming, else a fresh one."""
+    """Id for the training `wandb.init`: current id when resuming, else a fresh one.
+
+    `resuming` means a checkpoint is actually being restored, not that
+    --resume-training was passed: a resume into a dir with no checkpoint trains
+    from scratch and must not splice into the old run's history.
+    """
     if resuming:
         return resolve_wandb_id(run_dir, run_name)
     return ensure_fresh_wandb_id(run_dir, run_name, project, entity)

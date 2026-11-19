@@ -136,7 +136,8 @@ def run_pretrain(
     last_path = ckpt_dir / PRETRAIN_CHECKPOINT_NAME
 
     start_epoch = 1
-    if resume and last_path.exists():
+    resuming_from_ckpt = resume and last_path.exists()
+    if resuming_from_ckpt:
         state = torch.load(last_path, map_location=device, weights_only=True)
         model.load_state_dict(state["model_state_dict"])
         opt.load_state_dict(state["optimizer_state_dict"])
@@ -147,7 +148,7 @@ def run_pretrain(
         run_name,
         cfg["wandb"].get("project"),
         cfg["wandb"].get("entity"),
-        resuming=resume,
+        resuming=resuming_from_ckpt,
     )
     wandb.init(
         project=cfg["wandb"]["project"],

@@ -317,7 +317,7 @@ The orchestrators (`submit_asymmetric_lodo_all.sh`, `submit_ssl_finetune_all.sh`
 
 1. Single fold: `python -m src.training.train_asymmetric --config <yaml> --run-name-prefix resnet18-asymmetric-v2 --folds 1 --seed 43`, or for the SLURM wrappers set `TRAIN_SEED=43` in the environment of `scripts/submit_asymmetric_lodo_fold.sh` / `scripts/submit_ssl_finetune.sh` (they validate it and add `--seed`). `submit_asymmetric_lodo_all.sh` and `submit_ssl_finetune_all.sh` refuse a set `TRAIN_SEED`, because `sbatch --export=ALL` would hand it to every fold.
 2. Keep the arm's suffix (`-jitter`, `-careful`, `-careful-jitter`) so the repeat lands next to its seed-42 run.
-3. A new run name starts fresh. If you re-run an archived name, `--resume-training` (the wrapper default) keeps the old W&B run id and overwrites that run's history; use `--override-training` to get a new id.
+3. A new run name starts fresh. If you re-run an archived name into an emptied run directory, `--resume-training` (the wrapper default) finds no checkpoint, so it trains from scratch under a fresh W&B id; the old run is tagged `overridden` and kept.
 4. Aggregate: `python scripts/aggregate_lodo_results.py --select all` lists each seed as its own group; add `--pool-seeds` to average the seeds of a group per fold.
 
 ## W&B Run Ids After `--override-training` {#override-wandb-ids}
@@ -377,7 +377,11 @@ both:
   a `continued` set. This is checked before looking for the checkpoint, so a requeue that
   lands after the delete but before the first save is also continued. Every entry point turns
   the set into a resume with `effective_resume(...)` (Track 1 per fold and intra, SSL
-  fine-tune, SSL pretrain), and a resume reuses the current W&B id even with no checkpoint.
+  fine-tune, SSL pretrain). A resume keeps the current W&B id only when it restores a
+  checkpoint (`best.pt` for Track 1 and fine-tune, `last.pt` for pretraining). With no
+  checkpoint it trains from epoch 1, so it gets a fresh id (`<run_name>-oN`) and the partial
+  run is tagged `overridden`; logging epoch 1 again into a run that already has those steps
+  would drop or splice them.
 - Same job id and same restart count (two launches in one `salloc` / `srun --pty`
   allocation) is a deliberate second override and applies again, as does a different job id.
   With no `SLURM_JOB_ID` (a direct `python -m ...` launch) the flag is honoured every time

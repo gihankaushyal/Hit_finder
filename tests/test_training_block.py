@@ -311,3 +311,28 @@ class TestTrainFoldWritesTheTrainingBlock:
         data = json.loads((ckpt_dir / RESULTS_NAME).read_text())
         assert "training" not in data
         assert data["inference"]["checkpoint_epoch"] == 7
+
+
+class TestWandbIdFollowsTheCheckpointNotTheFlag:
+    """--resume-training with no best.pt trains from scratch, so it needs a fresh W&B id."""
+
+    def _record(self, monkeypatch) -> list[bool]:
+        calls: list[bool] = []
+
+        def fake(*args, resuming, **kwargs):
+            calls.append(resuming)
+            return "fake-id"
+
+        monkeypatch.setattr(lodo, "wandb_id_for_training", fake)
+        return calls
+
+    def test_flag_without_a_checkpoint_is_a_fresh_start(self, run_fold, monkeypatch):
+        calls = self._record(monkeypatch)
+        run_fold(_cfg(epochs=1), [0.5], resume_training=True)
+        assert calls == [False]
+
+    def test_flag_with_a_checkpoint_resumes(self, run_fold, monkeypatch):
+        calls = self._record(monkeypatch)
+        run_fold(_cfg(epochs=1), [0.5])
+        run_fold(_cfg(epochs=2), [0.6], resume_training=True)
+        assert calls == [False, True]

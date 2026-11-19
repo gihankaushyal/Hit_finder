@@ -545,10 +545,10 @@ class TestPretrainFreshStartWandbId:
             )
         assert exc.value.kwargs["id"] == "mae-test-fold0"
 
-    def test_resume_without_a_checkpoint_keeps_current_id(
+    def test_resume_without_a_checkpoint_rotates_past_the_existing_run(
         self, synthetic_cxi, tmp_path, monkeypatch
     ):
-        """A requeue before the first save (override already applied) reuses the run."""
+        """A requeue before the first save trains from epoch 1: it gets a fresh id."""
         cfg, _ = self._setup(
             tmp_path, monkeypatch, {"sfx-hitfinder-test/mae-test-fold0"}
         )
@@ -561,7 +561,7 @@ class TestPretrainFreshStartWandbId:
                 "cpu",
                 resume=True,
             )
-        assert exc.value.kwargs["id"] == "mae-test-fold0"
+        assert exc.value.kwargs["id"] == "mae-test-fold0-o2"
 
 
 class TestIdempotentOverrideEntryPoints:
@@ -650,3 +650,40 @@ class TestIdempotentOverrideEntryPoints:
         prep, cfg, ckpt = self._pretrain(tmp_path, monkeypatch)
         assert prep("mae-vits16-v2", 1, cfg, override_training=True) == self.PT_NAME
         assert not ckpt.exists()
+
+
+class _IdRequested(Exception):
+    pass
+
+
+class TestPretrainWandbIdFollowsTheCheckpoint:
+    """resume=True with no last.pt trains from scratch, so it needs a fresh W&B id."""
+
+    def _stop_at_id(self, monkeypatch) -> None:
+        import src.training.train_ssl_pretrain as tsp
+
+        def fake(*args, resuming, **kwargs):
+            raise _IdRequested(resuming)
+
+        monkeypatch.setattr(tsp, "wandb_id_for_training", fake)
+
+    def test_resume_without_last_is_a_fresh_start(
+        self, synthetic_cxi, tmp_path, monkeypatch
+    ):
+        cfg = _tiny_cfg(tmp_path / "ckpt")
+        self._stop_at_id(monkeypatch)
+        with pytest.raises(_IdRequested) as exc:
+            run_pretrain(
+                cfg, {"s0": synthetic_cxi}, ["s0"], "mae-test-fold0", "cpu", resume=True
+            )
+        assert exc.value.args[0] is False
+
+    def test_resume_with_last_keeps_the_id(self, synthetic_cxi, tmp_path, monkeypatch):
+        cfg = _tiny_cfg(tmp_path / "ckpt")
+        run_pretrain(cfg, {"s0": synthetic_cxi}, ["s0"], "mae-test-fold0", "cpu")
+        self._stop_at_id(monkeypatch)
+        with pytest.raises(_IdRequested) as exc:
+            run_pretrain(
+                cfg, {"s0": synthetic_cxi}, ["s0"], "mae-test-fold0", "cpu", resume=True
+            )
+        assert exc.value.args[0] is True

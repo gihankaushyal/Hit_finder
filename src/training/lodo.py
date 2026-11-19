@@ -386,7 +386,7 @@ def _train_fold(
             run_name,
             cfg["wandb"]["project"],
             cfg["wandb"].get("entity"),
-            resuming=resume_training,
+            resuming=resume_training_from_ckpt,
         )
         wandb.init(
             project=cfg["wandb"]["project"],
