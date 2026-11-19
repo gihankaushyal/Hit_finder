@@ -170,6 +170,7 @@ sfx-hitfinder/
 ├── SETUP.md                     # manual install steps (Reborn, SLURM modules)
 ├── environment.yml              # conda environment definition
 ├── requirements-ci.txt          # CPU-only deps for GitHub Actions (no CUDA, no Reborn from PyPI)
+├── pyproject.toml               # ruff + mypy configuration only (report-only checks); not a package definition
 ├── conftest.py                  # inserts project root into sys.path so tests import as `from src.*`
 │   (tests/conftest.py holds the shared fixtures: fake Jungfrau assembly, wandb_disabled, ...)
 ├── configs/                     # YAML config files for experiments
@@ -398,6 +399,10 @@ pytest tests/test_normalize.py::TestNormalizationOrder -v                       
 
 # Formatting (run before every commit)
 black src/ tests/
+
+# Lint and type check — report-only (config in pyproject.toml); findings never fail CI
+ruff check .
+mypy
 
 # CI dependencies — CPU-only, no Reborn wheel; for local use when full env unavailable
 pip install -r requirements-ci.txt
