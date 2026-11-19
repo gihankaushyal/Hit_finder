@@ -373,7 +373,8 @@ both:
   If the marker write fails the gate warns on stderr and carries on (the delete already
   happened, so failing protects nothing); a requeue of that job would then override again.
 - A **requeue** (same job id, higher restart count) prints `[override] already applied by
-  job N ...`, keeps the checkpoint, does not rotate the W&B id again, and returns the run in
+  job N ...`, keeps the checkpoint, does not rotate the W&B id again at the gate (the trainer
+  may, see below), and returns the run in
   a `continued` set. This is checked before looking for the checkpoint, so a requeue that
   lands after the delete but before the first save is also continued. Every entry point turns
   the set into a resume with `effective_resume(...)` (Track 1 per fold and intra, SSL

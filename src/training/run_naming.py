@@ -137,7 +137,8 @@ def check_checkpoint_collisions(
             # first save finds no checkpoint, and must not be treated as a fresh launch.
             print(
                 f"  [override] already applied by job {current_job_id()} for "
-                f"{run_name}; continuing from the existing checkpoint."
+                f"{run_name}; continuing (resumes from the checkpoint if one was saved, "
+                "else trains from epoch 1 under a fresh W&B id)."
             )
             continued.add(run_name)
             continue
