@@ -32,5 +32,13 @@ jobs:
       - name: Check formatting
         run: black --check src/ tests/
 
+      - name: Lint (report-only)
+        continue-on-error: true
+        run: ruff check . --output-format=github
+
+      - name: Type check (report-only)
+        continue-on-error: true
+        run: mypy
+
       - name: Run tests
         run: pytest tests/ -v
