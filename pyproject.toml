@@ -1,0 +1,29 @@
+# Tool configuration only. This project is not a package: there is no [project] table
+# and nothing here is used to build or install it.
+
+[tool.ruff]
+target-version = "py311"
+line-length = 88
+extend-exclude = ["notebooks", "dashboard", "docs", "temp_to_deleted"]
+
+[tool.ruff.lint]
+# E/W pycodestyle, F pyflakes, B bugbear, I import order. Report-only in CI.
+select = ["E", "F", "W", "B", "I"]
+# Line length is black's job.
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+# scripts/ insert the repo root into sys.path before importing from src/.
+"scripts/*.py" = ["E402"]
+
+[tool.mypy]
+python_version = "3.11"
+files = ["src"]
+# src/ has no src/__init__.py and is imported as `src.<package>`; these two settings
+# make mypy use the same module names.
+mypy_path = "$MYPY_CONFIG_FILE_DIR"
+explicit_package_bases = true
+ignore_missing_imports = true
+check_untyped_defs = true
+warn_unused_ignores = true
+warn_redundant_casts = true
