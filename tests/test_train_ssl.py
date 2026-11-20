@@ -703,3 +703,26 @@ def test_pretrain_snapshot_is_saved_atomically_before_last_pt(
     snap = torch.load(run_dir / "epoch1.pt", map_location="cpu", weights_only=False)
     assert snap["epoch"] == 1
     assert not (run_dir / "last.pt").exists()
+
+
+def test_pretrain_resume_loads_last_pt_on_the_cpu(synthetic_cxi, tmp_path, monkeypatch):
+    """A GPU-mapped load keeps a second copy of the weights on the device."""
+    import src.training.train_ssl_pretrain as tsp
+
+    cfg = _tiny_cfg(tmp_path / "ckpt")
+    run_pretrain(cfg, {"s0": synthetic_cxi}, ["s0"], "mae-test-fold0", "cpu")
+    real_load = tsp.torch.load
+    locations: list[object] = []
+
+    def _load(*args, **kwargs):
+        locations.append(kwargs.get("map_location"))
+        return real_load(*args, **kwargs)
+
+    monkeypatch.setattr(tsp.torch, "load", _load)
+    cfg["training"]["epochs"] = 3
+    # a torch.device, so a load mapped to the training device differs from "cpu"
+    device = torch.device("cpu")
+    run_pretrain(
+        cfg, {"s0": synthetic_cxi}, ["s0"], "mae-test-fold0", device, resume=True
+    )
+    assert locations == ["cpu"]

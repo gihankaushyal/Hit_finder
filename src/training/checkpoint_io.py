@@ -13,9 +13,10 @@ def atomic_torch_save(obj: object, path: str | Path) -> None:
 
     A kill mid-write leaves the previous file intact (a resume would otherwise
     crash-loop on a truncated checkpoint). The fsync makes the data durable before
-    the rename, so a node crash cannot leave a renamed but empty file. An exception
-    removes the partial tmp file; a SIGTERM or SIGKILL does not, and
-    --override-training deletes it (``*.tmp``).
+    the rename, so a node crash cannot leave a renamed but empty file. The directory
+    is not fsynced: a node crash right after the rename may keep the previous file,
+    which is still a complete checkpoint. An exception removes the partial tmp file;
+    a SIGTERM or SIGKILL does not, and --override-training deletes it (``*.tmp``).
     """
     path = Path(path)
     tmp = path.with_name(path.name + ".tmp")

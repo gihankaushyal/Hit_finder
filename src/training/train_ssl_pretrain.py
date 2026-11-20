@@ -138,7 +138,9 @@ def run_pretrain(
     start_epoch = 1
     restored_epoch: int | None = None
     if resume and last_path.exists():
-        state = torch.load(last_path, map_location=device, weights_only=True)
+        # On the CPU: load_state_dict copies to the model's device, and a GPU-mapped
+        # load would hold a second copy there.
+        state = torch.load(last_path, map_location="cpu", weights_only=True)
         model.load_state_dict(state["model_state_dict"])
         opt.load_state_dict(state["optimizer_state_dict"])
         start_epoch = state["epoch"] + 1

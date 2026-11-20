@@ -496,6 +496,17 @@ def _train_fold(
                 best_f1 = -1.0 if np.isnan(_saved_f1) else _saved_f1
                 epochs_no_improve = _ckpt.get("epochs_no_improve", 0)
                 start_epoch = _ckpt.get("epoch", 0) + 1
+                if last_path.exists():
+                    # Killed between best.pt and last.pt: the epoch never reached its
+                    # W&B log. Its val F1 is all best.pt holds; W&B is at epoch - 1.
+                    wandb.log(
+                        {"epoch": _ckpt["epoch"], "val/f1": _saved_f1},
+                        step=_ckpt["epoch"],
+                    )
+                    print(
+                        f"  Epoch {_ckpt['epoch']} logged to W&B from best.pt (val F1 "
+                        "only; its train and other val metrics were not saved)."
+                    )
             # From the counter and the current patience, not the saved flag: a resume
             # with a larger patience continues an early-stopped run.
             early_stopped = epochs_no_improve >= patience
@@ -548,6 +559,19 @@ def _train_fold(
             }
             # Checkpoints first, W&B log last: a kill in between leaves W&B behind the
             # restorable state, never ahead of it (a resume keeps the W&B id).
+            # Order: epoch<N>.pt, best.pt, last.pt. A resume may start after best.pt's
+            # epoch, so the snapshot goes first.
+            if epoch in save_epochs:
+                atomic_torch_save(
+                    {
+                        "epoch": epoch,
+                        "model_state_dict": model.state_dict(),
+                        "val_f1": val_m["f1"],
+                        "backbone": backbone,
+                        "num_classes": cfg["model"]["num_classes"],
+                    },
+                    ckpt_path.parent / f"epoch{epoch}.pt",
+                )
             if not np.isnan(val_m["f1"]) and val_m["f1"] > best_f1:
                 best_f1 = val_m["f1"]
                 epochs_no_improve = 0
@@ -568,17 +592,6 @@ def _train_fold(
             else:
                 epochs_no_improve += 1
                 early_stopped = epochs_no_improve >= patience
-            if epoch in save_epochs:
-                atomic_torch_save(
-                    {
-                        "epoch": epoch,
-                        "model_state_dict": model.state_dict(),
-                        "val_f1": val_m["f1"],
-                        "backbone": backbone,
-                        "num_classes": cfg["model"]["num_classes"],
-                    },
-                    ckpt_path.parent / f"epoch{epoch}.pt",
-                )
             # last.pt goes last: a resume starts after its epoch, so anything that
             # epoch writes must already be on disk.
             atomic_torch_save(

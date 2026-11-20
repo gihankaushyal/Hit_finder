@@ -481,13 +481,114 @@ class TestResumeFromLastEpoch:
             run_fold(_cfg(epochs=4), [0.5, 0.9])
         monkeypatch.setattr(lodo, "atomic_torch_save", real_save)
         # last.pt is epoch 1 (best F1 0.5); best.pt is epoch 2 (F1 0.9): resume from
-        # best.pt, so epoch 2 is not trained again and only epochs 3 and 4 run
-        data, n = run_fold(_cfg(epochs=4), [0.7, 0.8], resume_training=True)
+        # best.pt, so epoch 2 is not trained again and only epochs 3 and 4 run.
+        # A third score, so a resume that retrains epoch 2 fails on n, not the fake.
+        data, n = run_fold(_cfg(epochs=4), [0.7, 0.8, 0.85], resume_training=True)
         assert n == 2
         assert data["training"]["best_epoch"] == 2
         best = torch.load(_ckpt_dir(tmp_path) / "best.pt", weights_only=False)
         assert best["epoch"] == 2
         assert best["val_f1"] == 0.9
+
+    def _kill_after_best_pt_at_epoch_2(self, run_fold, monkeypatch, cfg):
+        real_save = lodo.atomic_torch_save
+
+        def _killed(obj, path):
+            if Path(path).name == "last.pt" and obj["epoch"] == 2:
+                raise KeyboardInterrupt
+            real_save(obj, path)
+
+        monkeypatch.setattr(lodo, "atomic_torch_save", _killed)
+        with pytest.raises(KeyboardInterrupt):
+            run_fold(cfg, [0.5, 0.9])
+        monkeypatch.setattr(lodo, "atomic_torch_save", real_save)
+
+    def test_a_best_pt_restore_loads_its_weights_and_optimizer_state(
+        self, run_fold, tmp_path, monkeypatch
+    ):
+        captured: list[tuple[dict, dict]] = []
+
+        def _step(model, loader, optimizer, criterion, device):
+            captured.append(
+                (
+                    {k: v.clone() for k, v in model.state_dict().items()},
+                    copy.deepcopy(optimizer.state_dict()["state"]),
+                )
+            )
+            optimizer.zero_grad()
+            model(torch.ones(1, 4)).sum().backward()
+            optimizer.step()
+            return {"loss": 0.5, "hit_frac": 0.5}
+
+        monkeypatch.setattr(lodo, "train_one_epoch", _step)
+        self._kill_after_best_pt_at_epoch_2(run_fold, monkeypatch, _cfg(epochs=4))
+        best = torch.load(_ckpt_dir(tmp_path) / "best.pt", weights_only=False)
+        captured.clear()
+        _, n = run_fold(_cfg(epochs=4), [0.7, 0.8], resume_training=True)
+        assert n == 2
+        weights, opt_state = captured[0]
+        for k, v in best["model_state_dict"].items():
+            assert torch.equal(weights[k], v)
+        saved = best["optimizer_state_dict"]["state"]
+        assert saved and opt_state.keys() == saved.keys()
+        for i in saved:
+            assert torch.equal(opt_state[i]["exp_avg"], saved[i]["exp_avg"])
+
+    def test_a_best_pt_restore_logs_its_epoch_to_wandb(
+        self, run_fold, tmp_path, monkeypatch
+    ):
+        """Epoch 2 was killed before its W&B log: its val F1 is logged on resume."""
+        self._kill_after_best_pt_at_epoch_2(run_fold, monkeypatch, _cfg(epochs=4))
+        logs: list[tuple[int | None, dict]] = []
+        monkeypatch.setattr(
+            sys.modules["wandb"],
+            "log",
+            lambda payload, step=None, **kw: logs.append((step, payload)),
+        )
+        run_fold(_cfg(epochs=4), [0.7, 0.8], resume_training=True)
+        assert logs[0] == (2, {"epoch": 2, "val/f1": 0.9})
+        assert [s for s, p in logs if "train/loss" in p] == [3, 4]
+
+    def test_a_kill_before_the_epoch_snapshot_still_writes_it(
+        self, run_fold, tmp_path, monkeypatch
+    ):
+        real_save = lodo.atomic_torch_save
+
+        def _killed_at_snapshot(obj, path):
+            if Path(path).name == "epoch2.pt":
+                raise KeyboardInterrupt
+            real_save(obj, path)
+
+        cfg = _cfg(epochs=4)
+        cfg["training"]["save_epochs"] = [2]
+        monkeypatch.setattr(lodo, "atomic_torch_save", _killed_at_snapshot)
+        with pytest.raises(KeyboardInterrupt):
+            run_fold(cfg, [0.5, 0.9])  # epoch 2 improves and is a snapshot epoch
+        monkeypatch.setattr(lodo, "atomic_torch_save", real_save)
+        run_fold(cfg, [0.9, 0.7, 0.8], resume_training=True)
+        assert (_ckpt_dir(tmp_path) / "epoch2.pt").exists()
+
+    def test_a_resume_ignores_the_nan_fallback_best_pt(self, run_fold):
+        """The fallback best.pt is stamped with the configured epochs, not trained ones."""
+        nan = float("nan")
+        run_fold(
+            _cfg(epochs=10, patience=3), [nan] * 3
+        )  # stops at 3; best.pt "epoch 10"
+        data, n = run_fold(_cfg(epochs=10, patience=5), [nan] * 3, resume_training=True)
+        assert n == 2  # epochs 4 and 5 bring the count from 3 to 5
+        assert data["training"]["last_epoch"] == 5
+        assert data["training"]["best_epoch"] is None
+
+    def test_a_corrupt_last_pt_is_refused_even_with_a_newer_best_pt(
+        self, run_fold, tmp_path, monkeypatch
+    ):
+        self._kill_after_best_pt_at_epoch_2(run_fold, monkeypatch, _cfg(epochs=4))
+        path = _ckpt_dir(tmp_path) / "last.pt"
+        last = torch.load(path, weights_only=False)
+        del last["best_f1"]
+        torch.save(last, path)
+        with pytest.raises(RuntimeError, match="best_f1"):
+            run_fold(_cfg(epochs=4), [0.7, 0.8], resume_training=True)
 
     def test_the_epoch_snapshot_is_saved_before_last_pt(
         self, run_fold, tmp_path, monkeypatch
