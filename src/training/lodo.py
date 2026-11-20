@@ -102,15 +102,19 @@ def _load_restore_checkpoint(
             "written by this trainer; start a new run with --override-training."
         )
     if best_path.exists():
-        best = _load(best_path)
-        if best.get("epoch", -1) > last["epoch"] and not np.isnan(
-            best.get("val_f1", float("nan"))
-        ):
+        # mmap maps the file: the comparison reads two values, not the weights.
+        peek = torch.load(best_path, map_location="cpu", weights_only=False, mmap=True)
+        best_epoch = peek.get("epoch", -1)
+        newer = best_epoch > last["epoch"] and not np.isnan(
+            peek.get("val_f1", float("nan"))
+        )
+        del peek
+        if newer:
             print(
-                f"  best.pt (epoch {best['epoch']}) is newer than last.pt (epoch "
+                f"  best.pt (epoch {best_epoch}) is newer than last.pt (epoch "
                 f"{last['epoch']}): resuming from best.pt."
             )
-            return best_path, best
+            return best_path, _load(best_path)
     return last_path, last
 
 
@@ -652,8 +656,9 @@ def _train_fold(
 
     # Evaluate best checkpoint on in-domain and cross-detector test sets.
     # weights_only=False: checkpoints contain optimizer_state_dict; all values are
-    # tensors/primitives and we own the files.
-    ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
+    # tensors/primitives and we own the files. On the CPU, so the optimizer state is
+    # not held on the GPU through evaluation; load_state_dict moves the weights.
+    ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
 
     # Skip backbone/num_classes sanity check when caller provides a custom model_builder
     # (ViT fine-tune checkpoints use a different schema).

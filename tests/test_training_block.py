@@ -171,7 +171,7 @@ def run_fold(tmp_path, monkeypatch):
             return dict(METRICS)
 
         monkeypatch.setattr(lodo, "run_patch_agg", fake_agg)
-        lodo._train_fold(cfg=cfg, **_fold_args(), **kwargs)
+        lodo._train_fold(cfg=cfg, **{**_fold_args(), **kwargs})
         path = Path("checkpoints") / RUN_NAME / RESULTS_NAME
         return json.loads(path.read_text()), len(evaluations)
 
@@ -618,6 +618,37 @@ class TestResumeFromLastEpoch:
         )
         run_fold(_cfg(epochs=4), [0.7], resume_training=True)
         assert steps[0] == 4
+
+    def _record_loads(self, monkeypatch) -> list[tuple[str, dict]]:
+        real_load = lodo.torch.load
+        loads: list[tuple[str, dict]] = []
+
+        def _load(path, *args, **kwargs):
+            loads.append((Path(path).name, kwargs))
+            return real_load(path, *args, **kwargs)
+
+        monkeypatch.setattr(lodo.torch, "load", _load)
+        return loads
+
+    def test_checkpoints_are_loaded_on_the_cpu_for_evaluation_too(
+        self, run_fold, monkeypatch
+    ):
+        loads = self._record_loads(monkeypatch)
+        # a torch.device, so a load mapped to the training device differs from "cpu"
+        run_fold(_cfg(epochs=2), [0.5, 0.6], device=torch.device("cpu"))
+        run_fold(
+            _cfg(epochs=3), [0.7], resume_training=True, device=torch.device("cpu")
+        )
+        assert loads and all(kw["map_location"] == "cpu" for _, kw in loads)
+
+    def test_an_older_best_pt_is_only_peeked_at_on_resume(self, run_fold, monkeypatch):
+        """last.pt wins: best.pt's weights and optimizer state are not read in."""
+        run_fold(_cfg(epochs=3), [0.5, 0.9, 0.6])  # best.pt epoch 2, last.pt epoch 3
+        loads = self._record_loads(monkeypatch)
+        run_fold(_cfg(epochs=4), [0.7], resume_training=True)
+        restore = loads[: [n for n, _ in loads].index("last.pt") + 2]
+        best = [kw for n, kw in restore if n == "best.pt"]
+        assert best and all(kw.get("mmap") for kw in best)
 
     @pytest.mark.parametrize(
         "key", ["epoch", "best_f1", "epochs_no_improve", "optimizer_state_dict"]

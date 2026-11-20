@@ -32,7 +32,7 @@ from src.data.dataloader import ssl_crop_loader
 from src.data.frame_cache import FrameCache, frame_cache_from_cfg, verify_cache_or_raise
 from src.hitfinders import get_hitfinder
 from src.models.ssl import MASKING_PEAK_AWARE, build_mae_model
-from src.training.checkpoint_io import atomic_torch_save
+from src.training.checkpoint_io import TMP_GLOB, atomic_torch_save
 from src.training.lodo import build_sessions
 from src.training.run_naming import (
     SSL_PRETRAIN_CONVENTION,
@@ -81,7 +81,7 @@ def prepare_pretrain_run(
         PRETRAIN_CHECKPOINT_NAME,
         resume_training,
         override_training,
-        extra_delete=(EPOCH_SNAPSHOT_GLOB, "*.tmp"),  # *.tmp: a kill mid-save
+        extra_delete=(EPOCH_SNAPSHOT_GLOB, TMP_GLOB),  # TMP_GLOB: a kill mid-save
         checkpoint_root=cfg.get("checkpoint_dir", CHECKPOINT_DIR_DEFAULT),
         dry_run=dry_run,
         on_override=override_hook_from_cfg(cfg),

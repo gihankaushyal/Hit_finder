@@ -1,6 +1,6 @@
 # Testing Guide
 
-1089 tests across 37 test files (counted with `pytest tests/ --collect-only -q` on 2026-11-20). Test counts per file are in the map below.
+1091 tests across 37 test files (counted with `pytest tests/ --collect-only -q` on 2026-11-20). Test counts per file are in the map below.
 
 ## Running Tests
 
@@ -61,7 +61,7 @@ pytest tests/ -v
 | `test_override_marker.py` | 11 | `override_applied.json`: a requeued SLURM job resumes instead of overriding again | `SLURM_JOB_ID` / `SLURM_RESTART_COUNT` env |
 | `test_wandb_identity.py` | 35 | W&B run id file, rotation (`-o2`, `-o3`), `overridden` tagging | faked `wandb` |
 | `test_wandb_isolation.py` | 3 | No test may reach W&B by accident (`wandb_enabled()` creates a process-wide singleton) | — |
-| `test_training_block.py` | 42 | `results.json` `training` block (`configured_epochs`, `last_epoch`, `best_epoch`, `early_stopped`) driven by scripted validation F1 scores; `last.pt` resume (continues after the last epoch, keeps best F1 and the patience count, loads its weights and optimizer state, legacy `best.pt`-only dirs, a larger patience continues a stopped run, a newer `best.pt` is resumed from with its weights and optimizer state and its epoch logged to W&B, the NaN fallback `best.pt` is not, a `last.pt` missing a key is refused even with a newer `best.pt`), `epoch<N>.pt` saved before `best.pt` and `last.pt`, checkpoint written before the W&B log, a resume logs its first epoch, `restored_epoch` passed to `wandb_id_for_training`, override deletes `last.pt` and `*.tmp` | tiny fake fold |
+| `test_training_block.py` | 44 | `results.json` `training` block (`configured_epochs`, `last_epoch`, `best_epoch`, `early_stopped`) driven by scripted validation F1 scores; `last.pt` resume (continues after the last epoch, keeps best F1 and the patience count, loads its weights and optimizer state, legacy `best.pt`-only dirs, a larger patience continues a stopped run, a newer `best.pt` is resumed from with its weights and optimizer state and its epoch logged to W&B, the NaN fallback `best.pt` is not, a `last.pt` missing a key is refused even with a newer `best.pt`, an older `best.pt` is only memory-mapped, checkpoints load on the CPU for evaluation too), `epoch<N>.pt` saved before `best.pt` and `last.pt`, checkpoint written before the W&B log, a resume logs its first epoch, `restored_epoch` passed to `wandb_id_for_training`, override deletes `last.pt` and `*.tmp` | tiny fake fold |
 | `test_inference_only.py` | 64 | `--inference-only`: result helpers, the `_train_fold` inference path, CLI wiring | faked `wandb`; the training loader raises if built |
 | `test_orchestrator_inference.py` | 30 | Orchestrator scripts' `inference` answer, run against a stub `sbatch` | temp dir with fake `sbatch` on `PATH` |
 | `test_ssl_dataset.py` | 13 | `SSLPretrainCXIDataset` — random valid-region crops for MAE pretraining | synthetic CXI + valid-pixel mask |

@@ -68,6 +68,7 @@ from src.training.run_naming import (
     fold_run_name,
     validate_run_name_prefix,
 )
+from src.training.checkpoint_io import TMP_GLOB
 from src.training.inference_results import INFERENCE_RESULTS_NAME, RESULTS_NAME
 from src.training.wandb_identity import override_hook_from_cfg
 from src.utils.config import apply_seed_override, load_config, seed_arg
@@ -208,7 +209,7 @@ def prepare_finetune_run(
             RESULTS_NAME,
             INFERENCE_RESULTS_NAME,
             LAST_CHECKPOINT_NAME,
-            "*.tmp",  # a partial checkpoint left by a kill mid-save
+            TMP_GLOB,  # a partial checkpoint left by a kill mid-save
         ),
         dry_run=dry_run,
         inference_only=inference_only,
@@ -284,8 +285,10 @@ def main() -> None:
         "--resume-training",
         action="store_true",
         help=(
-            "When best.pt exists for the resolved run name, resume training from "
-            "it instead of exiting. Has no effect when no checkpoint is present."
+            "When best.pt exists for the resolved run name, resume training instead "
+            "of exiting: from last.pt (the newest epoch), or from best.pt for a run "
+            "dir without last.pt or when best.pt is newer. Has no effect when no "
+            "checkpoint is present."
         ),
     )
     resume_group.add_argument(

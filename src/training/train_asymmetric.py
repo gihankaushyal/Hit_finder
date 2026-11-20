@@ -64,6 +64,7 @@ from src.training.run_naming import (
     fold_run_name,
     validate_run_name_prefix,
 )
+from src.training.checkpoint_io import TMP_GLOB
 from src.training.inference_results import INFERENCE_RESULTS_NAME, RESULTS_NAME
 from src.training.wandb_identity import override_hook_from_cfg
 from src.training.lodo import check_crop_options
@@ -97,7 +98,7 @@ def _check_checkpoint_collisions(
             RESULTS_NAME,
             INFERENCE_RESULTS_NAME,
             LAST_CHECKPOINT_NAME,
-            "*.tmp",  # a partial checkpoint left by a kill mid-save
+            TMP_GLOB,  # a partial checkpoint left by a kill mid-save
         ),
         inference_only=inference_only,
         dry_run=dry_run,
@@ -340,8 +341,10 @@ if __name__ == "__main__":
         default=False,
         help=(
             "When a checkpoint exists for the resolved run name, resume training from "
-            "it instead of exiting. Restores model weights, optimizer state, and best "
-            "val F1. Has no effect when no checkpoint is present."
+            "it instead of exiting: last.pt (the newest epoch), or best.pt for a run "
+            "dir without last.pt or when best.pt is newer. Restores model weights, "
+            "optimizer state, best val F1 and the patience count. Has no effect when "
+            "no checkpoint is present."
         ),
     )
     resume_group.add_argument(
