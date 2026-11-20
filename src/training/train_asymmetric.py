@@ -93,7 +93,12 @@ def _check_checkpoint_collisions(
         "best.pt",
         resume_training,
         override_training,
-        extra_delete=(RESULTS_NAME, INFERENCE_RESULTS_NAME, LAST_CHECKPOINT_NAME),
+        extra_delete=(
+            RESULTS_NAME,
+            INFERENCE_RESULTS_NAME,
+            LAST_CHECKPOINT_NAME,
+            "*.tmp",  # a partial checkpoint left by a kill mid-save
+        ),
         inference_only=inference_only,
         dry_run=dry_run,
         on_override=override_hook_from_cfg(cfg),
@@ -345,7 +350,7 @@ if __name__ == "__main__":
         default=False,
         help=(
             "When a checkpoint exists for the resolved run name, discard it "
-            "(best.pt, results.json and results.inference.json) and start that fold from scratch under the "
+            "(best.pt, last.pt, results.json and results.inference.json) and start that fold from scratch under the "
             "same run name. The old W&B run is kept and tagged 'overridden'; the restart logs to '<run_name>-o<N>'. "
             "Mutually exclusive with --resume-training and --inference-only."
         ),

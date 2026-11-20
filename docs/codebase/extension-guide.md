@@ -359,8 +359,12 @@ Behaviour worth knowing:
 - **Resume continues from the last epoch.** Track 1 and fine-tune write `last.pt` every
   epoch (model, optimizer, epoch, best val F1 so far, epochs without improvement, early-stop
   flag); a resume restores it, falling back to `best.pt` only for run dirs written before
-  `last.pt` existed. `best.pt` is still the evaluated checkpoint. An early-stopped or finished
-  run goes straight to evaluation. `--override-training` deletes `last.pt` with `best.pt`.
+  `last.pt` existed. `best.pt` is still the evaluated checkpoint. Early stopping is recomputed
+  from the saved count and the current patience, so a resume with a larger patience continues a
+  stopped run; a finished or still-stopped run goes straight to evaluation. If `best.pt` is newer
+  than `last.pt` (a kill between the two saves), its F1 is kept as the best so far. A `last.pt`
+  missing a required key (`LAST_REQUIRED_KEYS` in `lodo.py`) is refused. `--override-training`
+  deletes `last.pt` and any `*.tmp` with `best.pt`.
 - **Checkpoint before log.** Each epoch writes its checkpoints (`best.pt` if improved,
   `last.pt`, any `epoch<N>.pt`; pretraining `last.pt`) before `wandb.log(step=epoch)`, so W&B
   is never ahead of the restorable state and a resume under the same id loses no step. All

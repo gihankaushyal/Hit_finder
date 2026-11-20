@@ -7,6 +7,7 @@ are faked.
 
 from __future__ import annotations
 
+import copy
 import json
 import sys
 import types
@@ -397,6 +398,106 @@ class TestResumeFromLastEpoch:
         run_fold(_cfg(epochs=3), [0.5, 0.9, 0.6])
         assert seen == [(1, 1), (2, 2), (3, 3)]
 
+    def test_a_legacy_best_pt_only_dir_resumes_after_its_epoch(
+        self, run_fold, tmp_path
+    ):
+        run_fold(_cfg(epochs=3), [0.5, 0.9, 0.6])
+        (_ckpt_dir(tmp_path) / "last.pt").unlink()  # a run dir from before last.pt
+        # best.pt is epoch 2 (F1 0.9): epochs 3 and 4 train, and 0.85 must not beat it
+        data, n = run_fold(_cfg(epochs=4), [0.85, 0.7], resume_training=True)
+        assert n == 2
+        assert data["training"]["last_epoch"] == 4
+        best = torch.load(_ckpt_dir(tmp_path) / "best.pt", weights_only=False)
+        assert best["epoch"] == 2
+
+    def test_resume_keeps_the_patience_counter(self, run_fold):
+        # patience 2; epoch 3 did not improve, so one more non-improving epoch stops it
+        run_fold(_cfg(epochs=3, patience=2), [0.5, 0.9, 0.6])
+        data, n = run_fold(
+            _cfg(epochs=10, patience=2), [0.7, 0.99], resume_training=True
+        )
+        assert n == 1
+        assert data["training"]["early_stopped"] is True
+
+    def test_a_larger_patience_lets_an_early_stopped_run_continue(self, run_fold):
+        run_fold(_cfg(epochs=10, patience=2), [0.5, 0.9, 0.6, 0.55])  # stops at 4
+        data, n = run_fold(
+            _cfg(epochs=10, patience=4), [0.5, 0.5, 0.5], resume_training=True
+        )
+        assert n == 2  # epochs 5 and 6 bring the count from 2 to 4
+        assert data["training"]["last_epoch"] == 6
+        assert data["training"]["early_stopped"] is True
+
+    def test_resume_loads_last_pt_weights_and_optimizer_state(
+        self, run_fold, tmp_path, monkeypatch
+    ):
+        captured: list[tuple[dict, dict]] = []
+
+        def _step(model, loader, optimizer, criterion, device):
+            if resumed:
+                captured.append(
+                    (
+                        {k: v.clone() for k, v in model.state_dict().items()},
+                        # clone: step() below updates the live state tensors in place
+                        copy.deepcopy(optimizer.state_dict()["state"]),
+                    )
+                )
+            optimizer.zero_grad()
+            model(torch.ones(1, 4)).sum().backward()
+            optimizer.step()
+            return {"loss": 0.5, "hit_frac": 0.5}
+
+        resumed = False
+        monkeypatch.setattr(lodo, "train_one_epoch", _step)
+        run_fold(_cfg(epochs=2), [0.9, 0.5])  # best.pt = epoch 1, last.pt = epoch 2
+        last = torch.load(_ckpt_dir(tmp_path) / "last.pt", weights_only=False)
+        best = torch.load(_ckpt_dir(tmp_path) / "best.pt", weights_only=False)
+        assert not torch.equal(
+            last["model_state_dict"]["bias"], best["model_state_dict"]["bias"]
+        )
+
+        resumed = True
+        run_fold(_cfg(epochs=3), [0.4], resume_training=True)
+        weights, opt_state = captured[0]
+        for k, v in last["model_state_dict"].items():
+            assert torch.equal(weights[k], v)
+        saved = last["optimizer_state_dict"]["state"]
+        assert opt_state.keys() == saved.keys()
+        for i in saved:
+            assert torch.equal(opt_state[i]["exp_avg"], saved[i]["exp_avg"])
+
+    def test_a_kill_between_best_and_last_does_not_downgrade_best_pt(
+        self, run_fold, tmp_path, monkeypatch
+    ):
+        real_save = lodo.atomic_torch_save
+
+        def _killed_at_epoch_2(obj, path):
+            if Path(path).name == "last.pt" and obj["epoch"] == 2:
+                raise KeyboardInterrupt  # preempted after best.pt (epoch 2) was saved
+            real_save(obj, path)
+
+        monkeypatch.setattr(lodo, "atomic_torch_save", _killed_at_epoch_2)
+        with pytest.raises(KeyboardInterrupt):
+            run_fold(_cfg(epochs=4), [0.5, 0.9])
+        monkeypatch.setattr(lodo, "atomic_torch_save", real_save)
+        # last.pt is epoch 1 (best F1 0.5); best.pt is epoch 2 (F1 0.9)
+        run_fold(_cfg(epochs=4), [0.7, 0.8, 0.6], resume_training=True)
+        best = torch.load(_ckpt_dir(tmp_path) / "best.pt", weights_only=False)
+        assert best["epoch"] == 2
+        assert best["val_f1"] == 0.9
+
+    @pytest.mark.parametrize(
+        "key", ["epoch", "best_f1", "epochs_no_improve", "optimizer_state_dict"]
+    )
+    def test_a_last_pt_missing_a_key_is_refused(self, run_fold, tmp_path, key):
+        run_fold(_cfg(epochs=2), [0.5, 0.6])
+        path = _ckpt_dir(tmp_path) / "last.pt"
+        last = torch.load(path, weights_only=False)
+        del last[key]
+        torch.save(last, path)
+        with pytest.raises(RuntimeError, match=key):
+            run_fold(_cfg(epochs=3), [0.7], resume_training=True)
+
 
 def test_asymmetric_override_also_deletes_last_pt(tmp_path, monkeypatch):
     from src.training import train_asymmetric
@@ -406,7 +507,7 @@ def test_asymmetric_override_also_deletes_last_pt(tmp_path, monkeypatch):
     monkeypatch.delenv("SLURM_JOB_ID", raising=False)
     run_dir = _ckpt_dir(tmp_path)
     run_dir.mkdir(parents=True)
-    for name in ("best.pt", "last.pt", RESULTS_NAME):
+    for name in ("best.pt", "last.pt", "last.pt.tmp", RESULTS_NAME):
         (run_dir / name).write_bytes(b"x")
     train_asymmetric._check_checkpoint_collisions(
         [1],
@@ -416,4 +517,5 @@ def test_asymmetric_override_also_deletes_last_pt(tmp_path, monkeypatch):
         override_training=True,
     )
     assert not (run_dir / "last.pt").exists()
+    assert not (run_dir / "last.pt.tmp").exists()  # left by a SLURM kill mid-save
     assert not (run_dir / "best.pt").exists()

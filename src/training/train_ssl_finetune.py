@@ -9,7 +9,7 @@ Run naming convention (--run-name-prefix, REQUIRED, no default):
     vits16-mae-finetune-v2-fold{N}-seed{S} and, with --linear-probe,
     vits16-mae-probe-v2-fold{N}-seed{S}. If best.pt already exists under the
     resolved name, the script exits and asks for --resume-training (continue),
-    --override-training (discard best.pt and results.json, then restart; the old
+    --override-training (discard best.pt, last.pt and results.json, then restart; the old
     W&B run is kept and tagged 'overridden', the restart logs to <run_name>-o<N>) or
     --inference-only (evaluate best.pt without training; no pretrain checkpoint needed).
 
@@ -204,7 +204,12 @@ def prepare_finetune_run(
         "best.pt",
         resume_training,
         override_training,
-        extra_delete=(RESULTS_NAME, INFERENCE_RESULTS_NAME, LAST_CHECKPOINT_NAME),
+        extra_delete=(
+            RESULTS_NAME,
+            INFERENCE_RESULTS_NAME,
+            LAST_CHECKPOINT_NAME,
+            "*.tmp",  # a partial checkpoint left by a kill mid-save
+        ),
         dry_run=dry_run,
         inference_only=inference_only,
         on_override=override_hook_from_cfg(cfg),
@@ -288,7 +293,7 @@ def main() -> None:
         action="store_true",
         help=(
             "When best.pt exists for the resolved run name, discard it and "
-            "results.json and results.inference.json and start that fold from scratch under the same run name. The old W&B run is kept "
+            "last.pt, results.json and results.inference.json and start that fold from scratch under the same run name. The old W&B run is kept "
             "and tagged 'overridden'; the restart logs to '<run_name>-o<N>'."
         ),
     )

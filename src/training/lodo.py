@@ -64,6 +64,39 @@ _BASE_VAL_KEYS = ("ap", "auc_roc", "f1", "threshold")
 # Written every epoch so a resume continues where the run stopped; best.pt (the
 # evaluated checkpoint) is written only when val F1 improves.
 LAST_CHECKPOINT_NAME = "last.pt"
+# A last.pt missing one of these was not written by _train_fold; resuming from it
+# would silently reset the epoch or the early-stopping state.
+LAST_REQUIRED_KEYS = (
+    "epoch",
+    "model_state_dict",
+    "optimizer_state_dict",
+    "best_f1",
+    "epochs_no_improve",
+)
+
+
+def _reconcile_with_best(
+    last: dict, best_path: Path, device: str | torch.device
+) -> tuple[float, int]:
+    """best_f1 and epochs_no_improve to resume with, given last.pt and best.pt.
+
+    best.pt is saved before last.pt in an epoch, so a kill between the two leaves
+    best.pt one epoch ahead. Taking best.pt's F1 then keeps a later, worse epoch
+    from overwriting it.
+    """
+    best_f1 = -1.0 if np.isnan(last["best_f1"]) else float(last["best_f1"])
+    epochs_no_improve = int(last["epochs_no_improve"])
+    if best_path.exists():
+        best = torch.load(best_path, map_location=device, weights_only=False)
+        best_val = best.get("val_f1", float("nan"))
+        if best.get("epoch", -1) > last["epoch"] and not np.isnan(best_val):
+            print(
+                f"  best.pt (epoch {best['epoch']}, val F1 {best_val:.4f}) is newer than "
+                f"last.pt (epoch {last['epoch']}): keeping it as the best so far."
+            )
+            best_f1 = max(best_f1, float(best_val))
+            epochs_no_improve = 0
+    return best_f1, epochs_no_improve
 
 
 def _build_intra_split(sessions: list[dict]) -> dict:
@@ -395,6 +428,13 @@ def _train_fold(
             if restore_path is not None
             else None
         )
+        if restore_path == last_path:
+            _missing = sorted(set(LAST_REQUIRED_KEYS) - _ckpt.keys())
+            if _missing:
+                raise RuntimeError(
+                    f"cannot resume {restore_path}: missing key(s) {_missing}. It was not "
+                    "written by this trainer; start a new run with --override-training."
+                )
         wandb_id = wandb_id_for_training(
             ckpt_dir,
             run_name,
@@ -443,19 +483,28 @@ def _train_fold(
                 print(
                     "  Warning: checkpoint has no optimizer state — starting with fresh optimizer."
                 )
-            # last.pt carries the best F1 so far; a legacy best.pt carries its own.
-            _saved_f1 = _ckpt.get("best_f1", _ckpt.get("val_f1", -1.0))
-            best_f1 = -1.0 if np.isnan(_saved_f1) else _saved_f1
-            epochs_no_improve = _ckpt.get("epochs_no_improve", 0)
-            early_stopped = bool(_ckpt.get("early_stopped", False))
-            start_epoch = _ckpt.get("epoch", 0) + 1
+            if restore_path == last_path:
+                best_f1, epochs_no_improve = _reconcile_with_best(
+                    _ckpt, ckpt_path, device
+                )
+                start_epoch = _ckpt["epoch"] + 1
+            else:
+                # Legacy best.pt (no last.pt): it is the best model, saved when it improved.
+                _saved_f1 = _ckpt.get("val_f1", -1.0)
+                best_f1 = -1.0 if np.isnan(_saved_f1) else _saved_f1
+                epochs_no_improve = _ckpt.get("epochs_no_improve", 0)
+                start_epoch = _ckpt.get("epoch", 0) + 1
+            # From the counter and the current patience, not the saved flag: a resume
+            # with a larger patience continues an early-stopped run.
+            early_stopped = epochs_no_improve >= patience
             print(
                 f"  Resuming training from epoch {start_epoch} ({restore_path.name}; "
                 f"best val F1 so far: {best_f1:.4f})"
             )
             if early_stopped:
                 print(
-                    f"  The run early-stopped at epoch {start_epoch - 1}. "
+                    f"  The run early-stopped: {epochs_no_improve} epoch(s) without "
+                    f"improvement by epoch {start_epoch - 1} (patience {patience}). "
                     "Nothing left to train — proceeding to evaluation."
                 )
             if start_epoch > epochs:
