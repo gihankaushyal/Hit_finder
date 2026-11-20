@@ -317,7 +317,7 @@ The orchestrators (`submit_asymmetric_lodo_all.sh`, `submit_ssl_finetune_all.sh`
 
 1. Single fold: `python -m src.training.train_asymmetric --config <yaml> --run-name-prefix resnet18-asymmetric-v2 --folds 1 --seed 43`, or for the SLURM wrappers set `TRAIN_SEED=43` in the environment of `scripts/submit_asymmetric_lodo_fold.sh` / `scripts/submit_ssl_finetune.sh` (they validate it and add `--seed`). `submit_asymmetric_lodo_all.sh` and `submit_ssl_finetune_all.sh` refuse a set `TRAIN_SEED`, because `sbatch --export=ALL` would hand it to every fold.
 2. Keep the arm's suffix (`-jitter`, `-careful`, `-careful-jitter`) so the repeat lands next to its seed-42 run.
-3. A new run name starts fresh. If you re-run an archived name, `--resume-training` (the wrapper default) keeps the old W&B run id and overwrites that run's history; use `--override-training` to get a new id.
+3. A new run name starts fresh. If you re-run an archived name into an emptied run directory, `--resume-training` (the wrapper default) finds no checkpoint, so it trains from scratch under a fresh W&B id; the old run is tagged `overridden` and kept.
 4. Aggregate: `python scripts/aggregate_lodo_results.py --select all` lists each seed as its own group; add `--pool-seeds` to average the seeds of a group per fold.
 
 ## W&B Run Ids After `--override-training` {#override-wandb-ids}
@@ -353,8 +353,31 @@ Behaviour worth knowing:
 - **A fresh start never reuses an existing W&B run id.** Before the training `wandb.init`,
   `wandb_id_for_training` (Track 1 `_train_fold`, SSL pretrain) asks W&B whether the current id
   exists; if so it tags that run `overridden` and rotates past it (e.g. after `rm -rf` of the
-  checkpoint dir, or a crash before `best.pt`). Genuine resumes and inference keep the current
-  id. If W&B cannot be queried, the current id is kept with a warning.
+  checkpoint dir, or a crash before the first save). Genuine resumes and inference keep the
+  current id. If W&B cannot be queried, the current id is kept with a warning; in offline or
+  disabled mode it is kept silently, so a later `wandb sync` can still splice into the old run.
+- **Resume continues from the last epoch.** Track 1 and fine-tune write `last.pt` every
+  epoch (model, optimizer, epoch, best val F1 so far, epochs without improvement, early-stop
+  flag); a resume restores it, falling back to `best.pt` only for run dirs written before
+  `last.pt` existed. `best.pt` is still the evaluated checkpoint. Early stopping is recomputed
+  from the saved count and the current patience, so a resume with a larger patience continues a
+  stopped run; a finished or still-stopped run goes straight to evaluation. If `best.pt` is newer
+  than `last.pt` (a kill between the two saves), the resume restores `best.pt` instead, so no
+  epoch is trained twice, and logs that epoch's val F1 to W&B (its other metrics were never
+  saved; a legacy `best.pt`-only resume logs nothing). Checkpoints are loaded on the CPU. A `last.pt` missing a required key
+  (`LAST_REQUIRED_KEYS` in `lodo.py`) is refused. `--override-training` deletes `last.pt` and
+  any `*.tmp` with `best.pt` (pretraining: `epoch*.pt` and `*.tmp` with `last.pt`).
+- **Checkpoint before log.** Each epoch writes any `epoch<N>.pt`, then `best.pt` (if improved),
+  then `last.pt`, then `wandb.log(step=epoch)` (pretraining: `epoch<N>.pt`, `last.pt`, log).
+  A resume starts after the epoch of `last.pt`, or of a newer `best.pt`, so the snapshot goes
+  before both; the log goes after them so W&B is never ahead of the restorable state. A kill between `last.pt` and the log leaves that epoch
+  missing from W&B. Nothing calls `wandb.log` without a step before the epoch logs: on a resumed
+  run W&B drops any step below its counter, so a step-less log would cost the first resumed
+  epoch. All checkpoint writes go through `atomic_torch_save` (`src/training/checkpoint_io.py`:
+  write `<file>.tmp`, fsync, then rename), so a preemption mid-save never leaves a truncated
+  file. The directory is not fsynced: a node crash right after the rename can keep the previous
+  file. A legacy `best.pt`-only resume restarts after the best epoch and can still re-log steps
+  W&B has.
 - **Track 1 override is per fold.** `train_asymmetric` runs the gate once up front with
   `dry_run=True` (fail fast, nothing deleted or rotated) and the real gate for each fold just
   before that fold starts, so a crash on fold 1 leaves fold 2's checkpoint and id untouched.
@@ -373,11 +396,17 @@ both:
   If the marker write fails the gate warns on stderr and carries on (the delete already
   happened, so failing protects nothing); a requeue of that job would then override again.
 - A **requeue** (same job id, higher restart count) prints `[override] already applied by
-  job N ...`, keeps the checkpoint, does not rotate the W&B id again, and returns the run in
+  job N ...`, keeps the checkpoint, does not rotate the W&B id again at the gate (the trainer
+  may, see below), and returns the run in
   a `continued` set. This is checked before looking for the checkpoint, so a requeue that
   lands after the delete but before the first save is also continued. Every entry point turns
   the set into a resume with `effective_resume(...)` (Track 1 per fold and intra, SSL
-  fine-tune, SSL pretrain), and a resume reuses the current W&B id even with no checkpoint.
+  fine-tune, SSL pretrain). A resume keeps the current W&B id only when it restores a
+  checkpoint (`last.pt`, or a legacy `best.pt`, for Track 1 and fine-tune; `last.pt` for
+  pretraining). With no
+  checkpoint it trains from epoch 1, so it gets a fresh id (`<run_name>-oN`) and the partial
+  run is tagged `overridden`; logging epoch 1 again into a run that already has those steps
+  would drop or splice them.
 - Same job id and same restart count (two launches in one `salloc` / `srun --pty`
   allocation) is a deliberate second override and applies again, as does a different job id.
   With no `SLURM_JOB_ID` (a direct `python -m ...` launch) the flag is honoured every time

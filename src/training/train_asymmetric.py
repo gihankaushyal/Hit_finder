@@ -49,7 +49,12 @@ from src.evaluation.benchmark import (
     save_split_artifact,
 )
 from src.hitfinders import get_hitfinder
-from src.training.lodo import _build_intra_split, _train_fold, build_sessions
+from src.training.lodo import (
+    LAST_CHECKPOINT_NAME,
+    _build_intra_split,
+    _train_fold,
+    build_sessions,
+)
 from src.training.run_naming import (
     ASYMMETRIC_CONVENTION,
     ASYMMETRIC_EXAMPLE,
@@ -59,6 +64,7 @@ from src.training.run_naming import (
     fold_run_name,
     validate_run_name_prefix,
 )
+from src.training.checkpoint_io import TMP_GLOB
 from src.training.inference_results import INFERENCE_RESULTS_NAME, RESULTS_NAME
 from src.training.wandb_identity import override_hook_from_cfg
 from src.training.lodo import check_crop_options
@@ -88,7 +94,12 @@ def _check_checkpoint_collisions(
         "best.pt",
         resume_training,
         override_training,
-        extra_delete=(RESULTS_NAME, INFERENCE_RESULTS_NAME),
+        extra_delete=(
+            RESULTS_NAME,
+            INFERENCE_RESULTS_NAME,
+            LAST_CHECKPOINT_NAME,
+            TMP_GLOB,  # a partial checkpoint left by a kill mid-save
+        ),
         inference_only=inference_only,
         dry_run=dry_run,
         on_override=override_hook_from_cfg(cfg),
@@ -330,8 +341,10 @@ if __name__ == "__main__":
         default=False,
         help=(
             "When a checkpoint exists for the resolved run name, resume training from "
-            "it instead of exiting. Restores model weights, optimizer state, and best "
-            "val F1. Has no effect when no checkpoint is present."
+            "it instead of exiting: last.pt (the newest epoch), or best.pt for a run "
+            "dir without last.pt or when best.pt is newer. Restores model weights, "
+            "optimizer state, best val F1 and the patience count. Has no effect when "
+            "no checkpoint is present."
         ),
     )
     resume_group.add_argument(
@@ -340,7 +353,7 @@ if __name__ == "__main__":
         default=False,
         help=(
             "When a checkpoint exists for the resolved run name, discard it "
-            "(best.pt, results.json and results.inference.json) and start that fold from scratch under the "
+            "(best.pt, last.pt, results.json and results.inference.json) and start that fold from scratch under the "
             "same run name. The old W&B run is kept and tagged 'overridden'; the restart logs to '<run_name>-o<N>'. "
             "Mutually exclusive with --resume-training and --inference-only."
         ),

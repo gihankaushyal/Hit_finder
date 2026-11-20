@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import argparse
 import math
-import shutil
 import warnings
 from pathlib import Path
 
@@ -33,6 +32,7 @@ from src.data.dataloader import ssl_crop_loader
 from src.data.frame_cache import FrameCache, frame_cache_from_cfg, verify_cache_or_raise
 from src.hitfinders import get_hitfinder
 from src.models.ssl import MASKING_PEAK_AWARE, build_mae_model
+from src.training.checkpoint_io import TMP_GLOB, atomic_torch_save
 from src.training.lodo import build_sessions
 from src.training.run_naming import (
     SSL_PRETRAIN_CONVENTION,
@@ -81,7 +81,7 @@ def prepare_pretrain_run(
         PRETRAIN_CHECKPOINT_NAME,
         resume_training,
         override_training,
-        extra_delete=(EPOCH_SNAPSHOT_GLOB,),
+        extra_delete=(EPOCH_SNAPSHOT_GLOB, TMP_GLOB),  # TMP_GLOB: a kill mid-save
         checkpoint_root=cfg.get("checkpoint_dir", CHECKPOINT_DIR_DEFAULT),
         dry_run=dry_run,
         on_override=override_hook_from_cfg(cfg),
@@ -136,18 +136,22 @@ def run_pretrain(
     last_path = ckpt_dir / PRETRAIN_CHECKPOINT_NAME
 
     start_epoch = 1
+    restored_epoch: int | None = None
     if resume and last_path.exists():
-        state = torch.load(last_path, map_location=device, weights_only=True)
+        # On the CPU: load_state_dict copies to the model's device, and a GPU-mapped
+        # load would hold a second copy there.
+        state = torch.load(last_path, map_location="cpu", weights_only=True)
         model.load_state_dict(state["model_state_dict"])
         opt.load_state_dict(state["optimizer_state_dict"])
         start_epoch = state["epoch"] + 1
+        restored_epoch = state["epoch"]
 
     wandb_id = wandb_id_for_training(
         ckpt_dir,
         run_name,
         cfg["wandb"].get("project"),
         cfg["wandb"].get("entity"),
-        resuming=resume,
+        restored_epoch=restored_epoch,
     )
     wandb.init(
         project=cfg["wandb"]["project"],
@@ -209,9 +213,6 @@ def run_pretrain(
             continue
         final_loss = float(np.mean(losses))
         epochs_run += 1
-        wandb.log(
-            {"epoch": epoch, "pretrain/loss": final_loss, "pretrain/lr": lr}, step=epoch
-        )
         ckpt_payload = {
             "epoch": epoch,
             "model_state_dict": model.state_dict(),
@@ -223,10 +224,14 @@ def run_pretrain(
             # (e.g. a different --stage-dir that wasn't copied from the same NFS source).
             "detector_dirs": dict(cfg.get("lodo", {}).get("detector_dirs", {})),
         }
-        torch.save(ckpt_payload, last_path)
+        # Save first, log second: W&B never runs ahead of the restorable state. The
+        # snapshot goes before last.pt: a resume starts after last.pt's epoch.
         if epoch % tr.get("checkpoint_every", 20) == 0:
-            epoch_ckpt = ckpt_dir / f"epoch{epoch}.pt"
-            shutil.copy2(last_path, epoch_ckpt)
+            atomic_torch_save(ckpt_payload, ckpt_dir / f"epoch{epoch}.pt")
+        atomic_torch_save(ckpt_payload, last_path)
+        wandb.log(
+            {"epoch": epoch, "pretrain/loss": final_loss, "pretrain/lr": lr}, step=epoch
+        )
     wandb.finish()
     return {
         "epochs_run": epochs_run,

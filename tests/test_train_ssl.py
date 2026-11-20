@@ -174,7 +174,7 @@ class TestPretrainRunNaming:
     def _existing_run(self, cfg: dict) -> Path:
         run_dir = Path(cfg["checkpoint_dir"]) / "mae-vits16-v2-fold1-seed42"
         run_dir.mkdir(parents=True)
-        for name in ("last.pt", "epoch20.pt", "epoch40.pt"):
+        for name in ("last.pt", "epoch20.pt", "epoch40.pt", "last.pt.tmp"):
             (run_dir / name).write_bytes(b"x")
         return run_dir
 
@@ -203,6 +203,7 @@ class TestPretrainRunNaming:
         prepare_pretrain_run("mae-vits16-v2", 1, cfg, override_training=True)
         assert not (run_dir / "last.pt").exists()
         assert not list(run_dir.glob("epoch*.pt"))
+        assert not (run_dir / "last.pt.tmp").exists()  # left by a kill mid-save
 
     def test_gate_checks_the_directory_run_pretrain_writes(
         self, synthetic_cxi, tmp_path, monkeypatch
@@ -253,6 +254,7 @@ class TestFinetuneRunNaming:
         run_dir = root / "checkpoints" / run_name
         run_dir.mkdir(parents=True)
         (run_dir / "best.pt").write_bytes(b"x")
+        (run_dir / "last.pt").write_bytes(b"x")
         (run_dir / "results.json").write_text("{}")
         return run_dir
 
@@ -281,6 +283,7 @@ class TestFinetuneRunNaming:
             "vits16-mae-v2", 4, {"seed": 42}, linear_probe=True, override_training=True
         )
         assert not (run_dir / "best.pt").exists()
+        assert not (run_dir / "last.pt").exists()
         assert not (run_dir / "results.json").exists()
 
     def test_read_pretrain_epoch(self, tmp_path):
@@ -545,10 +548,10 @@ class TestPretrainFreshStartWandbId:
             )
         assert exc.value.kwargs["id"] == "mae-test-fold0"
 
-    def test_resume_without_a_checkpoint_keeps_current_id(
+    def test_resume_without_a_checkpoint_rotates_past_the_existing_run(
         self, synthetic_cxi, tmp_path, monkeypatch
     ):
-        """A requeue before the first save (override already applied) reuses the run."""
+        """A requeue before the first save trains from epoch 1: it gets a fresh id."""
         cfg, _ = self._setup(
             tmp_path, monkeypatch, {"sfx-hitfinder-test/mae-test-fold0"}
         )
@@ -561,7 +564,7 @@ class TestPretrainFreshStartWandbId:
                 "cpu",
                 resume=True,
             )
-        assert exc.value.kwargs["id"] == "mae-test-fold0"
+        assert exc.value.kwargs["id"] == "mae-test-fold0-o2"
 
 
 class TestIdempotentOverrideEntryPoints:
@@ -650,3 +653,76 @@ class TestIdempotentOverrideEntryPoints:
         prep, cfg, ckpt = self._pretrain(tmp_path, monkeypatch)
         assert prep("mae-vits16-v2", 1, cfg, override_training=True) == self.PT_NAME
         assert not ckpt.exists()
+
+
+def test_pretrain_saves_last_pt_before_logging_the_epoch(
+    synthetic_cxi, tmp_path, monkeypatch
+):
+    """W&B must never be ahead of the restorable state (resume keeps the id)."""
+    import wandb
+
+    cfg = _tiny_cfg(tmp_path / "ckpt")
+    last_path = Path(cfg["checkpoint_dir"]) / "mae-test-fold0" / "last.pt"
+    seen: list[tuple[int, int]] = []
+
+    def _log(payload, step=None, **kw):
+        if "pretrain/loss" in payload:
+            last = torch.load(last_path, map_location="cpu", weights_only=True)
+            seen.append((step, last["epoch"]))
+
+    real_init = wandb.init
+
+    def _init(*args, **kwargs):
+        run = real_init(*args, **kwargs)
+        monkeypatch.setattr(wandb, "log", _log)  # init rebinds wandb.log
+        return run
+
+    monkeypatch.setattr(wandb, "init", _init)
+    run_pretrain(cfg, {"s0": synthetic_cxi}, ["s0"], "mae-test-fold0", "cpu")
+    assert seen == [(1, 1), (2, 2)]
+
+
+def test_pretrain_snapshot_is_saved_atomically_before_last_pt(
+    synthetic_cxi, tmp_path, monkeypatch
+):
+    """A kill before last.pt must not lose the epoch snapshot: resume skips that epoch."""
+    import src.training.train_ssl_pretrain as tsp
+
+    cfg = _tiny_cfg(tmp_path / "ckpt")  # checkpoint_every: 1
+    run_dir = Path(cfg["checkpoint_dir"]) / "mae-test-fold0"
+    real_save = tsp.atomic_torch_save
+
+    def _killed_before_last_pt(obj, path):
+        if Path(path).name == "last.pt":
+            raise KeyboardInterrupt
+        real_save(obj, path)
+
+    monkeypatch.setattr(tsp, "atomic_torch_save", _killed_before_last_pt)
+    with pytest.raises(KeyboardInterrupt):
+        run_pretrain(cfg, {"s0": synthetic_cxi}, ["s0"], "mae-test-fold0", "cpu")
+    snap = torch.load(run_dir / "epoch1.pt", map_location="cpu", weights_only=False)
+    assert snap["epoch"] == 1
+    assert not (run_dir / "last.pt").exists()
+
+
+def test_pretrain_resume_loads_last_pt_on_the_cpu(synthetic_cxi, tmp_path, monkeypatch):
+    """A GPU-mapped load keeps a second copy of the weights on the device."""
+    import src.training.train_ssl_pretrain as tsp
+
+    cfg = _tiny_cfg(tmp_path / "ckpt")
+    run_pretrain(cfg, {"s0": synthetic_cxi}, ["s0"], "mae-test-fold0", "cpu")
+    real_load = tsp.torch.load
+    locations: list[object] = []
+
+    def _load(*args, **kwargs):
+        locations.append(kwargs.get("map_location"))
+        return real_load(*args, **kwargs)
+
+    monkeypatch.setattr(tsp.torch, "load", _load)
+    cfg["training"]["epochs"] = 3
+    # a torch.device, so a load mapped to the training device differs from "cpu"
+    device = torch.device("cpu")
+    run_pretrain(
+        cfg, {"s0": synthetic_cxi}, ["s0"], "mae-test-fold0", device, resume=True
+    )
+    assert locations == ["cpu"]

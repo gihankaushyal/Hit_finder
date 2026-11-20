@@ -9,7 +9,7 @@ Run naming convention (--run-name-prefix, REQUIRED, no default):
     vits16-mae-finetune-v2-fold{N}-seed{S} and, with --linear-probe,
     vits16-mae-probe-v2-fold{N}-seed{S}. If best.pt already exists under the
     resolved name, the script exits and asks for --resume-training (continue),
-    --override-training (discard best.pt and results.json, then restart; the old
+    --override-training (discard best.pt, last.pt and results.json, then restart; the old
     W&B run is kept and tagged 'overridden', the restart logs to <run_name>-o<N>) or
     --inference-only (evaluate best.pt without training; no pretrain checkpoint needed).
 
@@ -52,7 +52,12 @@ from src.models.ssl import (
     build_ssl_classifier,
 )
 from src.training.recipe import DEFAULT_LAYER_DECAY, DEFAULT_WARMUP_EPOCHS, LR_CONSTANT
-from src.training.lodo import _train_fold, build_sessions, check_crop_options
+from src.training.lodo import (
+    LAST_CHECKPOINT_NAME,
+    _train_fold,
+    build_sessions,
+    check_crop_options,
+)
 from src.training.run_naming import (
     SSL_FINETUNE_CONVENTION,
     SSL_FINETUNE_EXAMPLE,
@@ -63,6 +68,7 @@ from src.training.run_naming import (
     fold_run_name,
     validate_run_name_prefix,
 )
+from src.training.checkpoint_io import TMP_GLOB
 from src.training.inference_results import INFERENCE_RESULTS_NAME, RESULTS_NAME
 from src.training.wandb_identity import override_hook_from_cfg
 from src.utils.config import apply_seed_override, load_config, seed_arg
@@ -199,7 +205,12 @@ def prepare_finetune_run(
         "best.pt",
         resume_training,
         override_training,
-        extra_delete=(RESULTS_NAME, INFERENCE_RESULTS_NAME),
+        extra_delete=(
+            RESULTS_NAME,
+            INFERENCE_RESULTS_NAME,
+            LAST_CHECKPOINT_NAME,
+            TMP_GLOB,  # a partial checkpoint left by a kill mid-save
+        ),
         dry_run=dry_run,
         inference_only=inference_only,
         on_override=override_hook_from_cfg(cfg),
@@ -274,8 +285,10 @@ def main() -> None:
         "--resume-training",
         action="store_true",
         help=(
-            "When best.pt exists for the resolved run name, resume training from "
-            "it instead of exiting. Has no effect when no checkpoint is present."
+            "When best.pt exists for the resolved run name, resume training instead "
+            "of exiting: from last.pt (the newest epoch), or from best.pt for a run "
+            "dir without last.pt or when best.pt is newer. Has no effect when no "
+            "checkpoint is present."
         ),
     )
     resume_group.add_argument(
@@ -283,7 +296,7 @@ def main() -> None:
         action="store_true",
         help=(
             "When best.pt exists for the resolved run name, discard it and "
-            "results.json and results.inference.json and start that fold from scratch under the same run name. The old W&B run is kept "
+            "last.pt, results.json and results.inference.json and start that fold from scratch under the same run name. The old W&B run is kept "
             "and tagged 'overridden'; the restart logs to '<run_name>-o<N>'."
         ),
     )

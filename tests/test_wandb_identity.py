@@ -237,13 +237,22 @@ class TestEnsureFreshWandbId:
 class TestWandbIdForTraining:
     def test_resume_keeps_current_id_without_api(self, tmp_path, fake_wandb):
         FakeApi.runs[f"proj/{RUN}"] = FakeRun([])
-        got = wi.wandb_id_for_training(tmp_path, RUN, "proj", None, resuming=True)
+        got = wi.wandb_id_for_training(tmp_path, RUN, "proj", None, restored_epoch=5)
         assert got == RUN and FakeApi.paths == []
 
     def test_fresh_start_rotates_past_existing_run(self, tmp_path, fake_wandb):
         FakeApi.runs[f"proj/{RUN}"] = FakeRun([])
-        got = wi.wandb_id_for_training(tmp_path, RUN, "proj", None, resuming=False)
+        got = wi.wandb_id_for_training(tmp_path, RUN, "proj", None, restored_epoch=None)
         assert got == f"{RUN}-o2"
+
+    def test_restored_epoch_zero_is_still_a_resume(self, tmp_path, fake_wandb):
+        FakeApi.runs[f"proj/{RUN}"] = FakeRun([])
+        got = wi.wandb_id_for_training(tmp_path, RUN, "proj", None, restored_epoch=0)
+        assert got == RUN and FakeApi.paths == []
+
+    def test_the_flag_cannot_be_passed(self, tmp_path):
+        with pytest.raises(TypeError):
+            wi.wandb_id_for_training(tmp_path, RUN, "proj", None, resuming=True)
 
 
 class TestMissingRunMessage:
