@@ -21,8 +21,7 @@ def test_a_failed_write_keeps_the_previous_file(tmp_path, monkeypatch):
     atomic_torch_save({"epoch": 3}, path)
 
     def _dies_mid_write(obj, f):
-        with open(f, "wb") as fh:
-            fh.write(b"trunc")
+        f.write(b"trunc")
         raise OSError("preempted")
 
     monkeypatch.setattr(checkpoint_io.torch, "save", _dies_mid_write)
@@ -31,3 +30,18 @@ def test_a_failed_write_keeps_the_previous_file(tmp_path, monkeypatch):
     monkeypatch.undo()
     assert torch.load(path, weights_only=True) == {"epoch": 3}
     assert list(tmp_path.iterdir()) == [path]
+
+
+def test_the_data_is_fsynced_before_the_rename(tmp_path, monkeypatch):
+    order: list[str] = []
+    real_fsync, real_replace = checkpoint_io.os.fsync, checkpoint_io.os.replace
+    monkeypatch.setattr(
+        checkpoint_io.os, "fsync", lambda fd: (order.append("fsync"), real_fsync(fd))
+    )
+    monkeypatch.setattr(
+        checkpoint_io.os,
+        "replace",
+        lambda a, b: (order.append("replace"), real_replace(a, b)),
+    )
+    atomic_torch_save({"epoch": 1}, tmp_path / "last.pt")
+    assert order == ["fsync", "replace"]

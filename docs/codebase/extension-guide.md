@@ -362,15 +362,20 @@ Behaviour worth knowing:
   `last.pt` existed. `best.pt` is still the evaluated checkpoint. Early stopping is recomputed
   from the saved count and the current patience, so a resume with a larger patience continues a
   stopped run; a finished or still-stopped run goes straight to evaluation. If `best.pt` is newer
-  than `last.pt` (a kill between the two saves), its F1 is kept as the best so far. A `last.pt`
-  missing a required key (`LAST_REQUIRED_KEYS` in `lodo.py`) is refused. `--override-training`
-  deletes `last.pt` and any `*.tmp` with `best.pt`.
-- **Checkpoint before log.** Each epoch writes its checkpoints (`best.pt` if improved,
-  `last.pt`, any `epoch<N>.pt`; pretraining `last.pt`) before `wandb.log(step=epoch)`, so W&B
-  is never ahead of the restorable state and a resume under the same id loses no step. All
-  checkpoint writes go through `atomic_torch_save` (`src/training/checkpoint_io.py`: write
-  `<file>.tmp`, then rename), so a preemption mid-save never leaves a truncated file. A legacy
-  `best.pt`-only resume restarts after the best epoch and can still re-log steps W&B has.
+  than `last.pt` (a kill between the two saves), the resume restores `best.pt` instead, so no
+  epoch is trained twice. Checkpoints are loaded on the CPU. A `last.pt` missing a required key
+  (`LAST_REQUIRED_KEYS` in `lodo.py`) is refused. `--override-training` deletes `last.pt` and
+  any `*.tmp` with `best.pt` (pretraining: `epoch*.pt` and `*.tmp` with `last.pt`).
+- **Checkpoint before log.** Each epoch writes `best.pt` (if improved), then any `epoch<N>.pt`,
+  then `last.pt`, then `wandb.log(step=epoch)` (pretraining: `epoch<N>.pt`, `last.pt`, log).
+  `last.pt` goes last because a resume starts after its epoch, and the log after it so W&B is
+  never ahead of the restorable state. A kill between `last.pt` and the log leaves that epoch
+  missing from W&B. Nothing calls `wandb.log` without a step before the epoch logs: on a resumed
+  run W&B drops any step below its counter, so a step-less log would cost the first resumed
+  epoch. All checkpoint writes go through `atomic_torch_save` (`src/training/checkpoint_io.py`:
+  write `<file>.tmp`, fsync, then rename), so a preemption mid-save never leaves a truncated
+  file. A legacy `best.pt`-only resume restarts after the best epoch and can still re-log steps
+  W&B has.
 - **Track 1 override is per fold.** `train_asymmetric` runs the gate once up front with
   `dry_run=True` (fail fast, nothing deleted or rotated) and the real gate for each fold just
   before that fold starts, so a crash on fold 1 leaves fold 2's checkpoint and id untouched.

@@ -174,7 +174,7 @@ class TestPretrainRunNaming:
     def _existing_run(self, cfg: dict) -> Path:
         run_dir = Path(cfg["checkpoint_dir"]) / "mae-vits16-v2-fold1-seed42"
         run_dir.mkdir(parents=True)
-        for name in ("last.pt", "epoch20.pt", "epoch40.pt"):
+        for name in ("last.pt", "epoch20.pt", "epoch40.pt", "last.pt.tmp"):
             (run_dir / name).write_bytes(b"x")
         return run_dir
 
@@ -203,6 +203,7 @@ class TestPretrainRunNaming:
         prepare_pretrain_run("mae-vits16-v2", 1, cfg, override_training=True)
         assert not (run_dir / "last.pt").exists()
         assert not list(run_dir.glob("epoch*.pt"))
+        assert not (run_dir / "last.pt.tmp").exists()  # left by a kill mid-save
 
     def test_gate_checks_the_directory_run_pretrain_writes(
         self, synthetic_cxi, tmp_path, monkeypatch
@@ -679,3 +680,26 @@ def test_pretrain_saves_last_pt_before_logging_the_epoch(
     monkeypatch.setattr(wandb, "init", _init)
     run_pretrain(cfg, {"s0": synthetic_cxi}, ["s0"], "mae-test-fold0", "cpu")
     assert seen == [(1, 1), (2, 2)]
+
+
+def test_pretrain_snapshot_is_saved_atomically_before_last_pt(
+    synthetic_cxi, tmp_path, monkeypatch
+):
+    """A kill before last.pt must not lose the epoch snapshot: resume skips that epoch."""
+    import src.training.train_ssl_pretrain as tsp
+
+    cfg = _tiny_cfg(tmp_path / "ckpt")  # checkpoint_every: 1
+    run_dir = Path(cfg["checkpoint_dir"]) / "mae-test-fold0"
+    real_save = tsp.atomic_torch_save
+
+    def _killed_before_last_pt(obj, path):
+        if Path(path).name == "last.pt":
+            raise KeyboardInterrupt
+        real_save(obj, path)
+
+    monkeypatch.setattr(tsp, "atomic_torch_save", _killed_before_last_pt)
+    with pytest.raises(KeyboardInterrupt):
+        run_pretrain(cfg, {"s0": synthetic_cxi}, ["s0"], "mae-test-fold0", "cpu")
+    snap = torch.load(run_dir / "epoch1.pt", map_location="cpu", weights_only=False)
+    assert snap["epoch"] == 1
+    assert not (run_dir / "last.pt").exists()

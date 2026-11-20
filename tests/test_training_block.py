@@ -466,7 +466,7 @@ class TestResumeFromLastEpoch:
         for i in saved:
             assert torch.equal(opt_state[i]["exp_avg"], saved[i]["exp_avg"])
 
-    def test_a_kill_between_best_and_last_does_not_downgrade_best_pt(
+    def test_a_kill_between_best_and_last_resumes_from_best_pt(
         self, run_fold, tmp_path, monkeypatch
     ):
         real_save = lodo.atomic_torch_save
@@ -480,11 +480,43 @@ class TestResumeFromLastEpoch:
         with pytest.raises(KeyboardInterrupt):
             run_fold(_cfg(epochs=4), [0.5, 0.9])
         monkeypatch.setattr(lodo, "atomic_torch_save", real_save)
-        # last.pt is epoch 1 (best F1 0.5); best.pt is epoch 2 (F1 0.9)
-        run_fold(_cfg(epochs=4), [0.7, 0.8, 0.6], resume_training=True)
+        # last.pt is epoch 1 (best F1 0.5); best.pt is epoch 2 (F1 0.9): resume from
+        # best.pt, so epoch 2 is not trained again and only epochs 3 and 4 run
+        data, n = run_fold(_cfg(epochs=4), [0.7, 0.8], resume_training=True)
+        assert n == 2
+        assert data["training"]["best_epoch"] == 2
         best = torch.load(_ckpt_dir(tmp_path) / "best.pt", weights_only=False)
         assert best["epoch"] == 2
         assert best["val_f1"] == 0.9
+
+    def test_the_epoch_snapshot_is_saved_before_last_pt(
+        self, run_fold, tmp_path, monkeypatch
+    ):
+        real_save = lodo.atomic_torch_save
+
+        def _killed_before_last_pt(obj, path):
+            if Path(path).name == "last.pt" and obj["epoch"] == 2:
+                raise KeyboardInterrupt
+            real_save(obj, path)
+
+        monkeypatch.setattr(lodo, "atomic_torch_save", _killed_before_last_pt)
+        cfg = _cfg(epochs=3)
+        cfg["training"]["save_epochs"] = [2]
+        with pytest.raises(KeyboardInterrupt):
+            run_fold(cfg, [0.5, 0.4])
+        assert (_ckpt_dir(tmp_path) / "epoch2.pt").exists()
+
+    def test_a_resume_logs_its_first_epoch(self, run_fold, monkeypatch):
+        """W&B drops a step below its counter: no unstepped log may precede an epoch."""
+        run_fold(_cfg(epochs=3), [0.5, 0.9, 0.6])
+        steps: list[int | None] = []
+        monkeypatch.setattr(
+            sys.modules["wandb"],
+            "log",
+            lambda payload, step=None, **kw: steps.append(step),
+        )
+        run_fold(_cfg(epochs=4), [0.7], resume_training=True)
+        assert steps[0] == 4
 
     @pytest.mark.parametrize(
         "key", ["epoch", "best_f1", "epochs_no_improve", "optimizer_state_dict"]

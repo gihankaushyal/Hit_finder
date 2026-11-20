@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import argparse
 import math
-import shutil
 import warnings
 from pathlib import Path
 
@@ -82,7 +81,7 @@ def prepare_pretrain_run(
         PRETRAIN_CHECKPOINT_NAME,
         resume_training,
         override_training,
-        extra_delete=(EPOCH_SNAPSHOT_GLOB,),
+        extra_delete=(EPOCH_SNAPSHOT_GLOB, "*.tmp"),  # *.tmp: a kill mid-save
         checkpoint_root=cfg.get("checkpoint_dir", CHECKPOINT_DIR_DEFAULT),
         dry_run=dry_run,
         on_override=override_hook_from_cfg(cfg),
@@ -223,14 +222,14 @@ def run_pretrain(
             # (e.g. a different --stage-dir that wasn't copied from the same NFS source).
             "detector_dirs": dict(cfg.get("lodo", {}).get("detector_dirs", {})),
         }
-        # Save first, log second: W&B never runs ahead of the restorable state.
+        # Save first, log second: W&B never runs ahead of the restorable state. The
+        # snapshot goes before last.pt: a resume starts after last.pt's epoch.
+        if epoch % tr.get("checkpoint_every", 20) == 0:
+            atomic_torch_save(ckpt_payload, ckpt_dir / f"epoch{epoch}.pt")
         atomic_torch_save(ckpt_payload, last_path)
         wandb.log(
             {"epoch": epoch, "pretrain/loss": final_loss, "pretrain/lr": lr}, step=epoch
         )
-        if epoch % tr.get("checkpoint_every", 20) == 0:
-            epoch_ckpt = ckpt_dir / f"epoch{epoch}.pt"
-            shutil.copy2(last_path, epoch_ckpt)
     wandb.finish()
     return {
         "epochs_run": epochs_run,

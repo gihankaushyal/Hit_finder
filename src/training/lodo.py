@@ -75,28 +75,43 @@ LAST_REQUIRED_KEYS = (
 )
 
 
-def _reconcile_with_best(
-    last: dict, best_path: Path, device: str | torch.device
-) -> tuple[float, int]:
-    """best_f1 and epochs_no_improve to resume with, given last.pt and best.pt.
+def _load_restore_checkpoint(
+    last_path: Path, best_path: Path
+) -> tuple[Path | None, dict | None]:
+    """The checkpoint a resume restores, loaded on the CPU, and its path.
 
-    best.pt is saved before last.pt in an epoch, so a kill between the two leaves
-    best.pt one epoch ahead. Taking best.pt's F1 then keeps a later, worse epoch
-    from overwriting it.
+    last.pt normally. best.pt when there is no last.pt (a run dir from before
+    last.pt was written), or when best.pt is newer: best.pt is saved before last.pt
+    in an epoch, so a kill between the two leaves it one epoch ahead, and resuming
+    from it keeps the evaluated checkpoint and the resumed state in step.
+    Loading on the CPU keeps a second copy of the weights off the GPU;
+    load_state_dict moves them to the model's device.
     """
-    best_f1 = -1.0 if np.isnan(last["best_f1"]) else float(last["best_f1"])
-    epochs_no_improve = int(last["epochs_no_improve"])
+
+    def _load(path: Path) -> dict:
+        # weights_only=False needed to restore optimizer_state_dict (our own file).
+        return torch.load(path, map_location="cpu", weights_only=False)
+
+    if not last_path.exists():
+        return (best_path, _load(best_path)) if best_path.exists() else (None, None)
+    last = _load(last_path)
+    missing = sorted(set(LAST_REQUIRED_KEYS) - last.keys())
+    if missing:
+        raise RuntimeError(
+            f"cannot resume {last_path}: missing key(s) {missing}. It was not "
+            "written by this trainer; start a new run with --override-training."
+        )
     if best_path.exists():
-        best = torch.load(best_path, map_location=device, weights_only=False)
-        best_val = best.get("val_f1", float("nan"))
-        if best.get("epoch", -1) > last["epoch"] and not np.isnan(best_val):
+        best = _load(best_path)
+        if best.get("epoch", -1) > last["epoch"] and not np.isnan(
+            best.get("val_f1", float("nan"))
+        ):
             print(
-                f"  best.pt (epoch {best['epoch']}, val F1 {best_val:.4f}) is newer than "
-                f"last.pt (epoch {last['epoch']}): keeping it as the best so far."
+                f"  best.pt (epoch {best['epoch']}) is newer than last.pt (epoch "
+                f"{last['epoch']}): resuming from best.pt."
             )
-            best_f1 = max(best_f1, float(best_val))
-            epochs_no_improve = 0
-    return best_f1, epochs_no_improve
+            return best_path, best
+    return last_path, last
 
 
 def _build_intra_split(sessions: list[dict]) -> dict:
@@ -345,10 +360,6 @@ def _train_fold(
                 f"{ckpt_path} already exists: pass resume_training or inference_only "
                 "(the entry points gate this before calling _train_fold)."
             )
-    # Resume from last.pt; best.pt alone is a run dir from before last.pt was written.
-    restore_path: Path | None = None
-    if resume_training and not inference_only:
-        restore_path = next((p for p in (last_path, ckpt_path) if p.exists()), None)
     # Recorded in results.json (training_block); stay None/False when nothing trains here.
     last_epoch: int | None = None
     early_stopped = False
@@ -422,19 +433,11 @@ def _train_fold(
         ).to(device)
 
     if not inference_only:
-        # weights_only=False needed to restore optimizer_state_dict (our own file).
-        _ckpt = (
-            torch.load(restore_path, map_location=device, weights_only=False)
-            if restore_path is not None
-            else None
+        restore_path, _ckpt = (
+            _load_restore_checkpoint(last_path, ckpt_path)
+            if resume_training
+            else (None, None)
         )
-        if restore_path == last_path:
-            _missing = sorted(set(LAST_REQUIRED_KEYS) - _ckpt.keys())
-            if _missing:
-                raise RuntimeError(
-                    f"cannot resume {restore_path}: missing key(s) {_missing}. It was not "
-                    "written by this trainer; start a new run with --override-training."
-                )
         wandb_id = wandb_id_for_training(
             ckpt_dir,
             run_name,
@@ -454,8 +457,8 @@ def _train_fold(
         wandb.define_metric("epoch")
         wandb.define_metric("train/*", step_metric="epoch")
         wandb.define_metric("val/*", step_metric="epoch")
-
-        wandb.log({"hitfinder/backend": cfg["hitfinder"]["backend"]})
+        # No step-less wandb.log here: it would take the step the first resumed epoch
+        # logs to, and W&B drops that epoch. The backend is in the config already.
 
     if inference_only:
         print(f"  --inference-only: evaluating {ckpt_path}; no training.")
@@ -484,12 +487,11 @@ def _train_fold(
                     "  Warning: checkpoint has no optimizer state — starting with fresh optimizer."
                 )
             if restore_path == last_path:
-                best_f1, epochs_no_improve = _reconcile_with_best(
-                    _ckpt, ckpt_path, device
-                )
+                best_f1 = -1.0 if np.isnan(_ckpt["best_f1"]) else _ckpt["best_f1"]
+                epochs_no_improve = _ckpt["epochs_no_improve"]
                 start_epoch = _ckpt["epoch"] + 1
             else:
-                # Legacy best.pt (no last.pt): it is the best model, saved when it improved.
+                # best.pt is the best model, saved when it improved.
                 _saved_f1 = _ckpt.get("val_f1", -1.0)
                 best_f1 = -1.0 if np.isnan(_saved_f1) else _saved_f1
                 epochs_no_improve = _ckpt.get("epochs_no_improve", 0)
@@ -512,6 +514,7 @@ def _train_fold(
                     f"  Warning: checkpoint epoch {start_epoch - 1} >= config epochs {epochs}. "
                     "Nothing left to train — proceeding to evaluation."
                 )
+            del _ckpt  # restored; do not hold a second copy through training
 
         last_epoch = start_epoch - 1
         for epoch in range(start_epoch, 1 if early_stopped else epochs + 1):
@@ -565,6 +568,19 @@ def _train_fold(
             else:
                 epochs_no_improve += 1
                 early_stopped = epochs_no_improve >= patience
+            if epoch in save_epochs:
+                atomic_torch_save(
+                    {
+                        "epoch": epoch,
+                        "model_state_dict": model.state_dict(),
+                        "val_f1": val_m["f1"],
+                        "backbone": backbone,
+                        "num_classes": cfg["model"]["num_classes"],
+                    },
+                    ckpt_path.parent / f"epoch{epoch}.pt",
+                )
+            # last.pt goes last: a resume starts after its epoch, so anything that
+            # epoch writes must already be on disk.
             atomic_torch_save(
                 {
                     "epoch": epoch,
@@ -578,17 +594,6 @@ def _train_fold(
                 },
                 last_path,
             )
-            if epoch in save_epochs:
-                atomic_torch_save(
-                    {
-                        "epoch": epoch,
-                        "model_state_dict": model.state_dict(),
-                        "val_f1": val_m["f1"],
-                        "backbone": backbone,
-                        "num_classes": cfg["model"]["num_classes"],
-                    },
-                    ckpt_path.parent / f"epoch{epoch}.pt",
-                )
 
             wandb.log(
                 {
