@@ -9,6 +9,8 @@ wandb
 fabio
 black
 pytest
+ruff
+mypy
 PyQt5
 pyqtgraph
 scipy
