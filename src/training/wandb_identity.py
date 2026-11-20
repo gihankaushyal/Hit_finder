@@ -160,15 +160,18 @@ def wandb_id_for_training(
     run_name: str,
     project: str | None,
     entity: str | None,
-    resuming: bool,
+    restored_epoch: int | None,
 ) -> str:
     """Id for the training `wandb.init`: current id when resuming, else a fresh one.
 
-    `resuming` means a checkpoint is actually being restored, not that
-    --resume-training was passed: a resume into a dir with no checkpoint trains
-    from scratch and must not splice into the old run's history.
+    `restored_epoch` is the epoch of the checkpoint actually loaded, or None when
+    training starts from scratch. Pass what was restored, never the
+    --resume-training flag: a resume into a dir with no checkpoint trains from
+    epoch 1 and must not splice into the old run's history. The trainers write
+    the checkpoint before logging an epoch, so a restored epoch is never behind
+    the run's last logged step (except a legacy best.pt-only resume).
     """
-    if resuming:
+    if restored_epoch is not None:
         return resolve_wandb_id(run_dir, run_name)
     return ensure_fresh_wandb_id(run_dir, run_name, project, entity)
 

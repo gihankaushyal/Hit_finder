@@ -49,7 +49,12 @@ from src.evaluation.benchmark import (
     save_split_artifact,
 )
 from src.hitfinders import get_hitfinder
-from src.training.lodo import _build_intra_split, _train_fold, build_sessions
+from src.training.lodo import (
+    LAST_CHECKPOINT_NAME,
+    _build_intra_split,
+    _train_fold,
+    build_sessions,
+)
 from src.training.run_naming import (
     ASYMMETRIC_CONVENTION,
     ASYMMETRIC_EXAMPLE,
@@ -88,7 +93,7 @@ def _check_checkpoint_collisions(
         "best.pt",
         resume_training,
         override_training,
-        extra_delete=(RESULTS_NAME, INFERENCE_RESULTS_NAME),
+        extra_delete=(RESULTS_NAME, INFERENCE_RESULTS_NAME, LAST_CHECKPOINT_NAME),
         inference_only=inference_only,
         dry_run=dry_run,
         on_override=override_hook_from_cfg(cfg),

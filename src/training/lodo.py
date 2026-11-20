@@ -8,7 +8,6 @@ reuse the same loop without duplication.
 from __future__ import annotations
 
 import json
-import os
 from collections.abc import Callable
 from pathlib import Path
 
@@ -54,12 +53,17 @@ from src.training.recipe import (
     apply_lr_schedule,
     build_optimizer,
 )
+from src.training.checkpoint_io import atomic_torch_save
 from src.training.train_supervised import _set_seeds, train_one_epoch
 from src.training.wandb_identity import resolve_wandb_id, wandb_id_for_training
 
 # Keys of the val metrics dict that are logged under their own names; every other key
 # (the optional breakdown) is logged as `val/<key>`.
 _BASE_VAL_KEYS = ("ap", "auc_roc", "f1", "threshold")
+
+# Written every epoch so a resume continues where the run stopped; best.pt (the
+# evaluated checkpoint) is written only when val F1 improves.
+LAST_CHECKPOINT_NAME = "last.pt"
 
 
 def _build_intra_split(sessions: list[dict]) -> dict:
@@ -295,6 +299,7 @@ def _train_fold(
     # rotate wandb_id.txt; resolving earlier would log to the superseded run.
     wandb_id = resolve_wandb_id(ckpt_dir, run_name)
     ckpt_path = ckpt_dir / "best.pt"
+    last_path = ckpt_dir / LAST_CHECKPOINT_NAME
     if inference_only:
         if not ckpt_path.exists():
             raise FileNotFoundError(
@@ -307,7 +312,10 @@ def _train_fold(
                 f"{ckpt_path} already exists: pass resume_training or inference_only "
                 "(the entry points gate this before calling _train_fold)."
             )
-    resume_training_from_ckpt = ckpt_path.exists() and resume_training
+    # Resume from last.pt; best.pt alone is a run dir from before last.pt was written.
+    restore_path: Path | None = None
+    if resume_training and not inference_only:
+        restore_path = next((p for p in (last_path, ckpt_path) if p.exists()), None)
     # Recorded in results.json (training_block); stay None/False when nothing trains here.
     last_epoch: int | None = None
     early_stopped = False
@@ -381,12 +389,18 @@ def _train_fold(
         ).to(device)
 
     if not inference_only:
+        # weights_only=False needed to restore optimizer_state_dict (our own file).
+        _ckpt = (
+            torch.load(restore_path, map_location=device, weights_only=False)
+            if restore_path is not None
+            else None
+        )
         wandb_id = wandb_id_for_training(
             ckpt_dir,
             run_name,
             cfg["wandb"]["project"],
             cfg["wandb"].get("entity"),
-            resuming=resume_training_from_ckpt,
+            restored_epoch=None if _ckpt is None else _ckpt.get("epoch", 0),
         )
         wandb.init(
             project=cfg["wandb"]["project"],
@@ -413,15 +427,13 @@ def _train_fold(
         epochs_no_improve = 0
         start_epoch = 1
 
-        if resume_training_from_ckpt:
-            # weights_only=False needed to restore optimizer_state_dict (our own file).
-            _ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
+        if _ckpt is not None:
             model.load_state_dict(_ckpt["model_state_dict"])
             if "optimizer_state_dict" in _ckpt:
                 _n_saved = len(_ckpt["optimizer_state_dict"]["param_groups"])
                 if _n_saved != len(optimizer.param_groups):
                     raise RuntimeError(
-                        f"cannot resume {ckpt_path}: it was saved with {_n_saved} optimizer "
+                        f"cannot resume {restore_path}: it was saved with {_n_saved} optimizer "
                         f"param group(s) but this config builds {len(optimizer.param_groups)} "
                         "(layer_decay / wd_skip_norm_bias change the grouping). Resume with the "
                         "recipe the run started with, or start a new run."
@@ -431,14 +443,21 @@ def _train_fold(
                 print(
                     "  Warning: checkpoint has no optimizer state — starting with fresh optimizer."
                 )
-            _saved_f1 = _ckpt.get("val_f1", -1.0)
+            # last.pt carries the best F1 so far; a legacy best.pt carries its own.
+            _saved_f1 = _ckpt.get("best_f1", _ckpt.get("val_f1", -1.0))
             best_f1 = -1.0 if np.isnan(_saved_f1) else _saved_f1
             epochs_no_improve = _ckpt.get("epochs_no_improve", 0)
+            early_stopped = bool(_ckpt.get("early_stopped", False))
             start_epoch = _ckpt.get("epoch", 0) + 1
             print(
-                f"  Resuming training from epoch {start_epoch} "
-                f"(best val F1 so far: {best_f1:.4f})"
+                f"  Resuming training from epoch {start_epoch} ({restore_path.name}; "
+                f"best val F1 so far: {best_f1:.4f})"
             )
+            if early_stopped:
+                print(
+                    f"  The run early-stopped at epoch {start_epoch - 1}. "
+                    "Nothing left to train — proceeding to evaluation."
+                )
             if start_epoch > epochs:
                 print(
                     f"  Warning: checkpoint epoch {start_epoch - 1} >= config epochs {epochs}. "
@@ -446,7 +465,7 @@ def _train_fold(
                 )
 
         last_epoch = start_epoch - 1
-        for epoch in range(start_epoch, epochs + 1):
+        for epoch in range(start_epoch, 1 if early_stopped else epochs + 1):
             train_dl.dataset.set_epoch(epoch)
             apply_lr_schedule(optimizer, epoch, epochs, cfg["training"])
             train_m = train_one_epoch(model, train_dl, optimizer, criterion, device)
@@ -475,6 +494,53 @@ def _train_fold(
                 for k, v in val_m.items()
                 if k not in _BASE_VAL_KEYS and not np.isnan(v)
             }
+            # Checkpoints first, W&B log last: a kill in between leaves W&B behind the
+            # restorable state, never ahead of it (a resume keeps the W&B id).
+            if not np.isnan(val_m["f1"]) and val_m["f1"] > best_f1:
+                best_f1 = val_m["f1"]
+                epochs_no_improve = 0
+                atomic_torch_save(
+                    {
+                        "epoch": epoch,
+                        "model_state_dict": model.state_dict(),
+                        "optimizer_state_dict": optimizer.state_dict(),
+                        "val_f1": best_f1,
+                        "epochs_no_improve": 0,
+                        "inference_threshold": val_m["threshold"],
+                        "backbone": backbone,
+                        "num_classes": cfg["model"]["num_classes"],
+                    },
+                    ckpt_path,
+                )
+                print(f"    → checkpoint saved (val F1={best_f1:.4f})")
+            else:
+                epochs_no_improve += 1
+                early_stopped = epochs_no_improve >= patience
+            atomic_torch_save(
+                {
+                    "epoch": epoch,
+                    "model_state_dict": model.state_dict(),
+                    "optimizer_state_dict": optimizer.state_dict(),
+                    "best_f1": best_f1,
+                    "epochs_no_improve": epochs_no_improve,
+                    "early_stopped": early_stopped,
+                    "backbone": backbone,
+                    "num_classes": cfg["model"]["num_classes"],
+                },
+                last_path,
+            )
+            if epoch in save_epochs:
+                atomic_torch_save(
+                    {
+                        "epoch": epoch,
+                        "model_state_dict": model.state_dict(),
+                        "val_f1": val_m["f1"],
+                        "backbone": backbone,
+                        "num_classes": cfg["model"]["num_classes"],
+                    },
+                    ckpt_path.parent / f"epoch{epoch}.pt",
+                )
+
             wandb.log(
                 {
                     "epoch": epoch,
@@ -493,53 +559,17 @@ def _train_fold(
                     "    val breakdown: "
                     + "  ".join(f"{k}={v:.4f}" for k, v in val_extra.items())
                 )
-            if epoch in save_epochs:
-                snap_path = ckpt_path.parent / f"epoch{epoch}.pt"
-                snap_tmp = snap_path.with_name(snap_path.name + ".tmp")
-                torch.save(
-                    {
-                        "epoch": epoch,
-                        "model_state_dict": model.state_dict(),
-                        "val_f1": val_m["f1"],
-                        "backbone": backbone,
-                        "num_classes": cfg["model"]["num_classes"],
-                    },
-                    snap_tmp,
+            if early_stopped:
+                print(
+                    f"  Early stopping at epoch {epoch} (no improvement for {patience} epochs)"
                 )
-                # Atomic rename: a preempted job never leaves a truncated epochN.pt behind.
-                os.replace(snap_tmp, snap_path)
-
-            if not np.isnan(val_m["f1"]) and val_m["f1"] > best_f1:
-                best_f1 = val_m["f1"]
-                epochs_no_improve = 0
-                torch.save(
-                    {
-                        "epoch": epoch,
-                        "model_state_dict": model.state_dict(),
-                        "optimizer_state_dict": optimizer.state_dict(),
-                        "val_f1": best_f1,
-                        "epochs_no_improve": 0,
-                        "inference_threshold": val_m["threshold"],
-                        "backbone": backbone,
-                        "num_classes": cfg["model"]["num_classes"],
-                    },
-                    ckpt_path,
-                )
-                print(f"    → checkpoint saved (val F1={best_f1:.4f})")
-            else:
-                epochs_no_improve += 1
-                if epochs_no_improve >= patience:
-                    early_stopped = True
-                    print(
-                        f"  Early stopping at epoch {epoch} (no improvement for {patience} epochs)"
-                    )
-                    break
+                break
 
         if not ckpt_path.exists():
             print(
                 "  No val-F1 improvement recorded — saving final epoch as checkpoint."
             )
-            torch.save(
+            atomic_torch_save(
                 {
                     "epoch": epochs,
                     "model_state_dict": model.state_dict(),

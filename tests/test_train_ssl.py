@@ -253,6 +253,7 @@ class TestFinetuneRunNaming:
         run_dir = root / "checkpoints" / run_name
         run_dir.mkdir(parents=True)
         (run_dir / "best.pt").write_bytes(b"x")
+        (run_dir / "last.pt").write_bytes(b"x")
         (run_dir / "results.json").write_text("{}")
         return run_dir
 
@@ -281,6 +282,7 @@ class TestFinetuneRunNaming:
             "vits16-mae-v2", 4, {"seed": 42}, linear_probe=True, override_training=True
         )
         assert not (run_dir / "best.pt").exists()
+        assert not (run_dir / "last.pt").exists()
         assert not (run_dir / "results.json").exists()
 
     def test_read_pretrain_epoch(self, tmp_path):
@@ -652,38 +654,28 @@ class TestIdempotentOverrideEntryPoints:
         assert not ckpt.exists()
 
 
-class _IdRequested(Exception):
-    pass
+def test_pretrain_saves_last_pt_before_logging_the_epoch(
+    synthetic_cxi, tmp_path, monkeypatch
+):
+    """W&B must never be ahead of the restorable state (resume keeps the id)."""
+    import wandb
 
+    cfg = _tiny_cfg(tmp_path / "ckpt")
+    last_path = Path(cfg["checkpoint_dir"]) / "mae-test-fold0" / "last.pt"
+    seen: list[tuple[int, int]] = []
 
-class TestPretrainWandbIdFollowsTheCheckpoint:
-    """resume=True with no last.pt trains from scratch, so it needs a fresh W&B id."""
+    def _log(payload, step=None, **kw):
+        if "pretrain/loss" in payload:
+            last = torch.load(last_path, map_location="cpu", weights_only=True)
+            seen.append((step, last["epoch"]))
 
-    def _stop_at_id(self, monkeypatch) -> None:
-        import src.training.train_ssl_pretrain as tsp
+    real_init = wandb.init
 
-        def fake(*args, resuming, **kwargs):
-            raise _IdRequested(resuming)
+    def _init(*args, **kwargs):
+        run = real_init(*args, **kwargs)
+        monkeypatch.setattr(wandb, "log", _log)  # init rebinds wandb.log
+        return run
 
-        monkeypatch.setattr(tsp, "wandb_id_for_training", fake)
-
-    def test_resume_without_last_is_a_fresh_start(
-        self, synthetic_cxi, tmp_path, monkeypatch
-    ):
-        cfg = _tiny_cfg(tmp_path / "ckpt")
-        self._stop_at_id(monkeypatch)
-        with pytest.raises(_IdRequested) as exc:
-            run_pretrain(
-                cfg, {"s0": synthetic_cxi}, ["s0"], "mae-test-fold0", "cpu", resume=True
-            )
-        assert exc.value.args[0] is False
-
-    def test_resume_with_last_keeps_the_id(self, synthetic_cxi, tmp_path, monkeypatch):
-        cfg = _tiny_cfg(tmp_path / "ckpt")
-        run_pretrain(cfg, {"s0": synthetic_cxi}, ["s0"], "mae-test-fold0", "cpu")
-        self._stop_at_id(monkeypatch)
-        with pytest.raises(_IdRequested) as exc:
-            run_pretrain(
-                cfg, {"s0": synthetic_cxi}, ["s0"], "mae-test-fold0", "cpu", resume=True
-            )
-        assert exc.value.args[0] is True
+    monkeypatch.setattr(wandb, "init", _init)
+    run_pretrain(cfg, {"s0": synthetic_cxi}, ["s0"], "mae-test-fold0", "cpu")
+    assert seen == [(1, 1), (2, 2)]

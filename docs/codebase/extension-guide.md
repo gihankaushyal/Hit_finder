@@ -353,8 +353,20 @@ Behaviour worth knowing:
 - **A fresh start never reuses an existing W&B run id.** Before the training `wandb.init`,
   `wandb_id_for_training` (Track 1 `_train_fold`, SSL pretrain) asks W&B whether the current id
   exists; if so it tags that run `overridden` and rotates past it (e.g. after `rm -rf` of the
-  checkpoint dir, or a crash before `best.pt`). Genuine resumes and inference keep the current
-  id. If W&B cannot be queried, the current id is kept with a warning.
+  checkpoint dir, or a crash before the first save). Genuine resumes and inference keep the
+  current id. If W&B cannot be queried, the current id is kept with a warning; in offline or
+  disabled mode it is kept silently, so a later `wandb sync` can still splice into the old run.
+- **Resume continues from the last epoch.** Track 1 and fine-tune write `last.pt` every
+  epoch (model, optimizer, epoch, best val F1 so far, epochs without improvement, early-stop
+  flag); a resume restores it, falling back to `best.pt` only for run dirs written before
+  `last.pt` existed. `best.pt` is still the evaluated checkpoint. An early-stopped or finished
+  run goes straight to evaluation. `--override-training` deletes `last.pt` with `best.pt`.
+- **Checkpoint before log.** Each epoch writes its checkpoints (`best.pt` if improved,
+  `last.pt`, any `epoch<N>.pt`; pretraining `last.pt`) before `wandb.log(step=epoch)`, so W&B
+  is never ahead of the restorable state and a resume under the same id loses no step. All
+  checkpoint writes go through `atomic_torch_save` (`src/training/checkpoint_io.py`: write
+  `<file>.tmp`, then rename), so a preemption mid-save never leaves a truncated file. A legacy
+  `best.pt`-only resume restarts after the best epoch and can still re-log steps W&B has.
 - **Track 1 override is per fold.** `train_asymmetric` runs the gate once up front with
   `dry_run=True` (fail fast, nothing deleted or rotated) and the real gate for each fold just
   before that fold starts, so a crash on fold 1 leaves fold 2's checkpoint and id untouched.
@@ -379,7 +391,8 @@ both:
   lands after the delete but before the first save is also continued. Every entry point turns
   the set into a resume with `effective_resume(...)` (Track 1 per fold and intra, SSL
   fine-tune, SSL pretrain). A resume keeps the current W&B id only when it restores a
-  checkpoint (`best.pt` for Track 1 and fine-tune, `last.pt` for pretraining). With no
+  checkpoint (`last.pt`, or a legacy `best.pt`, for Track 1 and fine-tune; `last.pt` for
+  pretraining). With no
   checkpoint it trains from epoch 1, so it gets a fresh id (`<run_name>-oN`) and the partial
   run is tagged `overridden`; logging epoch 1 again into a run that already has those steps
   would drop or splice them.

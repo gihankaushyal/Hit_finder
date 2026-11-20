@@ -138,7 +138,8 @@ def check_checkpoint_collisions(
             print(
                 f"  [override] already applied by job {current_job_id()} for "
                 f"{run_name}; continuing (resumes from the checkpoint if one was saved, "
-                "else trains from epoch 1 under a fresh W&B id)."
+                "else trains from epoch 1, under a fresh W&B id when W&B can be "
+                "queried)."
             )
             continued.add(run_name)
             continue

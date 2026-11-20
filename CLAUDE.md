@@ -210,6 +210,7 @@ sfx-hitfinder/
 │   │   ├── recipe.py                # careful fine-tune recipe (warmup + cosine, layer decay, no-wd on norm/bias, drop_path, head init); opt-in via config
 │   │   ├── run_naming.py            # shared run-name prefix validation + resume/override checkpoint gate
 │   │   ├── override_marker.py       # override_applied.json: stops a requeued SLURM job (same job id, higher restart count) re-running --override-training and deleting the new checkpoint
+│   │   ├── checkpoint_io.py         # atomic_torch_save: write <file>.tmp then rename, so a preemption never truncates a checkpoint
 │   │   ├── wandb_identity.py        # each --override-training attempt gets a new W&B run id (<run>, <run>-o2, ...) stored in <run_dir>/wandb_id.txt; old run tagged `overridden`
 │   │   ├── inference_results.py     # result-file + W&B summary helpers for --inference-only
 │   │   ├── train_ssl_pretrain.py
@@ -272,6 +273,7 @@ sfx-hitfinder/
 │   ├── test_seed_override_wiring.py   # --seed override: bounds, per-seed sampling streams, loader seed required, atomic split save (PR #159)
 │   ├── test_collect_since.py, test_measure_crop_stats.py, test_measure_padding_effect.py
 │   ├── test_guard_hook.py       # PreToolUse guard hook: deny / ask / allow cases
+│   ├── test_checkpoint_io.py    # atomic checkpoint writes
 │   └── test_deprecated_scripts.py
 ├── notebooks/                   # exploration only, never source of truth
 │   ├── lcn_ablation.ipynb              # Phase 3 LCN window ablation study
@@ -301,7 +303,8 @@ sfx-hitfinder/
 ├── dashboard/                   # local repo dashboard (TypeScript: Hono API + React/Vite); self-contained, not imported by src/ — see dashboard/README.md
 ├── checkpoints/                 # created at runtime; one sub-dir per run name
 │   └── <run-prefix>-fold<N>-seed<S>/   # e.g. resnet18-asymmetric-v2-fold1-seed42, mae-vits16-v2-fold1-seed42; plus asymmetric_splits/, intra_splits/
-│       └── best.pt              # saved when val F1 improves; keys: epoch, model_state_dict, val_f1, val_threshold
+│       ├── best.pt              # saved when val F1 improves (the evaluated checkpoint); keys: epoch, model_state_dict, val_f1, inference_threshold
+│       └── last.pt              # saved every epoch for resume (Track 1, fine-tune, pretrain)
 └── data/                        # meant for symlinks only — no actual data stored here (currently empty directories)
     ├── raw/                     # symlink → actual storage on Sol
     ├── processed/               # symlink → preprocessed tensor cache
@@ -421,8 +424,9 @@ python -m src.training.train_asymmetric --config configs/supervised/resnet18_asy
 python -u -m src.training.train_ssl_finetune --config configs/ssl/mae_finetune.yaml --fold 1 --run-name-prefix vits16-mae-v2 --inference-only
 
 # Seed repeats (PR #159): --seed S (0 <= S < 2**32, default 42) sets init, shuffle AND the per-sample crop/jitter/augment draws; the run
-# name carries it (<prefix>-fold<N>-seed<S>). Seed 42 keeps the legacy sampling stream. --resume-training keeps the W&B run id of an
-# existing run; use --override-training for a fresh id. Aggregate repeats with: python scripts/aggregate_lodo_results.py --select all [--pool-seeds]
+# name carries it (<prefix>-fold<N>-seed<S>). Seed 42 keeps the legacy sampling stream. --resume-training continues from last.pt and keeps
+# the W&B run id only when it restores a checkpoint (an empty run dir gets a fresh id <run>-oN); --override-training always starts a fresh id.
+# Aggregate repeats with: python scripts/aggregate_lodo_results.py --select all [--pool-seeds]
 python -m src.training.train_asymmetric --config configs/supervised/resnet18_asymmetric.yaml --run-name-prefix resnet18-asymmetric-v2 --folds 1 --seed 43
 
 # SSL orchestrators (stage → train → cleanup per fold)

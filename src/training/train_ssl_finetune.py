@@ -52,7 +52,12 @@ from src.models.ssl import (
     build_ssl_classifier,
 )
 from src.training.recipe import DEFAULT_LAYER_DECAY, DEFAULT_WARMUP_EPOCHS, LR_CONSTANT
-from src.training.lodo import _train_fold, build_sessions, check_crop_options
+from src.training.lodo import (
+    LAST_CHECKPOINT_NAME,
+    _train_fold,
+    build_sessions,
+    check_crop_options,
+)
 from src.training.run_naming import (
     SSL_FINETUNE_CONVENTION,
     SSL_FINETUNE_EXAMPLE,
@@ -199,7 +204,7 @@ def prepare_finetune_run(
         "best.pt",
         resume_training,
         override_training,
-        extra_delete=(RESULTS_NAME, INFERENCE_RESULTS_NAME),
+        extra_delete=(RESULTS_NAME, INFERENCE_RESULTS_NAME, LAST_CHECKPOINT_NAME),
         dry_run=dry_run,
         inference_only=inference_only,
         on_override=override_hook_from_cfg(cfg),

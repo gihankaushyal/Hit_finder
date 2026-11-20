@@ -314,13 +314,13 @@ class TestTrainFoldWritesTheTrainingBlock:
 
 
 class TestWandbIdFollowsTheCheckpointNotTheFlag:
-    """--resume-training with no best.pt trains from scratch, so it needs a fresh W&B id."""
+    """--resume-training with no checkpoint trains from scratch, so it needs a fresh W&B id."""
 
-    def _record(self, monkeypatch) -> list[bool]:
-        calls: list[bool] = []
+    def _record(self, monkeypatch) -> list[int | None]:
+        calls: list[int | None] = []
 
-        def fake(*args, resuming, **kwargs):
-            calls.append(resuming)
+        def fake(*args, restored_epoch, **kwargs):
+            calls.append(restored_epoch)
             return "fake-id"
 
         monkeypatch.setattr(lodo, "wandb_id_for_training", fake)
@@ -329,10 +329,91 @@ class TestWandbIdFollowsTheCheckpointNotTheFlag:
     def test_flag_without_a_checkpoint_is_a_fresh_start(self, run_fold, monkeypatch):
         calls = self._record(monkeypatch)
         run_fold(_cfg(epochs=1), [0.5], resume_training=True)
-        assert calls == [False]
+        assert calls == [None]
 
-    def test_flag_with_a_checkpoint_resumes(self, run_fold, monkeypatch):
+    def test_flag_with_a_checkpoint_passes_the_restored_epoch(
+        self, run_fold, monkeypatch
+    ):
         calls = self._record(monkeypatch)
         run_fold(_cfg(epochs=1), [0.5])
         run_fold(_cfg(epochs=2), [0.6], resume_training=True)
-        assert calls == [False, True]
+        assert calls == [None, 1]
+
+
+def _ckpt_dir(tmp_path: Path) -> Path:
+    return tmp_path / "checkpoints" / RUN_NAME
+
+
+class TestResumeFromLastEpoch:
+    """last.pt is written every epoch, so a resume continues where the run stopped."""
+
+    def test_last_pt_records_the_newest_epoch_and_the_counters(
+        self, run_fold, tmp_path
+    ):
+        run_fold(_cfg(epochs=3), [0.5, 0.9, 0.6])
+        last = torch.load(_ckpt_dir(tmp_path) / "last.pt", weights_only=False)
+        assert last["epoch"] == 3
+        assert last["best_f1"] == 0.9
+        assert last["epochs_no_improve"] == 1
+        assert last["early_stopped"] is False
+        assert "optimizer_state_dict" in last
+        assert (
+            torch.load(_ckpt_dir(tmp_path) / "best.pt", weights_only=False)["epoch"]
+            == 2
+        )
+
+    def test_resume_continues_after_the_last_epoch_not_the_best(self, run_fold):
+        run_fold(_cfg(epochs=3), [0.5, 0.9, 0.6])
+        # best was epoch 2; a best.pt resume would retrain epoch 3 and need 3 scores
+        data, n = run_fold(_cfg(epochs=5), [0.95, 0.7], resume_training=True)
+        assert n == 2
+        assert data["training"]["last_epoch"] == 5
+        assert data["training"]["best_epoch"] == 4
+
+    def test_resume_keeps_the_best_f1_so_far(self, run_fold, tmp_path):
+        run_fold(_cfg(epochs=3), [0.5, 0.9, 0.6])
+        run_fold(_cfg(epochs=4), [0.8], resume_training=True)  # below 0.9
+        best = torch.load(_ckpt_dir(tmp_path) / "best.pt", weights_only=False)
+        assert best["epoch"] == 2
+
+    def test_an_early_stopped_run_does_not_train_again(self, run_fold):
+        run_fold(_cfg(epochs=10, patience=2), [0.5, 0.9, 0.6, 0.55])
+        data, n = run_fold(_cfg(epochs=10, patience=2), [], resume_training=True)
+        assert n == 0
+        assert data["training"]["last_epoch"] == 4
+        assert data["training"]["early_stopped"] is True
+
+    def test_the_checkpoint_is_written_before_the_epoch_is_logged(
+        self, run_fold, tmp_path, monkeypatch
+    ):
+        seen: list[tuple[int, int]] = []
+
+        def _log(payload, step=None, **kw):
+            if "train/loss" in payload:
+                last = torch.load(_ckpt_dir(tmp_path) / "last.pt", weights_only=False)
+                seen.append((step, last["epoch"]))
+
+        monkeypatch.setattr(sys.modules["wandb"], "log", _log)
+        run_fold(_cfg(epochs=3), [0.5, 0.9, 0.6])
+        assert seen == [(1, 1), (2, 2), (3, 3)]
+
+
+def test_asymmetric_override_also_deletes_last_pt(tmp_path, monkeypatch):
+    from src.training import train_asymmetric
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("WANDB_MODE", "disabled")
+    monkeypatch.delenv("SLURM_JOB_ID", raising=False)
+    run_dir = _ckpt_dir(tmp_path)
+    run_dir.mkdir(parents=True)
+    for name in ("best.pt", "last.pt", RESULTS_NAME):
+        (run_dir / name).write_bytes(b"x")
+    train_asymmetric._check_checkpoint_collisions(
+        [1],
+        {"seed": 42, "wandb": {"project": "p"}},
+        RUN_PREFIX,
+        resume_training=False,
+        override_training=True,
+    )
+    assert not (run_dir / "last.pt").exists()
+    assert not (run_dir / "best.pt").exists()
