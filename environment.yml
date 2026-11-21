@@ -23,5 +23,7 @@ dependencies:
     - git+https://gitlab.com/kirianlab/reborn.git@gihan
     - black
     - pytest
+    - ruff
+    - mypy
     - fabio
     - pyFAI>=2024.0
