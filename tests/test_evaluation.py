@@ -1,3 +1,4 @@
+import math
 import tempfile
 from pathlib import Path
 
@@ -21,7 +22,14 @@ from src.evaluation.benchmark import (
     run_on_loader,
     save_split_artifact,
 )
-from src.evaluation.metrics import average_precision, auc_roc, f1_at_optimal_threshold
+from src.evaluation.metrics import (
+    RECALL_FPR_KEYS,
+    RECALL_FPR_TARGETS,
+    average_precision,
+    auc_roc,
+    f1_at_optimal_threshold,
+    recall_at_fpr,
+)
 
 
 def test_average_precision_perfect():
@@ -529,3 +537,47 @@ def test_tie_aware_auc_matches_pairwise_count_on_heavily_tied_scores():
         (pos[:, None] > neg[None, :]).sum() + 0.5 * (pos[:, None] == neg[None, :]).sum()
     ) / (len(pos) * len(neg))
     assert _tie_aware_auc(y, s) == pytest.approx(brute)
+
+
+class TestRecallAtFpr:
+    def test_perfect_separation_gives_full_recall_at_zero_fpr(self):
+        assert recall_at_fpr([1, 1, 0, 0], [0.9, 0.8, 0.2, 0.1], 1e-3) == (1.0, 0.0)
+
+    def test_the_point_is_the_most_recall_within_the_target(self):
+        y = [1, 0, 1] + [0] * 99  # 100 negatives
+        s = [0.9, 0.8, 0.7] + [0.1] * 99
+        assert recall_at_fpr(y, s, 1e-2) == (1.0, 0.01)
+        assert recall_at_fpr(y, s, 1e-3) == (0.5, 0.0)
+
+    def test_a_tie_group_is_all_in_or_all_out(self):
+        pos, negs = [1] * 10, [0] * 1000
+        one_tied = (
+            [0.9] * 10 + [0.9] + [0.0] * 999
+        )  # 1 negative tied with the positives
+        assert recall_at_fpr(pos + negs, one_tied, 1e-3) == (1.0, 0.001)
+        two_tied = [0.9] * 10 + [0.9, 0.9] + [0.0] * 998
+        assert recall_at_fpr(pos + negs, two_tied, 1e-3) == (0.0, 0.0)
+
+    def test_all_scores_tied_gives_zero_recall(self):
+        assert recall_at_fpr([1, 0, 1, 0], [0.5] * 4, 1e-2) == (0.0, 0.0)
+
+    def test_coarse_vote_scores(self):
+        # vote fractions in steps of 1/4; 3 of 200 negatives reach 0.5
+        y = [1] * 4 + [0] * 200
+        s = [1.0, 0.75, 0.5, 0.25] + [0.5] * 3 + [0.0] * 197
+        assert recall_at_fpr(y, s, 1e-2) == (0.5, 0.0)
+        assert recall_at_fpr(y, s, 2e-2) == (1.0, 0.015)  # the 0.25 group adds no FP
+
+    def test_one_class_only_is_nan(self):
+        for y in ([1, 1], [0, 0]):
+            r, f = recall_at_fpr(y, [0.3, 0.7], 1e-2)
+            assert math.isnan(r) and math.isnan(f)
+
+    def test_the_targets_and_their_keys(self):
+        assert RECALL_FPR_TARGETS == {"1e-3": 1e-3, "1e-2": 1e-2}
+        assert RECALL_FPR_KEYS == (
+            "recall_at_fpr_1e-3", "fpr_at_fpr_1e-3",
+            "max_recall_at_fpr_1e-3", "max_fpr_at_fpr_1e-3",
+            "recall_at_fpr_1e-2", "fpr_at_fpr_1e-2",
+            "max_recall_at_fpr_1e-2", "max_fpr_at_fpr_1e-2",
+        )  # fmt: skip

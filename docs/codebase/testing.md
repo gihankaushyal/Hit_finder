@@ -1,6 +1,6 @@
 # Testing Guide
 
-1091 tests across 37 test files (counted with `pytest tests/ --collect-only -q` on 2026-11-20). Test counts per file are in the map below.
+1115 tests across 38 test files (counted with `pytest tests/ --collect-only -q` on 2026-11-21). Test counts per file are in the map below.
 
 ## Running Tests
 
@@ -61,8 +61,8 @@ pytest tests/ -v
 | `test_override_marker.py` | 11 | `override_applied.json`: a requeued SLURM job resumes instead of overriding again | `SLURM_JOB_ID` / `SLURM_RESTART_COUNT` env |
 | `test_wandb_identity.py` | 35 | W&B run id file, rotation (`-o2`, `-o3`), `overridden` tagging | faked `wandb` |
 | `test_wandb_isolation.py` | 3 | No test may reach W&B by accident (`wandb_enabled()` creates a process-wide singleton) | — |
-| `test_training_block.py` | 44 | `results.json` `training` block (`configured_epochs`, `last_epoch`, `best_epoch`, `early_stopped`) driven by scripted validation F1 scores; `last.pt` resume (continues after the last epoch, keeps best F1 and the patience count, loads its weights and optimizer state, legacy `best.pt`-only dirs, a larger patience continues a stopped run, a newer `best.pt` is resumed from with its weights and optimizer state and its epoch logged to W&B, the NaN fallback `best.pt` is not, a `last.pt` missing a key is refused even with a newer `best.pt`, an older `best.pt` is only memory-mapped, checkpoints load on the CPU for evaluation too), `epoch<N>.pt` saved before `best.pt` and `last.pt`, checkpoint written before the W&B log, a resume logs its first epoch, `restored_epoch` passed to `wandb_id_for_training`, override deletes `last.pt` and `*.tmp` | tiny fake fold |
-| `test_inference_only.py` | 64 | `--inference-only`: result helpers, the `_train_fold` inference path, CLI wiring | faked `wandb`; the training loader raises if built |
+| `test_training_block.py` | 47 | `results.json` `training` block (`configured_epochs`, `last_epoch`, `best_epoch`, `early_stopped`) driven by scripted validation F1 scores; `last.pt` resume (continues after the last epoch, keeps best F1 and the patience count, loads its weights and optimizer state, legacy `best.pt`-only dirs, a larger patience continues a stopped run, a newer `best.pt` is resumed from with its weights and optimizer state and its epoch logged to W&B, the NaN fallback `best.pt` is not, a `last.pt` missing a key is refused even with a newer `best.pt`, an older `best.pt` is only memory-mapped, checkpoints load on the CPU for evaluation too), `epoch<N>.pt` saved before `best.pt` and `last.pt`, checkpoint written before the W&B log, a resume logs its first epoch, `restored_epoch` passed to `wandb_id_for_training`, override deletes `last.pt`, `*.tmp` and the score files; the test blocks carry recall at fixed FPR, `scores.npz` is written, and recall is logged for the test only, not per validation epoch | tiny fake fold |
+| `test_inference_only.py` | 64 | `--inference-only`: result helpers, the `_train_fold` inference path (`scores.npz` with `results.json`, `scores.inference.npz` with the side file), CLI wiring | faked `wandb`; the training loader raises if built |
 | `test_orchestrator_inference.py` | 30 | Orchestrator scripts' `inference` answer, run against a stub `sbatch` | temp dir with fake `sbatch` on `PATH` |
 | `test_ssl_dataset.py` | 13 | `SSLPretrainCXIDataset` — random valid-region crops for MAE pretraining | synthetic CXI + valid-pixel mask |
 | `test_ssl_model.py` | 44 | `src/models/ssl.py` — MAE ViT-S/16 builder, masking, pixel MSE loss | `torch.zeros()` |
@@ -70,10 +70,11 @@ pytest tests/ -v
 | `test_ssl_main_requeue.py` | 6 | A requeued SSL launch through the real `main()` entry points | tmp run dir |
 | `test_submit_script_parity.py` | 10 | The bash copies of the run-name prefix regexes and the seed lookup in the SSL submit scripts match `run_naming.py` and `load_config()`; the seed block is identical across the orchestrators and logs are created after the seed check | — |
 | `test_deprecated_scripts.py` | 23 | The seven legacy v1 submit scripts refuse to run and name their replacement | temp dir with stub `sbatch` / `python` |
-| `test_evaluation.py` | 39 | `metrics.py`: AP, AUC-ROC, F1 edge cases; `benchmark.py` helpers | `np.array` fixtures |
-| `test_aggregate_lodo_results.py` | 7 | `scripts/aggregate_lodo_results.py` — grouping by (prefix, suffix, seed), the legacy `seed*` key, `--pool-seeds` pooling and menu listing | temp checkpoint dirs |
+| `test_evaluation.py` | 46 | `metrics.py`: AP, AUC-ROC, F1 edge cases, `recall_at_fpr` (hand-worked: tie groups, coarse vote scores, one class only); `benchmark.py` helpers | `np.array` fixtures |
+| `test_aggregate_lodo_results.py` | 11 | `scripts/aggregate_lodo_results.py` — grouping by (prefix, suffix, seed), the legacy `seed*` key, `--pool-seeds` pooling and menu listing, `--metric` with the `results.inference.json` fallback and `n/a` | temp checkpoint dirs |
+| `test_recall_fpr_stability.py` | 7 | `scripts/recall_fpr_stability.py` — the bootstrap spread shrinks with more negatives, sizes above the negative count, reproducible with a seed, the decision rule, score files read and JSON written, one-class runs reported | synthetic Gaussian scores |
 | `test_patch_eval.py` | 22 | Patch-level centroid crop geometry, patch-grid evaluation | synthetic canvas + centroids |
-| `test_vote_aggregation.py` | 4 | Vote aggregation: frame score formula, threshold behavior | synthetic patch scores |
+| `test_vote_aggregation.py` | 7 | Vote aggregation: frame score formula, threshold behavior; `run_patch_agg` recall keys (NaN with no frames) and `return_scores` | synthetic patch scores |
 | `test_config.py` | 11 | `load_config()`: base merge, model values win, missing file; the seed helpers (`seed_arg`, `apply_seed_override`) | tmp YAML files |
 | `test_seed_override_wiring.py` | 30 | `--seed` end to end: `seed_arg` bounds, `apply_seed_override`, the legacy seed-42 sampling stream vs `SeedSequence` for other seeds (no cross-seed aliasing), the required loader `seed` (`TypeError`), orchestrators refusing a leaked `TRAIN_SEED`, usage-error exit 2, atomic `save_split_artifact` | stub `sbatch` / `module` / `python` / `sinfo` / `squeue` on `PATH` |
 | `test_collect_since.py` | 18 | `.claude/skills/progress-report/scripts/collect_since.py`: the read-only helpers of the digest script (date-window selection of progress-note sections and the PR/commit digest) | inline sample notes |

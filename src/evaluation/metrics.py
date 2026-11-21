@@ -1,10 +1,19 @@
-"""Evaluation metrics for SFX hitfinder: AP, AUC-ROC, F1."""
+"""Evaluation metrics for SFX hitfinder: AP, AUC-ROC, F1, recall at fixed FPR."""
 
 from __future__ import annotations
 
 import numpy as np
 
-__all__ = ["average_precision", "auc_roc", "f1_at_optimal_threshold"]
+from src.evaluation.metric_keys import RECALL_FPR_KEYS, RECALL_FPR_TARGETS
+
+__all__ = [
+    "average_precision",
+    "auc_roc",
+    "f1_at_optimal_threshold",
+    "recall_at_fpr",
+    "RECALL_FPR_TARGETS",
+    "RECALL_FPR_KEYS",
+]
 
 
 def average_precision(y_true: np.ndarray, y_score: np.ndarray) -> float:
@@ -95,3 +104,33 @@ def f1_at_optimal_threshold(
             best_thresh = float(t)
 
     return float(best_f1), best_thresh
+
+
+def recall_at_fpr(
+    y_true: np.ndarray, y_score: np.ndarray, target_fpr: float
+) -> tuple[float, float]:
+    """Recall at the most permissive threshold whose FPR does not exceed target_fpr.
+
+    Returns (recall, achieved FPR). Thresholds sit only between distinct scores, so a
+    group of tied frames is predicted all positive or all negative; a coarse score (the
+    vote fraction) can therefore reach an FPR well below the target. If the top tie
+    group alone exceeds the target, recall is 0.0 at FPR 0.0. (nan, nan) when there are
+    no positives or no negatives. The threshold comes from the scored split itself: a
+    ranking metric like AP, not a deployable operating point.
+    """
+    y_true = np.asarray(y_true, dtype=float)
+    y_score = np.asarray(y_score, dtype=float)
+    n_pos = y_true.sum()
+    n_neg = len(y_true) - n_pos
+    if n_pos == 0 or n_neg == 0:
+        return float("nan"), float("nan")
+    order = np.argsort(-y_score, kind="stable")
+    s, y = y_score[order], y_true[order]
+    last = np.r_[np.nonzero(np.diff(s))[0], len(s) - 1]  # end of each tie group
+    tpr = np.cumsum(y)[last] / n_pos
+    fpr = np.cumsum(1.0 - y)[last] / n_neg
+    within = np.nonzero(fpr <= target_fpr)[0]
+    if len(within) == 0:
+        return 0.0, 0.0
+    i = within[-1]  # fpr is non-decreasing down the ranking
+    return float(tpr[i]), float(fpr[i])

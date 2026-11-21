@@ -32,18 +32,22 @@ from src.evaluation.benchmark import (
     run_patch_agg,
     save_split_artifact,
 )
+from src.evaluation.metrics import RECALL_FPR_KEYS
 from src.hitfinders.base import Hitfinder
 from src.models.supervised import build_supervised_model
 from src.training.inference_results import (
     INFERENCE_RESULTS_NAME,
     RESULTS_NAME,
+    SPLIT_RESULT_KEYS,
     assess_training,
     fetch_wandb_history,
     inference_block,
     inference_result_path,
+    scores_path_for,
     summary_updates,
     training_block,
     wandb_enabled,
+    write_scores,
 )
 from src.models.ssl import DROP_PATH_RATE_DEFAULT, HEAD_INIT_DEFAULT
 from src.training.recipe import (
@@ -60,6 +64,9 @@ from src.training.wandb_identity import resolve_wandb_id, wandb_id_for_training
 # Keys of the val metrics dict that are logged under their own names; every other key
 # (the optional breakdown) is logged as `val/<key>`.
 _BASE_VAL_KEYS = ("ap", "auc_roc", "f1", "threshold")
+# Not logged per epoch: recall at a fixed FPR is a test-set metric (too few
+# validation negatives for 1e-3).
+_UNLOGGED_VAL_KEYS = frozenset(RECALL_FPR_KEYS)
 
 # Written every epoch so a resume continues where the run stopped; best.pt (the
 # evaluated checkpoint) is written only when val F1 improves.
@@ -559,7 +566,9 @@ def _train_fold(
             val_extra = {
                 k: v
                 for k, v in val_m.items()
-                if k not in _BASE_VAL_KEYS and not np.isnan(v)
+                if k not in _BASE_VAL_KEYS
+                and k not in _UNLOGGED_VAL_KEYS
+                and not np.isnan(v)
             }
             # Checkpoints first, W&B log last: a kill in between leaves W&B behind the
             # restorable state, never ahead of it (a resume keeps the W&B id).
@@ -709,6 +718,7 @@ def _train_fold(
         device=device,
         aggregation=aggregation,
         frame_cache=frame_cache,
+        return_scores=True,
     )
     cross_m = run_patch_agg(
         model,
@@ -720,13 +730,19 @@ def _train_fold(
         device=device,
         aggregation=aggregation,
         frame_cache=frame_cache,
+        return_scores=True,
     )
+    in_domain_scores = in_domain_m.pop("scores")
+    cross_scores = cross_m.pop("scores")
 
     print(
         f"  In-domain test:    AP={in_domain_m['ap']:.4f}  AUC={in_domain_m['auc_roc']:.4f}  F1={in_domain_m['f1']:.4f}"
     )
     print(
         f"  Cross-detector:    AP={cross_m['ap']:.4f}  AUC={cross_m['auc_roc']:.4f}  F1={cross_m['f1']:.4f}"
+    )
+    print(
+        f"  Recall @ FPR 1e-3 / 1e-2 (cross): {cross_m['recall_at_fpr_1e-3']:.4f} / {cross_m['recall_at_fpr_1e-2']:.4f}"
     )
 
     if not inference_only:
@@ -738,6 +754,8 @@ def _train_fold(
                 "cross/ap": cross_m["ap"],
                 "cross/auc": cross_m["auc_roc"],
                 "cross/f1": cross_m["f1"],
+                **{f"in_domain/{k}": in_domain_m[k] for k in RECALL_FPR_KEYS},
+                **{f"cross/{k}": cross_m[k] for k in RECALL_FPR_KEYS},
                 "inference_threshold": inference_threshold,
             }
         )
@@ -747,18 +765,8 @@ def _train_fold(
         "fold_id": fold_id,
         "test_detector": fold["test_detector"],
         "inference_threshold": inference_threshold,
-        "cross": {
-            "ap": cross_m["ap"],
-            "auc_roc": cross_m["auc_roc"],
-            "f1": cross_m["f1"],
-            "threshold": cross_m["threshold"],
-        },
-        "in_domain": {
-            "ap": in_domain_m["ap"],
-            "auc_roc": in_domain_m["auc_roc"],
-            "f1": in_domain_m["f1"],
-            "threshold": in_domain_m["threshold"],
-        },
+        "cross": {k: cross_m[k] for k in SPLIT_RESULT_KEYS},
+        "in_domain": {k: in_domain_m[k] for k in SPLIT_RESULT_KEYS},
     }
     result.update(extra_results or {})
     if inference_only:
@@ -780,6 +788,10 @@ def _train_fold(
             best_epoch=ckpt.get("epoch"),
             early_stopped=early_stopped,
         )
+    # Scores before results: the results file marks the evaluation complete.
+    scores_path = scores_path_for(results_path)
+    write_scores(scores_path, {"cross": cross_scores, "in_domain": in_domain_scores})
+    print(f"  Per-frame scores → {scores_path}")
     with open(results_path, "w") as f:
         json.dump(result, f, indent=2)
     print(f"  Results saved → {results_path}")

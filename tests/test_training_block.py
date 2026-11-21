@@ -13,6 +13,7 @@ import sys
 import types
 from pathlib import Path
 
+import numpy as np
 import pytest
 import torch
 import torch.nn as nn
@@ -23,12 +24,36 @@ from src.evaluation.benchmark import (
     SPLIT_TRAIN,
     SPLIT_VAL,
 )
+from src.evaluation.metrics import RECALL_FPR_KEYS
 from src.training import lodo
-from src.training.inference_results import RESULTS_NAME, training_block
+from src.training.inference_results import RESULTS_NAME, SCORES_NAME, training_block
 
-METRICS = {"ap": 0.9, "auc_roc": 0.95, "f1": 0.8, "threshold": 0.4}
+METRICS = {
+    "ap": 0.9,
+    "auc_roc": 0.95,
+    "f1": 0.8,
+    "threshold": 0.4,
+    **{k: 0.5 for k in RECALL_FPR_KEYS},
+}
 RUN_PREFIX = "resnet18-asymmetric-v2"
 RUN_NAME = f"{RUN_PREFIX}-fold1-seed42"
+
+
+def _fake_scores() -> dict:
+    return {
+        "y_true": np.array([1, 0], dtype=np.int8),
+        "vote": np.array([0.9, 0.1], dtype=np.float32),
+        "max": np.array([0.95, 0.2], dtype=np.float32),
+        "session": np.array(["s", "s"]),
+    }
+
+
+def _fake_test_agg(*a, **kw) -> dict:
+    """run_patch_agg on a test split: METRICS, plus scores when asked for."""
+    return {
+        **METRICS,
+        **({"scores": _fake_scores()} if kw.get("return_scores") else {}),
+    }
 
 
 class TestTrainingBlock:
@@ -168,7 +193,7 @@ def run_fold(tmp_path, monkeypatch):
             if ids == ["s_val"]:
                 evaluations.append(1)
                 return {**METRICS, "f1": next(scores), "threshold": 0.5}
-            return dict(METRICS)
+            return _fake_test_agg(**kw)
 
         monkeypatch.setattr(lodo, "run_patch_agg", fake_agg)
         lodo._train_fold(cfg=cfg, **{**_fold_args(), **kwargs})
@@ -179,6 +204,36 @@ def run_fold(tmp_path, monkeypatch):
 
 
 class TestTrainFoldWritesTheTrainingBlock:
+    def test_results_carry_recall_at_fixed_fpr(self, run_fold):
+        data, _ = run_fold(_cfg(epochs=1), [0.5])
+        for split in ("cross", "in_domain"):
+            for key in RECALL_FPR_KEYS:
+                assert data[split][key] == 0.5
+
+    def test_the_test_evaluation_saves_per_frame_scores(self, run_fold, tmp_path):
+        run_fold(_cfg(epochs=1), [0.5])
+        with np.load(tmp_path / "checkpoints" / RUN_NAME / SCORES_NAME) as z:
+            assert z["cross_y_true"].tolist() == [1, 0]
+            assert z["in_domain_vote"].dtype == np.float32
+            assert set(z.files) == {
+                f"{s}_{k}"
+                for s in ("cross", "in_domain")
+                for k in ("y_true", "vote", "max", "session")
+            }
+
+    def test_recall_at_fixed_fpr_is_logged_for_the_test_not_per_epoch(
+        self, run_fold, monkeypatch
+    ):
+        logged: list[dict] = []
+        monkeypatch.setattr(
+            sys.modules["wandb"], "log", lambda payload, **kw: logged.append(payload)
+        )
+        run_fold(_cfg(epochs=2), [0.5, 0.6])
+        keys = {k for payload in logged for k in payload}
+        assert "cross/recall_at_fpr_1e-3" in keys
+        assert "in_domain/max_recall_at_fpr_1e-2" in keys
+        assert not any(k.startswith("val/") and "fpr" in k for k in keys)
+
     def test_a_run_that_trains_every_epoch(self, run_fold):
         data, n = run_fold(_cfg(epochs=4), [0.5, 0.6, 0.7, 0.8])
         assert n == 4
@@ -294,7 +349,7 @@ class TestTrainFoldWritesTheTrainingBlock:
         monkeypatch.setattr(
             lodo, "build_supervised_model", lambda **kw: nn.Linear(4, 2)
         )
-        monkeypatch.setattr(lodo, "run_patch_agg", lambda *a, **kw: dict(METRICS))
+        monkeypatch.setattr(lodo, "run_patch_agg", _fake_test_agg)
         ckpt_dir = tmp_path / "checkpoints" / RUN_NAME
         ckpt_dir.mkdir(parents=True)
         torch.save(
@@ -671,7 +726,8 @@ def test_asymmetric_override_also_deletes_last_pt(tmp_path, monkeypatch):
     monkeypatch.delenv("SLURM_JOB_ID", raising=False)
     run_dir = _ckpt_dir(tmp_path)
     run_dir.mkdir(parents=True)
-    for name in ("best.pt", "last.pt", "last.pt.tmp", RESULTS_NAME):
+    scores = ("scores.npz", "scores.inference.npz")
+    for name in ("best.pt", "last.pt", "last.pt.tmp", RESULTS_NAME, *scores):
         (run_dir / name).write_bytes(b"x")
     train_asymmetric._check_checkpoint_collisions(
         [1],
@@ -683,3 +739,4 @@ def test_asymmetric_override_also_deletes_last_pt(tmp_path, monkeypatch):
     assert not (run_dir / "last.pt").exists()
     assert not (run_dir / "last.pt.tmp").exists()  # left by a SLURM kill mid-save
     assert not (run_dir / "best.pt").exists()
+    assert not any((run_dir / name).exists() for name in scores)

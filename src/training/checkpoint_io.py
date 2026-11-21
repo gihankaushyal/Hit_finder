@@ -4,16 +4,22 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import BinaryIO, Callable
 
 import torch
 
-# atomic_torch_save writes <file>.tmp first; --override-training deletes TMP_GLOB.
+# atomic_write writes <file>.tmp first; --override-training deletes TMP_GLOB.
 TMP_SUFFIX = ".tmp"
 TMP_GLOB = "*" + TMP_SUFFIX
 
 
 def atomic_torch_save(obj: object, path: str | Path) -> None:
-    """`torch.save` to ``<path>.tmp``, fsync, then rename over `path`.
+    """`torch.save` through `atomic_write`."""
+    atomic_write(path, lambda f: torch.save(obj, f))
+
+
+def atomic_write(path: str | Path, write: Callable[[BinaryIO], None]) -> None:
+    """`write(f)` to ``<path>.tmp``, fsync, then rename over `path`.
 
     A kill mid-write leaves the previous file intact (a resume would otherwise
     crash-loop on a truncated checkpoint). The fsync makes the data durable before
@@ -26,7 +32,7 @@ def atomic_torch_save(obj: object, path: str | Path) -> None:
     tmp = path.with_name(path.name + TMP_SUFFIX)
     try:
         with open(tmp, "wb") as f:
-            torch.save(obj, f)
+            write(f)
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp, path)

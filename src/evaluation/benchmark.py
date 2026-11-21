@@ -6,13 +6,19 @@ import json
 import os
 import warnings
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
-from src.evaluation.metrics import average_precision, auc_roc, f1_at_optimal_threshold
+from src.evaluation.metrics import (
+    RECALL_FPR_TARGETS,
+    average_precision,
+    auc_roc,
+    f1_at_optimal_threshold,
+    recall_at_fpr,
+)
 
 if TYPE_CHECKING:
     from src.data.frame_cache import FrameCache
@@ -215,7 +221,8 @@ def run_patch_agg(
     aggregation: str = "vote",
     frame_cache: "FrameCache | None" = None,
     return_breakdown: bool = False,
-) -> dict[str, float]:
+    return_scores: bool = False,
+) -> dict[str, Any]:
     """Evaluate a model on full frames using patch-grid aggregation.
 
     For each frame: tile into complete patch_size×patch_size patches → GCN →
@@ -246,10 +253,15 @@ def run_patch_agg(
         return_breakdown: Also return diagnostics for why the frame score moves
             (see `_breakdown_metrics`). Off by default so callers and results.json
             are unchanged.
+        return_scores: Also return the per-frame labels, vote and max-tile scores
+            (both computed whatever the aggregation) and session ids under "scores",
+            as numpy arrays, for scores.npz. The caller removes it before writing
+            results.
 
     Returns:
-        dict with keys: ap, auc_roc, f1, threshold (plus the breakdown keys when
-        `return_breakdown` is set).
+        dict with keys: ap, auc_roc, f1, threshold and the RECALL_FPR_KEYS (recall at
+        fixed FPR on the aggregation score and on the max-tile score), plus the
+        breakdown keys / "scores" on request.
     """
     from src.data.frame_cache import CacheMissError
     from src.preprocessing.geometry import get_assembler, get_geometry
@@ -271,6 +283,7 @@ def run_patch_agg(
     all_labels: list[int] = []
     all_vote_scores: list[float] = []
     all_max_scores: list[float] = []
+    all_sessions: list[str] = []
 
     for sid in session_ids:
         path = Path(session_map[sid])
@@ -400,25 +413,49 @@ def run_patch_agg(
             all_vote_scores.append(vote_frac)
             all_max_scores.append(float(patch_scores.max()) if n_patches else 0.0)
             all_labels.append(int(round(float(labels_arr[frame_idx]))))
+            all_sessions.append(sid)
 
+    y_true = np.array(all_labels, dtype=int)
+    vote = np.array(all_vote_scores, dtype=float)
+    max_score = np.array(all_max_scores, dtype=float)
     if not all_scores:
         nan = float("nan")
-        return {"ap": nan, "auc_roc": nan, "f1": nan, "threshold": nan}
+        out: dict[str, Any] = {"ap": nan, "auc_roc": nan, "f1": nan, "threshold": nan}
+        # No frames: recall_at_fpr returns NaN for every key.
+        out.update(_recall_metrics(y_true, vote, max_score))
+    else:
+        y_score = np.array(all_scores)
+        best_f1, threshold = f1_at_optimal_threshold(y_true, y_score)
+        out = {
+            "ap": average_precision(y_true, y_score),
+            "auc_roc": auc_roc(y_true, y_score),
+            "f1": best_f1,
+            "threshold": threshold,
+        }
+        out.update(_recall_metrics(y_true, y_score, max_score))
+        if return_breakdown:
+            out.update(_breakdown_metrics(y_true, vote, max_score))
+    if return_scores:
+        out["scores"] = {
+            "y_true": y_true.astype(np.int8),
+            "vote": vote.astype(np.float32),
+            "max": max_score.astype(np.float32),
+            "session": np.array(all_sessions, dtype=str),
+        }
+    return out
 
-    y_score = np.array(all_scores)
-    y_true = np.array(all_labels)
-    best_f1, threshold = f1_at_optimal_threshold(y_true, y_score)
-    out = {
-        "ap": average_precision(y_true, y_score),
-        "auc_roc": auc_roc(y_true, y_score),
-        "f1": best_f1,
-        "threshold": threshold,
-    }
-    if return_breakdown:
-        out.update(
-            _breakdown_metrics(
-                y_true, np.array(all_vote_scores), np.array(all_max_scores)
-            )
+
+def _recall_metrics(
+    y_true: np.ndarray, y_score: np.ndarray, max_score: np.ndarray
+) -> dict[str, float]:
+    """Recall at each fixed FPR, on the aggregation score and on the max-tile score."""
+    out: dict[str, float] = {}
+    for t, target in RECALL_FPR_TARGETS.items():
+        out[f"recall_at_fpr_{t}"], out[f"fpr_at_fpr_{t}"] = recall_at_fpr(
+            y_true, y_score, target
+        )
+        out[f"max_recall_at_fpr_{t}"], out[f"max_fpr_at_fpr_{t}"] = recall_at_fpr(
+            y_true, max_score, target
         )
     return out
 

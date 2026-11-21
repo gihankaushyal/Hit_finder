@@ -90,3 +90,41 @@ def test_pool_seeds_menu_lists_each_group_once(tmp_path):
         "m-fold*-seed*",
         "m-fold*-seed*-jitter",
     ]
+
+
+def test_metric_falls_back_to_the_inference_results(tmp_path, capsys):
+    _run(tmp_path, "m-fold1-seed42", 1, 0.9)
+    (tmp_path / "m-fold1-seed42" / "results.inference.json").write_text(json.dumps(
+        {"cross": {"recall_at_fpr_1e-2": 0.61, "ap": 0.1},
+         "in_domain": {"recall_at_fpr_1e-2": 0.7}}
+    ))  # fmt: skip
+    results = agg.load_results(tmp_path, "m", metric="recall_at_fpr_1e-2")
+    assert results[0]["cross"]["recall_at_fpr_1e-2"] == 0.61
+    assert results[0]["cross"]["ap"] == 0.9  # results.json wins for everything else
+    agg.print_metric_table("m", results, "recall_at_fpr_1e-2")
+    out = capsys.readouterr().out
+    assert "0.6100" in out and "0.7000" in out
+
+
+def test_results_json_wins_when_it_has_the_metric(tmp_path):
+    _run(tmp_path, "m-fold1-seed42", 1, 0.9)
+    (tmp_path / "m-fold1-seed42" / "results.inference.json").write_text(
+        json.dumps({"cross": {"ap": 0.1}, "in_domain": {"ap": 0.1}})
+    )
+    results = agg.load_results(tmp_path, "m", metric="ap")
+    assert results[0]["cross"]["ap"] == 0.9
+
+
+def test_a_fold_without_the_metric_shows_na(tmp_path, capsys):
+    _run(tmp_path, "m-fold1-seed42", 1, 0.9)
+    results = agg.load_results(tmp_path, "m", metric="recall_at_fpr_1e-2")
+    mu, _ = agg.print_metric_table("m", results, "recall_at_fpr_1e-2")
+    assert "n/a" in capsys.readouterr().out and mu != mu  # NaN mean
+
+
+def test_the_metric_flag_replaces_the_default_table(tmp_path, capsys):
+    _run(tmp_path, "m-fold1-seed42", 1, 0.9)
+    agg.main(["--checkpoints-dir", str(tmp_path), "--run-prefix", "m",
+              "--metric", "auc_roc"])  # fmt: skip
+    out = capsys.readouterr().out
+    assert "(auc_roc)" in out and "Cross AP" not in out

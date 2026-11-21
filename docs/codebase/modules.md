@@ -11,7 +11,7 @@ Layer 4 — DataLoader     src/data/dataloader.py
 Layer 3 — Dataset        src/data/dataset.py          src/evaluation/benchmark.py
 Layer 2 — Cache + Pipeline  src/data/frame_cache.py   src/preprocessing/pipeline.py
 Layer 1 — I/O + Hitfinders  src/preprocessing/{io,geometry}.py   src/hitfinders/*
-Layer 0 — Leaves         src/preprocessing/{normalize,augment}.py   src/evaluation/metrics.py
+Layer 0 — Leaves         src/preprocessing/{normalize,augment}.py   src/evaluation/{metrics,metric_keys}.py
                          src/models/{supervised,ssl}.py   src/training/train_supervised.py   src/utils/config.py
 ```
 
@@ -129,9 +129,9 @@ Training loop functions and the primary entry-point scripts. Invoked as `python 
 | `recipe.py` | Careful fine-tune recipe, opt-in via config: layer-wise lr decay, no weight decay on norm/bias, linear warmup + cosine schedule | `build_optimizer()`, `lr_factor()`, `apply_lr_schedule()` |
 | `run_naming.py` | Versioned run-name prefix validation and the resume/override checkpoint gate shared by all entry points | `validate_run_name_prefix()`, `fold_run_name()`, `expand_finetune_prefix()`, `check_checkpoint_collisions()`, `effective_resume()` |
 | `override_marker.py` | `override_applied.json` in the run dir: a requeued SLURM job (same job id, higher restart count) resumes instead of re-running `--override-training` | `write_override_marker()`, `override_already_applied()`, `current_job_id()`, `current_restart_count()` |
-| `checkpoint_io.py` | Checkpoint writes a preemption cannot truncate (tmp file, then rename); used for `best.pt`, `last.pt` and epoch snapshots | `atomic_torch_save()`, `TMP_GLOB` (deleted by `--override-training`) |
+| `checkpoint_io.py` | Writes a preemption cannot truncate (tmp file, fsync, then rename); used for `best.pt`, `last.pt`, epoch snapshots and the score files | `atomic_write()`, `atomic_torch_save()`, `TMP_GLOB` (deleted by `--override-training`) |
 | `wandb_identity.py` | New W&B run id per override attempt (`<run>`, `<run>-o2`, …) kept in `<run_dir>/wandb_id.txt`; previous run tagged `overridden` | `resolve_wandb_id()`, `select_current_runs()`, `rotate_wandb_id()`, `next_wandb_id()`, `ensure_fresh_wandb_id()`, `wandb_id_for_training()`, `tag_overridden()`, `OverrideHook`, `override_hook_from_cfg()` |
-| `inference_results.py` | Result-file naming (`results.json` vs `results.inference.json`), the `training` / `inference` blocks, W&B summary updates, and the training-sanity check for `--inference-only` | `inference_result_path()`, `training_block()`, `inference_block()`, `summary_updates()`, `assess_training()`, `fetch_wandb_history()`, `loss_flatness()`, `wandb_enabled()` |
+| `inference_results.py` | Result-file naming (`results.json` vs `results.inference.json`, and the matching `scores.npz` / `scores.inference.npz` per-frame score files), the `training` / `inference` blocks, W&B summary updates, and the training-sanity check for `--inference-only`. Imports no numpy or torch at module level (`wandb_identity` imports it) | `inference_result_path()`, `scores_path_for()`, `write_scores()`, `SPLIT_RESULT_KEYS`, `training_block()`, `inference_block()`, `summary_updates()`, `assess_training()`, `fetch_wandb_history()`, `loss_flatness()`, `wandb_enabled()` |
 
 **Imports from:** `torch`, `wandb`, `src/data/`, `src/models/`, `src/evaluation/`; `lodo.py` also imports `inference_results.py` and `wandb_identity.py`
 **Imported by:** `train_asymmetric.py` and `train_ssl_finetune.py` import `lodo` (`_train_fold`, `build_sessions`), `run_naming`, `wandb_identity` and `inference_results`; `train_ssl_pretrain.py` imports `lodo.build_sessions`, `run_naming`, `wandb_identity` and `train_supervised._set_seeds`. Nothing imports the entry points themselves.
@@ -144,7 +144,8 @@ Metric functions and LODO orchestration. `benchmark.py` is the highest-level ent
 
 | File | Purpose | Key exports |
 |------|---------|-------------|
-| `metrics.py` | Standalone metric functions | `average_precision()`, `auc_roc()`, `f1_at_optimal_threshold()` |
+| `metrics.py` | Standalone metric functions | `average_precision()`, `auc_roc()`, `f1_at_optimal_threshold()`, `recall_at_fpr()` |
+| `metric_keys.py` | Names of the recall-at-fixed-FPR metrics, without numpy (re-exported by `metrics.py`) | `RECALL_FPR_TARGETS`, `RECALL_FPR_KEYS` |
 | `benchmark.py` | LODO fold orchestration + vote aggregation | `run_patch_agg()` ⚡, `build_lodo_folds()`, `build_session_stratified_split()`, `run_fold()`, `run_benchmark()`, `run_on_loader()`, `save_split_artifact()`, `load_split_artifact()`, `format_results_table()` |
 
 **`run_patch_agg` signature:**
@@ -185,7 +186,8 @@ Python utilities (files here that import from `src/` carry a `sys.path.insert` h
 | `visualize_assembled.py` | Save assembled detector images to PNG | `preprocessing.{geometry,io}`, `reborn`, `matplotlib` |
 | `visualize_mae_recon.py` | Masked input / reconstruction / target renders for an MAE checkpoint (output in `docs/figures/mae_recon/`) | `models.ssl`, `data.dataloader`, `evaluation.benchmark` |
 | `probe_hdf5.py` | Print HDF5/CXI file tree: keys, shapes, dtypes | (stdlib + h5py only) |
-| `aggregate_lodo_results.py` | Read `checkpoints/<run>-fold*/results.json`, print per-variant tables with sample std, grouping runs by (prefix, suffix, seed); interactive menu, `--select`, `--run-prefix` (a bare prefix is unsuffixed seed 42; other groups use the menu key `<prefix>-fold*-seed<S><suffix>`), `--checkpoints-dir`, `--pool-seeds` (average the seeds of each group per fold) | (stdlib + numpy; reads `results.json` files; imports `DEFAULT_SEED` from `src.utils.config`) |
+| `aggregate_lodo_results.py` | Read `checkpoints/<run>-fold*/results.json`, print per-variant tables with sample std, grouping runs by (prefix, suffix, seed); interactive menu, `--select`, `--run-prefix` (a bare prefix is unsuffixed seed 42; other groups use the menu key `<prefix>-fold*-seed<S><suffix>`), `--checkpoints-dir`, `--pool-seeds` (average the seeds of each group per fold), `--metric <key>` (one results key, with the `results.inference.json` fallback) | (stdlib + numpy; reads `results.json` files; imports `DEFAULT_SEED` from `src.utils.config`) |
+| `recall_fpr_stability.py` | Bootstrap the per-frame score files (`scores.npz`, else `scores.inference.npz`) to decide whether recall at FPR 10⁻³ or 10⁻² is stable enough to report: median and 90% interval of recall at several negative counts, `--max-width` rule, JSON output (`--out`) | `evaluation.metrics` (`recall_at_fpr`) |
 | `build_frame_cache.py` | Build the on-disk frame cache once per frame (float16, memory-mappable) | `data.dataset._compute_gcn_frame`, `data.frame_cache` |
 | `plan_cache_staging.py` | Emit one fold's cache entry directories in NVMe staging priority order (train sessions first, then val; in-domain and cross-detector sessions are never staged) | `evaluation.benchmark`, `training.lodo`, `utils.config` |
 | `plot_hit_frac.py` | Plot realized `train/realized_hit_frac` against the configured value from W&B (`wandb.Api()`) | `wandb`, `matplotlib`, `training.wandb_identity` |

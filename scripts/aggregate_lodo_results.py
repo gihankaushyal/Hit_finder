@@ -26,6 +26,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from src.utils.config import DEFAULT_SEED as CONFIG_DEFAULT_SEED  # noqa: E402
 
 DETECTOR_ORDER = {1: "AGIPD", 2: "JUNGFRAU_4M", 3: "ePix10k", 4: "Eiger4M"}
+# The side file an --inference-only pass writes next to a finished run's results.json
+# (src/training/inference_results.py; not imported, to keep this script free of torch).
+INFERENCE_RESULTS = "results.inference.json"
+_SPLITS = ("cross", "in_domain")
 
 # A run directory is "<prefix>-fold<N>-seed<S><suffix>". The optional suffix (e.g. "-v2" from
 # wandb.run_suffix, or "-careful" / "-lpft" from --run-suffix) is part of the group key, so a
@@ -90,12 +94,17 @@ def discover_prefixes(checkpoints_dir: Path, pool_seeds: bool = False) -> list[s
 
 
 def load_results(
-    checkpoints_dir: Path, run_prefix: str, pool_seeds: bool = False
+    checkpoints_dir: Path,
+    run_prefix: str,
+    pool_seeds: bool = False,
+    metric: str | None = None,
 ) -> list[dict]:
     """Load results.json for every fold of one run group (see discover_prefixes).
 
     pool_seeds=True matches every seed of the group's prefix and suffix; otherwise a key names
     exactly one seed (a legacy "seed*" key means the default seed, as it did before seeds existed).
+    metric: a split key that results.json may lack (a run evaluated before the key existed);
+    it is then taken from results.inference.json, and only that key.
     """
     key = _KEY_RE.match(run_prefix)
     prefix = key.group("prefix")
@@ -113,6 +122,8 @@ def load_results(
             continue
         with open(path) as f:
             data = json.load(f)
+        if metric is not None:
+            _fill_metric_from_inference(data, path.with_name(INFERENCE_RESULTS), metric)
         fold_id = data.get("fold_id")
         if fold_id not in DETECTOR_ORDER:
             continue
@@ -127,6 +138,17 @@ def load_results(
     if pool_seeds:
         results = _pool_by_fold(results)
     return sorted(results, key=lambda r: r["fold_id"])
+
+
+def _fill_metric_from_inference(data: dict, side: Path, metric: str) -> None:
+    """Copy `metric` into data's splits from the inference side file where data lacks it."""
+    missing = [s for s in _SPLITS if metric not in data.get(s, {})]
+    if not missing or not side.exists():
+        return
+    extra = json.loads(side.read_text())
+    for s in missing:
+        if metric in extra.get(s, {}):
+            data.setdefault(s, {})[metric] = extra[s][metric]
 
 
 def _pool_by_fold(results: list[dict]) -> list[dict]:
@@ -193,6 +215,34 @@ def print_variant_table(label: str, results: list[dict]) -> tuple[float, float]:
     return ap_mu, ap_sd
 
 
+def print_metric_table(
+    label: str, results: list[dict], metric: str
+) -> tuple[float, float]:
+    """One variant's table for a single metric (cross and in-domain); n/a where missing.
+
+    Returns (mean, std) of the cross value over the folds that have it.
+    """
+    print(f"\n## {label}  ({metric})")
+    print(f"{'Fold':<6} {'Held-out':<14} {'Cross':>9} {'ID':>9}")
+    print("-" * 41)
+
+    def fmt(v: float) -> str:
+        return f"{v:>9.4f}" if v == v else f"{'n/a':>9}"
+
+    cross_vals = []
+    for r in results:
+        c = r["cross"].get(metric, float("nan"))
+        d = r["in_domain"].get(metric, float("nan"))
+        print(f"{r['fold_id']:<6} {r['test_detector']:<14} {fmt(c)} {fmt(d)}")
+        if c == c:
+            cross_vals.append(c)
+    mu, sd = mean_std(cross_vals)
+    print(f"{'Mean':<6} {f'({len(cross_vals)}/4 folds)':<14} {fmt(mu)}")
+    if len(cross_vals) > 1:
+        print(f"{'Std':<6} {'':<14} {fmt(sd)}")
+    return mu, sd
+
+
 def print_doc_baseline_row(key: str) -> tuple[float, float]:
     """Print a one-line synthetic row for a doc-only baseline (no per-fold data)."""
     label, mu, sd, source = DOC_BASELINES[key]
@@ -247,7 +297,7 @@ def parse_select_flag(select: str, menu_len: int) -> list[int]:
     return indices
 
 
-def main():
+def main(argv: list[str] | None = None):
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
@@ -278,7 +328,21 @@ def main():
             "'1,3,4') or 'all'. Skips the interactive prompt."
         ),
     )
-    args = parser.parse_args()
+    parser.add_argument(
+        "--metric",
+        default=None,
+        help=(
+            "Tabulate one key of the cross / in_domain blocks (for example "
+            "recall_at_fpr_1e-3) instead of AP/AUC/F1. Read from results.inference.json "
+            "when results.json lacks it; n/a where neither has it."
+        ),
+    )
+    args = parser.parse_args(argv)
+
+    def print_table(label: str, results: list[dict]) -> tuple[float, float]:
+        if args.metric is None:
+            return print_variant_table(label, results)
+        return print_metric_table(label, results, args.metric)
 
     if args.run_prefix is not None:
         # Single-variant mode: original behavior, bypasses the menu entirely.
@@ -287,11 +351,13 @@ def main():
             + ("" if _GROUP_SEP in args.run_prefix else _GROUP_SEP + DEFAULT_SEED)
             + "/results.json\n"
         )
-        results = load_results(args.checkpoints_dir, args.run_prefix, args.pool_seeds)
+        results = load_results(
+            args.checkpoints_dir, args.run_prefix, args.pool_seeds, args.metric
+        )
         if not results:
             print("No completed fold results found.")
             return
-        print_variant_table(args.run_prefix, results)
+        print_table(args.run_prefix, results)
         return
 
     menu = build_menu(args.checkpoints_dir, args.pool_seeds)
@@ -308,18 +374,25 @@ def main():
     for i in indices:
         key, label, is_live = menu[i - 1]
         if is_live:
-            results = load_results(args.checkpoints_dir, key, args.pool_seeds)
+            results = load_results(
+                args.checkpoints_dir, key, args.pool_seeds, args.metric
+            )
             if not results:
                 print(f"\n## {label}\n  No completed fold results found — skipping.")
                 continue
-            ap_mu, ap_sd = print_variant_table(key, results)
+            ap_mu, ap_sd = print_table(key, results)
+        elif args.metric is not None:
+            print(f"\n## {label}\n  Doc-only baseline has no {args.metric} — skipping.")
+            continue
         else:
             ap_mu, ap_sd = print_doc_baseline_row(key)
         summary_rows.append((label, ap_mu, ap_sd))
 
     if len(summary_rows) > 1:
-        print("\n## Cross-variant summary (mean cross AP)")
-        print(f"{'Variant':<55} {'Mean AP':>8} {'Std AP':>8}")
+        name = args.metric or "AP"
+        print(f"\n## Cross-variant summary (mean cross {name})")
+        col = "" if args.metric else " AP"  # the default header is unchanged
+        print(f"{'Variant':<55} {'Mean' + col:>8} {'Std' + col:>8}")
         print("-" * 73)
         for label, mu, sd in summary_rows:
             sd_str = f"{sd:>8.4f}" if not (sd != sd) else f"{'—':>8}"

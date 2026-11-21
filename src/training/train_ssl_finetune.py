@@ -69,7 +69,12 @@ from src.training.run_naming import (
     validate_run_name_prefix,
 )
 from src.training.checkpoint_io import TMP_GLOB
-from src.training.inference_results import INFERENCE_RESULTS_NAME, RESULTS_NAME
+from src.training.inference_results import (
+    INFERENCE_RESULTS_NAME,
+    INFERENCE_SCORES_NAME,
+    RESULTS_NAME,
+    SCORES_NAME,
+)
 from src.training.wandb_identity import override_hook_from_cfg
 from src.utils.config import apply_seed_override, load_config, seed_arg
 
@@ -208,6 +213,8 @@ def prepare_finetune_run(
         extra_delete=(
             RESULTS_NAME,
             INFERENCE_RESULTS_NAME,
+            SCORES_NAME,
+            INFERENCE_SCORES_NAME,
             LAST_CHECKPOINT_NAME,
             TMP_GLOB,  # a partial checkpoint left by a kill mid-save
         ),
