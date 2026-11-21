@@ -57,7 +57,7 @@ from src.training.recipe import (
     apply_lr_schedule,
     build_optimizer,
 )
-from src.training.checkpoint_io import atomic_torch_save
+from src.training.checkpoint_io import atomic_torch_save, atomic_write
 from src.training.train_supervised import _set_seeds, train_one_epoch
 from src.training.wandb_identity import resolve_wandb_id, wandb_id_for_training
 
@@ -792,8 +792,8 @@ def _train_fold(
     scores_path = scores_path_for(results_path)
     write_scores(scores_path, {"cross": cross_scores, "in_domain": in_domain_scores})
     print(f"  Per-frame scores → {scores_path}")
-    with open(results_path, "w") as f:
-        json.dump(result, f, indent=2)
+    text = json.dumps(result, indent=2)
+    atomic_write(results_path, lambda f: f.write(text.encode()))
     print(f"  Results saved → {results_path}")
 
     if inference_only:

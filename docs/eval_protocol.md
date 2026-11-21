@@ -103,8 +103,9 @@ threshold comes from the evaluated split itself: this is a ranking metric like A
 a deployable operating point.
 
 Targets are 10⁻³ and 10⁻² (`RECALL_FPR_TARGETS`). Per split, `run_patch_agg` reports
-`recall_at_fpr_<t>` and `fpr_at_fpr_<t>` on the aggregation score (the vote score, the
-headline) and `max_recall_at_fpr_<t>` / `max_fpr_at_fpr_<t>` on the max-tile score (a
+`recall_at_fpr_<t>` and `fpr_at_fpr_<t>` on the aggregation score (the headline; the
+vote score whenever `aggregation: vote`, as in every current config, and the max-tile
+score under `aggregation: max`) and `max_recall_at_fpr_<t>` / `max_fpr_at_fpr_<t>` on the max-tile score (a
 diagnostic), for `<t>` in `1e-3`, `1e-2`. They are written to the test blocks of the
 result file and to W&B (`cross/…`, `in_domain/…`), not logged per validation epoch.
 
@@ -114,7 +115,11 @@ and n negatives, drawn with replacement, 1,000 resamples, seed 0) at 500, 1,000,
 5,000 and all negatives, and prints the median and 90% interval of recall at each size.
 Rule, at the full size: report 10⁻³ if every run's 90% interval is narrower than
 `--max-width` (default 0.05); else 10⁻² if that holds; else report each figure with its
-interval. Runs whose split has one class only are listed and left out.
+interval. A target also fails when no run has a defined interval, or when any run has
+fewer than 10/target negatives (fewer than 10 expected false positives: recall there is
+recall above the few highest negatives, which the bootstrap cannot resample beyond).
+Runs whose split has one class only, and runs without a score file, are listed and
+left out.
 
 All headline metrics are **frame-level**. Both are computed twice per fold: on
 the held-out detector (`cross`) and on the test split of the training detectors
@@ -179,10 +184,11 @@ The test evaluation also writes the per-frame scores, before the result file:
 `scores.npz` next to `results.json`, `scores.inference.npz` next to
 `results.inference.json`. Keys are `<split>_<name>` for split `cross` / `in_domain`
 and name `y_true` (int8), `vote` and `max` (float32, both computed whatever the
-aggregation) and `session`. `--override-training` deletes both score files.
+aggregation) and `session`. Score and result files are written atomically (temporary
+file, then rename). `--override-training` deletes both score files.
 
 `python scripts/aggregate_lodo_results.py` collects finished folds into
-per-variant tables, grouping runs by (prefix, suffix, seed) (interactive menu, `--select`, or `--run-prefix`, where a bare prefix means unsuffixed seed 42 and any other group is passed as the menu key `<prefix>-fold*-seed<S><suffix>`; `--pool-seeds` averages the seeds of each group per fold and mixes seed counts when only some folds were repeated). `--metric <key>` (for example `recall_at_fpr_1e-3`) tabulates that one key, cross and in-domain, instead of AP / AUC / F1; a `results.json` without the key takes it from `results.inference.json`, and a fold with neither shows `n/a`.
+per-variant tables, grouping runs by (prefix, suffix, seed) (interactive menu, `--select`, or `--run-prefix`, where a bare prefix means unsuffixed seed 42 and any other group is passed as the menu key `<prefix>-fold*-seed<S><suffix>`; `--pool-seeds` averages the seeds of each group per fold and mixes seed counts when only some folds were repeated). `--metric <key>` (for example `recall_at_fpr_1e-3`) tabulates that one key, cross and in-domain, instead of AP / AUC / F1; a `results.json` without the key takes it from `results.inference.json` (marked `*`), a fold with neither shows `n/a`, and an unknown key is rejected.
 
 ## Run Identity
 

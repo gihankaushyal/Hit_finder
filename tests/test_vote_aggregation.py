@@ -139,3 +139,17 @@ def test_run_patch_agg_with_no_frames_keeps_every_recall_key_nan(tmp_path):
         _FixedScoreModel(0.8), {"s0": tmp_path / "missing.cxi"}, ["s0"], device="cpu"
     )
     assert all(np.isnan(out[k]) for k in RECALL_FPR_KEYS)
+
+
+def test_recall_keys_use_the_aggregation_score_and_the_max_score_separately():
+    from src.evaluation.benchmark import _recall_metrics
+    from src.evaluation.metrics import recall_at_fpr
+
+    y = np.array([1, 1, 0, 0, 0, 0, 0, 0, 0, 0])
+    # The two scores rank the frames differently: vote separates, max does not.
+    vote = np.array([0.9, 0.8, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1])
+    max_score = np.array([0.2, 0.9, 0.95, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1])
+    out = _recall_metrics(y, vote, max_score)
+    assert out["recall_at_fpr_1e-2"] == recall_at_fpr(y, vote, 1e-2)[0] == 1.0
+    assert out["max_recall_at_fpr_1e-2"] == recall_at_fpr(y, max_score, 1e-2)[0]
+    assert out["max_recall_at_fpr_1e-2"] == 0.0

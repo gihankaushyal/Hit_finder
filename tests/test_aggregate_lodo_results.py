@@ -2,6 +2,8 @@ import importlib.util
 import json
 from pathlib import Path
 
+import pytest
+
 _SPEC = importlib.util.spec_from_file_location(
     "aggregate_lodo_results",
     Path(__file__).resolve().parents[1] / "scripts" / "aggregate_lodo_results.py",
@@ -103,7 +105,8 @@ def test_metric_falls_back_to_the_inference_results(tmp_path, capsys):
     assert results[0]["cross"]["ap"] == 0.9  # results.json wins for everything else
     agg.print_metric_table("m", results, "recall_at_fpr_1e-2")
     out = capsys.readouterr().out
-    assert "0.6100" in out and "0.7000" in out
+    assert "0.6100*" in out and "0.7000*" in out  # marked as from the side file
+    assert "* from results.inference.json" in out
 
 
 def test_results_json_wins_when_it_has_the_metric(tmp_path):
@@ -113,6 +116,7 @@ def test_results_json_wins_when_it_has_the_metric(tmp_path):
     )
     results = agg.load_results(tmp_path, "m", metric="ap")
     assert results[0]["cross"]["ap"] == 0.9
+    assert agg.FROM_INFERENCE not in results[0]  # nothing filled, nothing marked
 
 
 def test_a_fold_without_the_metric_shows_na(tmp_path, capsys):
@@ -128,3 +132,29 @@ def test_the_metric_flag_replaces_the_default_table(tmp_path, capsys):
               "--metric", "auc_roc"])  # fmt: skip
     out = capsys.readouterr().out
     assert "(auc_roc)" in out and "Cross AP" not in out
+
+
+def test_an_unknown_metric_name_is_rejected(tmp_path):
+    _run(tmp_path, "m-fold1-seed42", 1, 0.9)
+    with pytest.raises(SystemExit):
+        agg.main(["--checkpoints-dir", str(tmp_path), "--run-prefix", "m",
+                  "--metric", "recall_at_fpr_1e3"])  # fmt: skip
+
+
+def test_metric_pools_seeds_across_results_and_inference_files(tmp_path, capsys):
+    _run(tmp_path, "m-fold1-seed42", 1, 0.9)
+    _run(tmp_path, "m-fold1-seed43", 1, 0.9)
+    key = "recall_at_fpr_1e-2"
+    r42 = tmp_path / "m-fold1-seed42" / "results.json"
+    data = json.loads(r42.read_text())
+    data["cross"][key] = data["in_domain"][key] = 0.4
+    r42.write_text(json.dumps(data))
+    (tmp_path / "m-fold1-seed43" / "results.inference.json").write_text(
+        json.dumps({"cross": {key: 0.6}, "in_domain": {key: 0.8}})
+    )
+    rows = agg.load_results(tmp_path, "m-fold*-seed*", pool_seeds=True, metric=key)
+    assert rows[0]["n_seeds"] == 2
+    assert rows[0]["cross"][key] == pytest.approx(0.5)
+    assert rows[0]["in_domain"][key] == pytest.approx(0.6)
+    agg.print_metric_table("m", rows, key)
+    assert "0.5000*" in capsys.readouterr().out

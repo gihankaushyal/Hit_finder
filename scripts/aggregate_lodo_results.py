@@ -23,6 +23,7 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from src.evaluation.metric_keys import RECALL_FPR_KEYS  # noqa: E402
 from src.utils.config import DEFAULT_SEED as CONFIG_DEFAULT_SEED  # noqa: E402
 
 DETECTOR_ORDER = {1: "AGIPD", 2: "JUNGFRAU_4M", 3: "ePix10k", 4: "Eiger4M"}
@@ -30,6 +31,11 @@ DETECTOR_ORDER = {1: "AGIPD", 2: "JUNGFRAU_4M", 3: "ePix10k", 4: "Eiger4M"}
 # (src/training/inference_results.py; not imported, to keep this script free of torch).
 INFERENCE_RESULTS = "results.inference.json"
 _SPLITS = ("cross", "in_domain")
+# Keys --metric accepts: the per-split keys of a result file
+# (SPLIT_RESULT_KEYS in src/training/inference_results.py).
+METRIC_CHOICES = ("ap", "auc_roc", "f1", "threshold", *RECALL_FPR_KEYS)
+# Set on a loaded record: the splits whose --metric value came from INFERENCE_RESULTS.
+FROM_INFERENCE = "_metric_from_inference"
 
 # A run directory is "<prefix>-fold<N>-seed<S><suffix>". The optional suffix (e.g. "-v2" from
 # wandb.run_suffix, or "-careful" / "-lpft" from --run-suffix) is part of the group key, so a
@@ -149,6 +155,7 @@ def _fill_metric_from_inference(data: dict, side: Path, metric: str) -> None:
     for s in missing:
         if metric in extra.get(s, {}):
             data.setdefault(s, {})[metric] = extra[s][metric]
+            data.setdefault(FROM_INFERENCE, []).append(s)
 
 
 def _pool_by_fold(results: list[dict]) -> list[dict]:
@@ -163,6 +170,9 @@ def _pool_by_fold(results: list[dict]) -> list[dict]:
             "test_detector": runs[0]["test_detector"],
             "n_seeds": len(runs),
         }
+        filled = sorted({s for r in runs for s in r.get(FROM_INFERENCE, [])})
+        if filled:
+            rec[FROM_INFERENCE] = filled
         for split in ("cross", "in_domain"):
             rec[split] = {
                 k: float(np.mean([r[split][k] for r in runs]))
@@ -220,7 +230,9 @@ def print_metric_table(
 ) -> tuple[float, float]:
     """One variant's table for a single metric (cross and in-domain); n/a where missing.
 
-    Returns (mean, std) of the cross value over the folds that have it.
+    A value read from results.inference.json is marked with "*" (for pooled seeds: at
+    least one seed's value). Returns (mean, std) of the cross value over the folds that
+    have it.
     """
     print(f"\n## {label}  ({metric})")
     print(f"{'Fold':<6} {'Held-out':<14} {'Cross':>9} {'ID':>9}")
@@ -230,16 +242,26 @@ def print_metric_table(
         return f"{v:>9.4f}" if v == v else f"{'n/a':>9}"
 
     cross_vals = []
+    any_filled = False
     for r in results:
+        filled = r.get(FROM_INFERENCE, [])
+        any_filled = any_filled or bool(filled)
         c = r["cross"].get(metric, float("nan"))
         d = r["in_domain"].get(metric, float("nan"))
-        print(f"{r['fold_id']:<6} {r['test_detector']:<14} {fmt(c)} {fmt(d)}")
+        mc = "*" if "cross" in filled else " "
+        md = "*" if "in_domain" in filled else " "
+        print(f"{r['fold_id']:<6} {r['test_detector']:<14} {fmt(c)}{mc}{fmt(d)}{md}")
         if c == c:
             cross_vals.append(c)
     mu, sd = mean_std(cross_vals)
     print(f"{'Mean':<6} {f'({len(cross_vals)}/4 folds)':<14} {fmt(mu)}")
     if len(cross_vals) > 1:
         print(f"{'Std':<6} {'':<14} {fmt(sd)}")
+    if any_filled:
+        print(
+            f"* from {INFERENCE_RESULTS} (an --inference-only pass; see its"
+            " 'inference' block for the evaluation settings)"
+        )
     return mu, sd
 
 
@@ -331,10 +353,11 @@ def main(argv: list[str] | None = None):
     parser.add_argument(
         "--metric",
         default=None,
+        choices=METRIC_CHOICES,
         help=(
             "Tabulate one key of the cross / in_domain blocks (for example "
             "recall_at_fpr_1e-3) instead of AP/AUC/F1. Read from results.inference.json "
-            "when results.json lacks it; n/a where neither has it."
+            "when results.json lacks it (marked *); n/a where neither has it."
         ),
     )
     args = parser.parse_args(argv)
@@ -395,8 +418,9 @@ def main(argv: list[str] | None = None):
         print(f"{'Variant':<55} {'Mean' + col:>8} {'Std' + col:>8}")
         print("-" * 73)
         for label, mu, sd in summary_rows:
+            mu_str = f"{mu:>8.4f}" if mu == mu else f"{'n/a':>8}"
             sd_str = f"{sd:>8.4f}" if not (sd != sd) else f"{'—':>8}"
-            print(f"{label:<55} {mu:>8.4f} {sd_str}")
+            print(f"{label:<55} {mu_str} {sd_str}")
 
 
 if __name__ == "__main__":
