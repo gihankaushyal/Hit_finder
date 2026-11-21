@@ -32,13 +32,18 @@ Question: is this branch ready for a PR into `$PHASE`?
    Pick the tier from `risk-tiers.md` and say it with the reason.
 3. **Mechanical checks.**
    ```bash
+   RUFF="$(command -v ruff || { [ -x "$HOME/.venvs/sfx-lint/bin/ruff" ] && echo "$HOME/.venvs/sfx-lint/bin/ruff"; })"
+   MYPY="$(command -v mypy || { [ -x "$HOME/.venvs/sfx-lint/bin/mypy" ] && echo "$HOME/.venvs/sfx-lint/bin/mypy"; })"
    python -m pytest tests/ -q 2>&1 | tail -5
    black --check src/ tests/
-   command -v ruff >/dev/null && ruff check . || echo "ruff: not installed"
-   command -v mypy >/dev/null && mypy || echo "mypy: not installed"
+   if [ -n "$RUFF" ]; then "$RUFF" check . || true; else echo "ruff: not installed"; fi
+   if [ -n "$MYPY" ]; then "$MYPY" --python-executable "$(command -v python)" || true; else echo "mypy: not installed"; fi
    ```
    `ruff` and `mypy` are report-only: their findings are listed and do not change the
-   verdict. If `src/preprocessing/` changed, read
+   verdict. Each is looked up on `PATH`, then in `$HOME/.venvs/sfx-lint/bin/` (a separate
+   venv, so the training environment is untouched); `mypy` reads the packages of the
+   `python` on `PATH` through `--python-executable`. "not installed" means the tool was
+   not found, never that it found problems. If `src/preprocessing/` changed, read
    `.claude/skills/pipeline-check/SKILL.md` and run its commands.
 4. **Review panel.** Run the agents the tier lists, in parallel. Give each the checkout
    path, the range `<merge-base>..<HEAD>` and the tier. Low tier: review inline against
