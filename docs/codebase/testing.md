@@ -1,6 +1,6 @@
 # Testing Guide
 
-1131 tests across 38 test files (counted with `pytest tests/ --collect-only -q` on 2026-11-21). Test counts per file are in the map below.
+1135 tests across 38 test files (counted with `pytest tests/ --collect-only -q` on 2026-11-21). Test counts per file are in the map below.
 
 ## Running Tests
 
@@ -70,9 +70,9 @@ pytest tests/ -v
 | `test_ssl_main_requeue.py` | 6 | A requeued SSL launch through the real `main()` entry points | tmp run dir |
 | `test_submit_script_parity.py` | 10 | The bash copies of the run-name prefix regexes and the seed lookup in the SSL submit scripts match `run_naming.py` and `load_config()`; the seed block is identical across the orchestrators and logs are created after the seed check | — |
 | `test_deprecated_scripts.py` | 23 | The seven legacy v1 submit scripts refuse to run and name their replacement | temp dir with stub `sbatch` / `python` |
-| `test_evaluation.py` | 47 | `metrics.py`: AP, AUC-ROC, F1 edge cases, `recall_at_fpr` (hand-worked: tie groups, coarse vote scores, one class only) and `recall_at_fprs` (equal to one target at a time); `benchmark.py` helpers | `np.array` fixtures |
+| `test_evaluation.py` | 47 | `metrics.py`: AP, AUC-ROC, F1 edge cases, `recall_at_fpr` (hand-worked: tie groups, coarse vote scores, one class only) and `recall_at_fprs` (equal to the original per-target scan); `benchmark.py` helpers | `np.array` fixtures |
 | `test_aggregate_lodo_results.py` | 15 | `scripts/aggregate_lodo_results.py` — grouping by (prefix, suffix, seed), the legacy `seed*` key, `--pool-seeds` pooling and menu listing, `--metric` with the `results.inference.json` fallback (marked `*`, also under `--pool-seeds`), `n/a`, unknown keys rejected, a pooled fold averaging the seeds that have the key (`+`), fold counts in the summary | temp checkpoint dirs |
-| `test_recall_fpr_stability.py` | 17 | `scripts/recall_fpr_stability.py` — the bootstrap spread shrinks with more negatives, sizes above the negative count, reproducible with a seed, the decision rule, score files read and JSON written, runs without scores listed, one-class runs reported, no measured run or too few negatives fails a target (a run with no negatives is undefined, not underpowered), positive `--sizes` / `--n-boot`, session resampling wider than frame resampling, both targets from the same resamples, a score file newer than its results file is incomplete, `--unit session` needs session ids | synthetic Gaussian scores |
+| `test_recall_fpr_stability.py` | 21 | `scripts/recall_fpr_stability.py` — the bootstrap spread shrinks with more negatives, sizes above the negative count, reproducible with a seed, the decision rule, score files read and JSON written, runs without scores listed, one-class runs reported, no measured run or too few negatives fails a target (a run with no negatives is undefined, not underpowered), positive `--sizes` / `--n-boot`, session resampling wider than frame resampling, the session width scaled by √(S/(S−1)) and the wider unit deciding, too many one-class resamples fail a target, smaller sizes drawn from the original negatives, both targets from the same resamples, a score file newer than its results file is incomplete, `--unit session` needs session ids | synthetic Gaussian scores |
 | `test_patch_eval.py` | 22 | Patch-level centroid crop geometry, patch-grid evaluation | synthetic canvas + centroids |
 | `test_vote_aggregation.py` | 8 | Vote aggregation: frame score formula, threshold behavior; `run_patch_agg` recall keys (only with `return_recall`, NaN with no frames, aggregation and max-tile scores kept apart) and `return_scores` | synthetic patch scores |
 | `test_config.py` | 11 | `load_config()`: base merge, model values win, missing file; the seed helpers (`seed_arg`, `apply_seed_override`) | tmp YAML files |

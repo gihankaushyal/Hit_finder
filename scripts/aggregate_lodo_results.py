@@ -449,7 +449,7 @@ def main(argv: list[str] | None = None):
         for label, mu, sd, n_folds in summary_rows:
             mu_str = f"{mu:>8.4f}" if mu == mu else f"{'n/a':>8}"
             sd_str = f"{sd:>8.4f}" if not (sd != sd) else f"{'—':>8}"
-            folds = f" {f'{n_folds}/4':>6}" if args.metric else ""
+            folds = f" {f'{n_folds}/{len(DETECTOR_ORDER)}':>6}" if args.metric else ""
             print(f"{label:<55} {mu_str} {sd_str}{folds}")
 
 

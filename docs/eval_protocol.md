@@ -112,24 +112,32 @@ test blocks of the result file and to W&B (`cross/…`, `in_domain/…`).
 
 Whether 10⁻³ can be reported depends on the number of negatives per fold.
 `scripts/recall_fpr_stability.py` bootstraps the saved per-frame scores (1,000
-resamples, seed 0). The resampling unit is the beamtime session by default
-(`--unit session`): frames of one session are not independent (constraint 7), so each
-resample draws the split's sessions with replacement, then the frames within each drawn
-session with replacement. `--unit frame` draws all positives and the negatives
-independently. At 500, 1,000, 2,000 and 5,000 negatives, n negatives are drawn with
-replacement from each resample; at the full count the resample is used as drawn. Both
-targets are read from the same resamples. The script prints, per run, the numbers of
-positives, negatives and sessions, and per (target, size) the median and 90% interval
-of recall and the number of resamples with no positive or no negative (left out of the
-quantiles).
-Rule, at the full size: report 10⁻³ if every run's 90% interval is narrower than
+resamples, seed 0) with two resampling units, both by default (`--unit both`):
+- **Frame:** all positives and all negatives drawn independently with replacement.
+- **Session:** frames of one session (one CXI file; constraint 7) may not be
+  independent, so each resample draws the split's S sessions with replacement, then
+  the frames within each drawn session. A cross split has S = 5 (10 for Jungfrau), and
+  a cluster bootstrap over so few units underestimates the spread by about (S−1)/S, so
+  the session width is scaled by √(S/(S−1)).
+
+`--unit frame` runs the frame unit only (needed when a score file has no session ids).
+At 500, 1,000, 2,000 and 5,000 negatives, n negatives are drawn with replacement from
+the original negatives of the drawn units; at the full count the resample is used as
+drawn. Both targets are read from the same resamples. The script prints, per run, the
+numbers of positives, negatives and sessions; per (unit, target, size) the median and
+90% interval of recall and the number of resamples with no positive or no negative
+(left out of the quantiles); and each run's decision width.
+
+Rule, at the full size: a run's decision width is the wider of the frame interval and
+the scaled session interval. Report 10⁻³ if every run's decision width is below
 `--max-width` (default 0.05); else 10⁻² if that holds; else report each figure with its
-interval. A target also fails when no run has a defined interval, or when any run has
-fewer than 10/target negatives (fewer than 10 expected false positives: recall there is
-recall above the few highest negatives, which the bootstrap cannot resample beyond).
-Runs whose split has one class only, runs without a score file, and score files without
-a results file beside them that is at least as new (a pass killed between the two
-writes) are listed and left out.
+interval. A target also fails when no run has a defined width; when any run has fewer
+than 10/target negatives (fewer than 10 expected false positives: recall there is
+recall above the few highest negatives, which the bootstrap cannot resample beyond);
+or when more than 1% of a run's full-size resamples had one class only (the interval
+would describe only the resamples that drew both). Runs whose split has one class only,
+runs without a score file, and score files without a results file beside them that is
+at least as new (a pass killed between the two writes) are listed and left out.
 
 All headline metrics are **frame-level**. Both are computed twice per fold: on
 the held-out detector (`cross`) and on the test split of the training detectors

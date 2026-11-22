@@ -74,7 +74,7 @@ def test_the_rule_fails_a_target_no_run_measured():
 def test_the_rule_fails_a_target_with_an_underpowered_run():
     widths = {"1e-3": 0.0, "1e-2": 0.03}
     blocked = {"1e-3": ["r (400 negatives)"], "1e-2": []}
-    assert stab.decide(widths, max_width=0.05, underpowered=blocked) == "1e-2"
+    assert stab.decide(widths, max_width=0.05, blocked=blocked) == "1e-2"
 
 
 def test_too_few_negatives_for_a_target_fails_it_in_main(tmp_path):
@@ -116,8 +116,11 @@ def test_main_reads_score_files_and_writes_json(tmp_path):
     assert {r["n_neg"] for r in data["rows"]} == {500, 2_000}  # "all" is always added
     assert {r["file"] for r in data["rows"]} == {"scores.npz"}
     assert data["missing_scores"] == ["no-scores-fold1-seed42"]
-    assert data["unit"] == "session"
+    assert data["unit"] == "both"
     assert data["runs"]["m-fold1-seed42"]["n_sessions"] == 4
+    assert {r["unit"] for r in data["rows"]} == {"frame", "session"}
+    width = data["runs"]["m-fold1-seed42"]["width"]["1e-2"]
+    assert width["used"] == max(("frame", "session"), key=lambda u: width[u])
 
 
 def test_main_without_score_files_exits(tmp_path):
@@ -140,7 +143,7 @@ def test_a_run_without_positives_is_reported_not_counted(tmp_path):
             str(out),
         ]
     )
-    assert data["undefined"] == ["m-fold1-seed42 (1e-3)", "m-fold1-seed42 (1e-2)"]
+    assert data["undefined"] == ["m-fold1-seed42"]
     assert data["widest_at_full"] == {"1e-3": None, "1e-2": None}
     assert data["decision"] == "interval"  # nothing measured: no target is approved
 
@@ -153,7 +156,7 @@ def test_a_run_without_negatives_is_undefined_not_underpowered(tmp_path):
         ["--checkpoints-dir", str(tmp_path / "ckpt"), "--n-boot", "20",
          "--sizes", "500", "--max-width", "1.0", "--out", str(tmp_path / "o.json")]
     )  # fmt: skip
-    assert "b-fold1-seed42 (1e-2)" in data["undefined"]
+    assert data["undefined"] == ["b-fold1-seed42"]
     assert data["underpowered"]["1e-2"] == []  # only a's 3000 negatives count
     assert data["decision"] == "1e-2"
 
@@ -201,6 +204,70 @@ def test_both_targets_come_from_the_same_resamples():
         y, s, targets={"1e-2": 1e-2}, sizes=[], n_boot=50, seed=2
     )
     assert single[0] == by_t["1e-2"]  # adding a target does not change the draws
+
+
+def test_session_scale_widens_few_sessions():
+    assert stab.session_scale(5) == pytest.approx((5 / 4) ** 0.5)
+    assert stab.session_scale(100) == pytest.approx(1.0, abs=0.01)
+    assert np.isnan(stab.session_scale(1))
+
+
+def test_the_session_width_is_scaled_and_the_wider_unit_decides(tmp_path, monkeypatch):
+    y, s = _scores(n_neg=3_000)
+    _write_run(tmp_path / "ckpt" / "m-fold1-seed42", y, s)  # 4 sessions
+    real = stab.stability_rows
+
+    def fake(y, s, targets, sizes, n_boot, seed, sessions=None):
+        rows = real(y, s, targets, sizes, n_boot, seed, sessions)
+        half = 0.01 if sessions is None else 0.02  # session raw width 0.04
+        for r in rows:
+            r["q05"], r["q95"] = r["median"] - half, r["median"] + half
+        return rows
+
+    monkeypatch.setattr(stab, "stability_rows", fake)
+    data = stab.main(
+        ["--checkpoints-dir", str(tmp_path / "ckpt"), "--n-boot", "5",
+         "--sizes", "500", "--out", str(tmp_path / "o.json")]
+    )  # fmt: skip
+    w = data["runs"]["m-fold1-seed42"]["width"]["1e-2"]
+    assert w["frame"] == pytest.approx(0.02)
+    assert w["session"] == pytest.approx(0.04 * (4 / 3) ** 0.5)  # 0.0462
+    assert w["used"] == "session"
+    assert data["widest_at_full"]["1e-2"] == pytest.approx(0.04 * (4 / 3) ** 0.5)
+
+
+def test_too_many_one_class_resamples_fail_the_target(tmp_path):
+    # Hits only in session h, misses only in sessions n0..n3: a session resample
+    # often draws no hit session, which the frame interval would hide.
+    y = np.r_[np.ones(300), np.zeros(4_000)].astype(np.int8)
+    rng = np.random.default_rng(0)
+    s = np.r_[rng.normal(2, 1, 300), rng.normal(0, 1, 4_000)]
+    sessions = np.r_[["h"] * 300, [f"n{i % 4}" for i in range(4_000)]]
+    _write_run(tmp_path / "ckpt" / "m-fold1-seed42", y, s, sessions=sessions)
+    data = stab.main(
+        ["--checkpoints-dir", str(tmp_path / "ckpt"), "--n-boot", "50",
+         "--sizes", "500", "--max-width", "1.0", "--out", str(tmp_path / "o.json")]
+    )  # fmt: skip
+    assert data["undefined_draws"]["1e-2"]
+    assert data["undefined_draws"]["1e-2"][0].startswith("m-fold1-seed42 (session: ")
+    assert data["decision"] == "interval"
+
+
+def test_smaller_sizes_draw_from_the_original_negatives(monkeypatch):
+    # The pool for a size below the full count is the original frames, not the
+    # resample (which would double the variance from resampling twice).
+    y, s = _scores(n_pos=50, n_neg=1_000)
+    seen = []
+    real = stab._resample
+
+    def spy(rng, y_, groups):
+        idx, pool = real(rng, y_, groups)
+        seen.append(pool)
+        return idx, pool
+
+    monkeypatch.setattr(stab, "_resample", spy)
+    stab.stability_rows(y, s, {"1e-2": 1e-2}, sizes=[500], n_boot=3, seed=0)
+    assert all(np.array_equal(pool, np.arange(len(y))) for pool in seen)
 
 
 def test_session_unit_needs_session_ids(tmp_path):

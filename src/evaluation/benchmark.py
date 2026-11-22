@@ -458,7 +458,7 @@ def _recall_metrics(
     targets = list(RECALL_FPR_TARGETS.values())
     agg_points = recall_at_fprs(y_true, y_score, targets)
     max_points = recall_at_fprs(y_true, max_score, targets)
-    for t, agg, mx in zip(RECALL_FPR_TARGETS, agg_points, max_points):
+    for t, agg, mx in zip(RECALL_FPR_TARGETS, agg_points, max_points, strict=True):
         out[f"recall_at_fpr_{t}"], out[f"fpr_at_fpr_{t}"] = agg
         out[f"max_recall_at_fpr_{t}"], out[f"max_fpr_at_fpr_{t}"] = mx
     return out

@@ -540,15 +540,29 @@ def test_tie_aware_auc_matches_pairwise_count_on_heavily_tied_scores():
     assert _tie_aware_auc(y, s) == pytest.approx(brute)
 
 
+def _recall_at_fpr_by_scan(y_true, y_score, target):
+    """Reference: the original per-target scan over the tie-group ends."""
+    y, s = np.asarray(y_true, float), np.asarray(y_score, float)
+    order = np.argsort(-s, kind="stable")
+    s, y = s[order], y[order]
+    last = np.r_[np.nonzero(np.diff(s))[0], len(s) - 1]
+    tpr = np.cumsum(y)[last] / y.sum()
+    fpr = np.cumsum(1.0 - y)[last] / (len(y) - y.sum())
+    within = np.nonzero(fpr <= target)[0]
+    if len(within) == 0:
+        return 0.0, 0.0
+    return float(tpr[within[-1]]), float(fpr[within[-1]])
+
+
 class TestRecallAtFpr:
-    def test_several_targets_from_one_sort_match_one_target_at_a_time(self):
+    def test_several_targets_from_one_sort_match_the_per_target_scan(self):
         rng = np.random.default_rng(0)
         y = np.r_[np.ones(50), np.zeros(2_000)]
         s = np.round(np.r_[rng.normal(2, 1, 50), rng.normal(0, 1, 2_000)], 1)  # ties
-        targets = [1e-3, 1e-2, 0.5, 1.0, 0.0]
-        assert recall_at_fprs(y, s, targets) == [
-            recall_at_fpr(y, s, t) for t in targets
-        ]
+        targets = [1e-3, 1e-2, 0.5, 1.0, 0.0, 2 / 2_000]  # last: FPR equals target
+        expected = [_recall_at_fpr_by_scan(y, s, t) for t in targets]
+        assert recall_at_fprs(y, s, targets) == expected
+        assert [recall_at_fpr(y, s, t) for t in targets] == expected
         one_class = recall_at_fprs([1, 1], [0.5, 0.4], [1e-3, 1e-2])
         assert len(one_class) == 2 and np.isnan(one_class).all()
 

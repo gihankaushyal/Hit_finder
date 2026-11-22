@@ -18,7 +18,7 @@ def atomic_torch_save(obj: object, path: str | Path) -> None:
     atomic_write(path, lambda f: torch.save(obj, f))
 
 
-def atomic_write(path: str | Path, write: Callable[[BinaryIO], None]) -> None:
+def atomic_write(path: str | Path, write: Callable[[BinaryIO], object]) -> None:
     """`write(f)` to ``<path>.tmp``, fsync, then rename over `path`.
 
     A kill mid-write leaves the previous file intact (a resume would otherwise
