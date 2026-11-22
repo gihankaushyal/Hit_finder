@@ -106,20 +106,30 @@ Targets are 10⁻³ and 10⁻² (`RECALL_FPR_TARGETS`). Per split, `run_patch_ag
 `recall_at_fpr_<t>` and `fpr_at_fpr_<t>` on the aggregation score (the headline; the
 vote score whenever `aggregation: vote`, as in every current config, and the max-tile
 score under `aggregation: max`) and `max_recall_at_fpr_<t>` / `max_fpr_at_fpr_<t>` on the max-tile score (a
-diagnostic), for `<t>` in `1e-3`, `1e-2`. They are written to the test blocks of the
-result file and to W&B (`cross/…`, `in_domain/…`), not logged per validation epoch.
+diagnostic), for `<t>` in `1e-3`, `1e-2`, when called with `return_recall=True` (the
+two test evaluations only; validation never computes them). They are written to the
+test blocks of the result file and to W&B (`cross/…`, `in_domain/…`).
 
 Whether 10⁻³ can be reported depends on the number of negatives per fold.
-`scripts/recall_fpr_stability.py` bootstraps the saved per-frame scores (all positives
-and n negatives, drawn with replacement, 1,000 resamples, seed 0) at 500, 1,000, 2,000,
-5,000 and all negatives, and prints the median and 90% interval of recall at each size.
+`scripts/recall_fpr_stability.py` bootstraps the saved per-frame scores (1,000
+resamples, seed 0). The resampling unit is the beamtime session by default
+(`--unit session`): frames of one session are not independent (constraint 7), so each
+resample draws the split's sessions with replacement, then the frames within each drawn
+session with replacement. `--unit frame` draws all positives and the negatives
+independently. At 500, 1,000, 2,000 and 5,000 negatives, n negatives are drawn with
+replacement from each resample; at the full count the resample is used as drawn. Both
+targets are read from the same resamples. The script prints, per run, the numbers of
+positives, negatives and sessions, and per (target, size) the median and 90% interval
+of recall and the number of resamples with no positive or no negative (left out of the
+quantiles).
 Rule, at the full size: report 10⁻³ if every run's 90% interval is narrower than
 `--max-width` (default 0.05); else 10⁻² if that holds; else report each figure with its
 interval. A target also fails when no run has a defined interval, or when any run has
 fewer than 10/target negatives (fewer than 10 expected false positives: recall there is
 recall above the few highest negatives, which the bootstrap cannot resample beyond).
-Runs whose split has one class only, and runs without a score file, are listed and
-left out.
+Runs whose split has one class only, runs without a score file, and score files without
+a results file beside them that is at least as new (a pass killed between the two
+writes) are listed and left out.
 
 All headline metrics are **frame-level**. Both are computed twice per fold: on
 the held-out detector (`cross`) and on the test split of the training detectors
@@ -188,7 +198,7 @@ aggregation) and `session`. Score and result files are written atomically (tempo
 file, then rename). `--override-training` deletes both score files.
 
 `python scripts/aggregate_lodo_results.py` collects finished folds into
-per-variant tables, grouping runs by (prefix, suffix, seed) (interactive menu, `--select`, or `--run-prefix`, where a bare prefix means unsuffixed seed 42 and any other group is passed as the menu key `<prefix>-fold*-seed<S><suffix>`; `--pool-seeds` averages the seeds of each group per fold and mixes seed counts when only some folds were repeated). `--metric <key>` (for example `recall_at_fpr_1e-3`) tabulates that one key, cross and in-domain, instead of AP / AUC / F1; a `results.json` without the key takes it from `results.inference.json` (marked `*`), a fold with neither shows `n/a`, and an unknown key is rejected.
+per-variant tables, grouping runs by (prefix, suffix, seed) (interactive menu, `--select`, or `--run-prefix`, where a bare prefix means unsuffixed seed 42 and any other group is passed as the menu key `<prefix>-fold*-seed<S><suffix>`; `--pool-seeds` averages the seeds of each group per fold and mixes seed counts when only some folds were repeated). `--metric <key>` (for example `recall_at_fpr_1e-3`) tabulates that one key, cross and in-domain, instead of AP / AUC / F1; a `results.json` without the key takes it from `results.inference.json` (marked `*`), a fold with neither shows `n/a`, and an unknown key is rejected; under `--pool-seeds` a fold averages the seeds that have the key (marked `+`, with the seed count), and the cross-variant summary gives the number of folds behind each mean.
 
 ## Run Identity
 

@@ -29,6 +29,7 @@ from src.evaluation.metrics import (
     auc_roc,
     f1_at_optimal_threshold,
     recall_at_fpr,
+    recall_at_fprs,
 )
 
 
@@ -540,6 +541,17 @@ def test_tie_aware_auc_matches_pairwise_count_on_heavily_tied_scores():
 
 
 class TestRecallAtFpr:
+    def test_several_targets_from_one_sort_match_one_target_at_a_time(self):
+        rng = np.random.default_rng(0)
+        y = np.r_[np.ones(50), np.zeros(2_000)]
+        s = np.round(np.r_[rng.normal(2, 1, 50), rng.normal(0, 1, 2_000)], 1)  # ties
+        targets = [1e-3, 1e-2, 0.5, 1.0, 0.0]
+        assert recall_at_fprs(y, s, targets) == [
+            recall_at_fpr(y, s, t) for t in targets
+        ]
+        one_class = recall_at_fprs([1, 1], [0.5, 0.4], [1e-3, 1e-2])
+        assert len(one_class) == 2 and np.isnan(one_class).all()
+
     def test_perfect_separation_gives_full_recall_at_zero_fpr(self):
         assert recall_at_fpr([1, 1, 0, 0], [0.9, 0.8, 0.2, 0.1], 1e-3) == (1.0, 0.0)
 

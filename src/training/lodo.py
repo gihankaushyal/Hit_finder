@@ -32,7 +32,7 @@ from src.evaluation.benchmark import (
     run_patch_agg,
     save_split_artifact,
 )
-from src.evaluation.metrics import RECALL_FPR_KEYS
+from src.evaluation.metrics import RECALL_FPR_KEYS, RECALL_FPR_TARGETS
 from src.hitfinders.base import Hitfinder
 from src.models.supervised import build_supervised_model
 from src.training.inference_results import (
@@ -64,9 +64,6 @@ from src.training.wandb_identity import resolve_wandb_id, wandb_id_for_training
 # Keys of the val metrics dict that are logged under their own names; every other key
 # (the optional breakdown) is logged as `val/<key>`.
 _BASE_VAL_KEYS = ("ap", "auc_roc", "f1", "threshold")
-# Not logged per epoch: recall at a fixed FPR is a test-set metric (too few
-# validation negatives for 1e-3).
-_UNLOGGED_VAL_KEYS = frozenset(RECALL_FPR_KEYS)
 
 # Written every epoch so a resume continues where the run stopped; best.pt (the
 # evaluated checkpoint) is written only when val F1 improves.
@@ -566,9 +563,7 @@ def _train_fold(
             val_extra = {
                 k: v
                 for k, v in val_m.items()
-                if k not in _BASE_VAL_KEYS
-                and k not in _UNLOGGED_VAL_KEYS
-                and not np.isnan(v)
+                if k not in _BASE_VAL_KEYS and not np.isnan(v)
             }
             # Checkpoints first, W&B log last: a kill in between leaves W&B behind the
             # restorable state, never ahead of it (a resume keeps the W&B id).
@@ -719,6 +714,7 @@ def _train_fold(
         aggregation=aggregation,
         frame_cache=frame_cache,
         return_scores=True,
+        return_recall=True,
     )
     cross_m = run_patch_agg(
         model,
@@ -731,6 +727,7 @@ def _train_fold(
         aggregation=aggregation,
         frame_cache=frame_cache,
         return_scores=True,
+        return_recall=True,
     )
     in_domain_scores = in_domain_m.pop("scores")
     cross_scores = cross_m.pop("scores")
@@ -741,9 +738,10 @@ def _train_fold(
     print(
         f"  Cross-detector:    AP={cross_m['ap']:.4f}  AUC={cross_m['auc_roc']:.4f}  F1={cross_m['f1']:.4f}"
     )
-    print(
-        f"  Recall @ FPR 1e-3 / 1e-2 (cross): {cross_m['recall_at_fpr_1e-3']:.4f} / {cross_m['recall_at_fpr_1e-2']:.4f}"
+    recall = " / ".join(
+        f"{cross_m[f'recall_at_fpr_{t}']:.4f}" for t in RECALL_FPR_TARGETS
     )
+    print(f"  Recall @ FPR {' / '.join(RECALL_FPR_TARGETS)} (cross): {recall}")
 
     if not inference_only:
         wandb.log(

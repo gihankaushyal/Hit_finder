@@ -33,8 +33,10 @@ METRICS = {
     "auc_roc": 0.95,
     "f1": 0.8,
     "threshold": 0.4,
-    **{k: 0.5 for k in RECALL_FPR_KEYS},
 }
+RECALL = {
+    k: 0.5 for k in RECALL_FPR_KEYS
+}  # only with return_recall=True, as the real one
 RUN_PREFIX = "resnet18-asymmetric-v2"
 RUN_NAME = f"{RUN_PREFIX}-fold1-seed42"
 
@@ -49,9 +51,10 @@ def _fake_scores() -> dict:
 
 
 def _fake_test_agg(*a, **kw) -> dict:
-    """run_patch_agg on a test split: METRICS, plus scores when asked for."""
+    """run_patch_agg on a test split: METRICS, plus recall and scores when asked for."""
     return {
         **METRICS,
+        **(RECALL if kw.get("return_recall") else {}),
         **({"scores": _fake_scores()} if kw.get("return_scores") else {}),
     }
 
@@ -192,7 +195,8 @@ def run_fold(tmp_path, monkeypatch):
         def fake_agg(model, session_map, ids, **kw):
             if ids == ["s_val"]:
                 evaluations.append(1)
-                return {**METRICS, "f1": next(scores), "threshold": 0.5}
+                recall = RECALL if kw.get("return_recall") else {}
+                return {**METRICS, **recall, "f1": next(scores), "threshold": 0.5}
             return _fake_test_agg(**kw)
 
         monkeypatch.setattr(lodo, "run_patch_agg", fake_agg)

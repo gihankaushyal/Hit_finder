@@ -111,7 +111,12 @@ def _two_frame_session(tmp_path):
 
 def test_run_patch_agg_reports_recall_at_fixed_fpr(tmp_path):
     session_map, ids = _two_frame_session(tmp_path)
-    out = run_patch_agg(_FixedScoreModel(0.8), session_map, ids, device="cpu")
+    assert not set(RECALL_FPR_KEYS) & set(
+        run_patch_agg(_FixedScoreModel(0.8), session_map, ids, device="cpu")
+    )  # opt-in: validation does not pay for it
+    out = run_patch_agg(
+        _FixedScoreModel(0.8), session_map, ids, device="cpu", return_recall=True
+    )
     for key in RECALL_FPR_KEYS:
         assert key in out
     # both frames score 1.0 (tied): recall 0 at FPR 0
@@ -136,7 +141,11 @@ def test_run_patch_agg_returns_per_frame_scores_on_request(tmp_path):
 
 def test_run_patch_agg_with_no_frames_keeps_every_recall_key_nan(tmp_path):
     out = run_patch_agg(
-        _FixedScoreModel(0.8), {"s0": tmp_path / "missing.cxi"}, ["s0"], device="cpu"
+        _FixedScoreModel(0.8),
+        {"s0": tmp_path / "missing.cxi"},
+        ["s0"],
+        device="cpu",
+        return_recall=True,
     )
     assert all(np.isnan(out[k]) for k in RECALL_FPR_KEYS)
 

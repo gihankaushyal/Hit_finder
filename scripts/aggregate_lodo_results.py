@@ -23,19 +23,22 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from src.evaluation.metric_keys import RECALL_FPR_KEYS  # noqa: E402
+from src.training.inference_results import (  # noqa: E402  (no torch / numpy imports)
+    INFERENCE_RESULTS_NAME,
+    SPLIT_RESULT_KEYS,
+)
 from src.utils.config import DEFAULT_SEED as CONFIG_DEFAULT_SEED  # noqa: E402
 
 DETECTOR_ORDER = {1: "AGIPD", 2: "JUNGFRAU_4M", 3: "ePix10k", 4: "Eiger4M"}
-# The side file an --inference-only pass writes next to a finished run's results.json
-# (src/training/inference_results.py; not imported, to keep this script free of torch).
-INFERENCE_RESULTS = "results.inference.json"
+# The side file an --inference-only pass writes next to a finished run's results.json.
+INFERENCE_RESULTS = INFERENCE_RESULTS_NAME
 _SPLITS = ("cross", "in_domain")
-# Keys --metric accepts: the per-split keys of a result file
-# (SPLIT_RESULT_KEYS in src/training/inference_results.py).
-METRIC_CHOICES = ("ap", "auc_roc", "f1", "threshold", *RECALL_FPR_KEYS)
+# Keys --metric accepts: the per-split keys of a result file.
+METRIC_CHOICES = SPLIT_RESULT_KEYS
 # Set on a loaded record: the splits whose --metric value came from INFERENCE_RESULTS.
 FROM_INFERENCE = "_metric_from_inference"
+# Set on a pooled record: {split: {key: n}} for keys only n of the fold's seeds have.
+PARTIAL_SEEDS = "_partial_seeds"
 
 # A run directory is "<prefix>-fold<N>-seed<S><suffix>". The optional suffix (e.g. "-v2" from
 # wandb.run_suffix, or "-careful" / "-lpft" from --run-suffix) is part of the group key, so a
@@ -174,12 +177,22 @@ def _pool_by_fold(results: list[dict]) -> list[dict]:
         if filled:
             rec[FROM_INFERENCE] = filled
         for split in ("cross", "in_domain"):
-            rec[split] = {
-                k: float(np.mean([r[split][k] for r in runs]))
-                for k, v in runs[0].get(split, {}).items()
-                if isinstance(v, (int, float))
-                and all(isinstance(r[split].get(k), (int, float)) for r in runs)
-            }
+            keys = dict.fromkeys(k for r in runs for k in r.get(split, {}))
+            rec[split] = {}
+            for k in keys:
+                vals = [
+                    r[split][k]
+                    for r in runs
+                    if isinstance(r.get(split, {}).get(k), (int, float))
+                ]
+                if not vals:
+                    continue
+                # Averaged over the seeds that have the key; fewer than all is recorded.
+                rec[split][k] = float(np.mean(vals))
+                if len(vals) < len(runs):
+                    rec.setdefault(PARTIAL_SEEDS, {}).setdefault(split, {})[k] = len(
+                        vals
+                    )
         pooled.append(rec)
     return pooled
 
@@ -227,12 +240,12 @@ def print_variant_table(label: str, results: list[dict]) -> tuple[float, float]:
 
 def print_metric_table(
     label: str, results: list[dict], metric: str
-) -> tuple[float, float]:
+) -> tuple[float, float, int]:
     """One variant's table for a single metric (cross and in-domain); n/a where missing.
 
     A value read from results.inference.json is marked with "*" (for pooled seeds: at
-    least one seed's value). Returns (mean, std) of the cross value over the folds that
-    have it.
+    least one seed's value); a pooled value from fewer seeds than the fold has with "+".
+    Returns (mean, std, number of folds) of the cross value over the folds that have it.
     """
     print(f"\n## {label}  ({metric})")
     print(f"{'Fold':<6} {'Held-out':<14} {'Cross':>9} {'ID':>9}")
@@ -243,14 +256,24 @@ def print_metric_table(
 
     cross_vals = []
     any_filled = False
+    partial_notes = []
     for r in results:
         filled = r.get(FROM_INFERENCE, [])
         any_filled = any_filled or bool(filled)
+        marks = {}
+        for split in _SPLITS:
+            n = r.get(PARTIAL_SEEDS, {}).get(split, {}).get(metric)
+            if n is not None:
+                partial_notes.append(
+                    f"fold {r['fold_id']} {split}: {n}/{r['n_seeds']} seeds"
+                )
+            marks[split] = ("*" if split in filled else "") + ("+" if n else "")
         c = r["cross"].get(metric, float("nan"))
         d = r["in_domain"].get(metric, float("nan"))
-        mc = "*" if "cross" in filled else " "
-        md = "*" if "in_domain" in filled else " "
-        print(f"{r['fold_id']:<6} {r['test_detector']:<14} {fmt(c)}{mc}{fmt(d)}{md}")
+        print(
+            f"{r['fold_id']:<6} {r['test_detector']:<14} {fmt(c)}{marks['cross']:<2}"
+            f"{fmt(d)}{marks['in_domain']:<2}"
+        )
         if c == c:
             cross_vals.append(c)
     mu, sd = mean_std(cross_vals)
@@ -262,7 +285,11 @@ def print_metric_table(
             f"* from {INFERENCE_RESULTS} (an --inference-only pass; see its"
             " 'inference' block for the evaluation settings)"
         )
-    return mu, sd
+    if partial_notes:
+        print(
+            f"+ pooled over fewer seeds than the fold has: {'; '.join(partial_notes)}"
+        )
+    return mu, sd, len(cross_vals)
 
 
 def print_doc_baseline_row(key: str) -> tuple[float, float]:
@@ -362,9 +389,9 @@ def main(argv: list[str] | None = None):
     )
     args = parser.parse_args(argv)
 
-    def print_table(label: str, results: list[dict]) -> tuple[float, float]:
+    def print_table(label: str, results: list[dict]) -> tuple[float, float, int | None]:
         if args.metric is None:
-            return print_variant_table(label, results)
+            return (*print_variant_table(label, results), None)
         return print_metric_table(label, results, args.metric)
 
     if args.run_prefix is not None:
@@ -393,7 +420,7 @@ def main(argv: list[str] | None = None):
     else:
         indices = prompt_selection(menu)
 
-    summary_rows: list[tuple[str, float, float]] = []
+    summary_rows: list[tuple[str, float, float, int | None]] = []
     for i in indices:
         key, label, is_live = menu[i - 1]
         if is_live:
@@ -403,24 +430,27 @@ def main(argv: list[str] | None = None):
             if not results:
                 print(f"\n## {label}\n  No completed fold results found — skipping.")
                 continue
-            ap_mu, ap_sd = print_table(key, results)
+            ap_mu, ap_sd, n_folds = print_table(key, results)
         elif args.metric is not None:
             print(f"\n## {label}\n  Doc-only baseline has no {args.metric} — skipping.")
             continue
         else:
             ap_mu, ap_sd = print_doc_baseline_row(key)
-        summary_rows.append((label, ap_mu, ap_sd))
+            n_folds = None
+        summary_rows.append((label, ap_mu, ap_sd, n_folds))
 
     if len(summary_rows) > 1:
         name = args.metric or "AP"
         print(f"\n## Cross-variant summary (mean cross {name})")
         col = "" if args.metric else " AP"  # the default header is unchanged
-        print(f"{'Variant':<55} {'Mean' + col:>8} {'Std' + col:>8}")
-        print("-" * 73)
-        for label, mu, sd in summary_rows:
+        folds_hdr = f" {'Folds':>6}" if args.metric else ""
+        print(f"{'Variant':<55} {'Mean' + col:>8} {'Std' + col:>8}{folds_hdr}")
+        print("-" * (73 + len(folds_hdr)))
+        for label, mu, sd, n_folds in summary_rows:
             mu_str = f"{mu:>8.4f}" if mu == mu else f"{'n/a':>8}"
             sd_str = f"{sd:>8.4f}" if not (sd != sd) else f"{'—':>8}"
-            print(f"{label:<55} {mu_str} {sd_str}")
+            folds = f" {f'{n_folds}/4':>6}" if args.metric else ""
+            print(f"{label:<55} {mu_str} {sd_str}{folds}")
 
 
 if __name__ == "__main__":

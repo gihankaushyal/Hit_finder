@@ -46,8 +46,10 @@ METRICS = {
     "auc_roc": 0.95,
     "f1": 0.8,
     "threshold": 0.4,
-    **{k: 0.5 for k in RECALL_FPR_KEYS},
 }
+RECALL = {
+    k: 0.5 for k in RECALL_FPR_KEYS
+}  # only with return_recall=True, as the real one
 
 
 def _fake_scores() -> dict:
@@ -64,7 +66,8 @@ def _fake_agg(**overrides):
 
     def agg(*a, **kw) -> dict:
         scores = {"scores": _fake_scores()} if kw.get("return_scores") else {}
-        return {**METRICS, **overrides, **scores}
+        recall = RECALL if kw.get("return_recall") else {}
+        return {**METRICS, **recall, **overrides, **scores}
 
     return agg
 
@@ -309,7 +312,8 @@ class TestFetchWandbHistory:
 
 class TestSummaryUpdates:
     def test_keys_are_prefixed_and_cover_both_sets(self):
-        updates = summary_updates(METRICS, {**METRICS, "ap": 0.5}, threshold=0.4)
+        test_m = {**METRICS, **RECALL}  # a test split's dict carries recall
+        updates = summary_updates(test_m, {**test_m, "ap": 0.5}, threshold=0.4)
         assert updates["inference/threshold"] == 0.4
         assert updates["inference/in_domain/ap"] == 0.9
         assert updates["inference/in_domain/auc"] == 0.95

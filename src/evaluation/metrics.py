@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 import numpy as np
 
 from src.evaluation.metric_keys import RECALL_FPR_KEYS, RECALL_FPR_TARGETS
@@ -11,6 +13,7 @@ __all__ = [
     "auc_roc",
     "f1_at_optimal_threshold",
     "recall_at_fpr",
+    "recall_at_fprs",
     "RECALL_FPR_TARGETS",
     "RECALL_FPR_KEYS",
 ]
@@ -118,19 +121,30 @@ def recall_at_fpr(
     no positives or no negatives. The threshold comes from the scored split itself: a
     ranking metric like AP, not a deployable operating point.
     """
+    return recall_at_fprs(y_true, y_score, [target_fpr])[0]
+
+
+def recall_at_fprs(
+    y_true: np.ndarray, y_score: np.ndarray, target_fprs: Sequence[float]
+) -> list[tuple[float, float]]:
+    """`recall_at_fpr` at several targets from one sort: one (recall, FPR) per target."""
     y_true = np.asarray(y_true, dtype=float)
     y_score = np.asarray(y_score, dtype=float)
     n_pos = y_true.sum()
     n_neg = len(y_true) - n_pos
     if n_pos == 0 or n_neg == 0:
-        return float("nan"), float("nan")
+        return [(float("nan"), float("nan"))] * len(target_fprs)
     order = np.argsort(-y_score, kind="stable")
     s, y = y_score[order], y_true[order]
     last = np.r_[np.nonzero(np.diff(s))[0], len(s) - 1]  # end of each tie group
     tpr = np.cumsum(y)[last] / n_pos
     fpr = np.cumsum(1.0 - y)[last] / n_neg
-    within = np.nonzero(fpr <= target_fpr)[0]
-    if len(within) == 0:
-        return 0.0, 0.0
-    i = within[-1]  # fpr is non-decreasing down the ranking
-    return float(tpr[i]), float(fpr[i])
+    out = []
+    for target in target_fprs:
+        # fpr is non-decreasing down the ranking: the last group within the target
+        n_within = int(np.searchsorted(fpr, target, side="right"))
+        if n_within == 0:
+            out.append((0.0, 0.0))
+        else:
+            out.append((float(tpr[n_within - 1]), float(fpr[n_within - 1])))
+    return out

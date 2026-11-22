@@ -360,7 +360,7 @@ if __name__ == "__main__":
         default=False,
         help=(
             "When a checkpoint exists for the resolved run name, discard it "
-            "(best.pt, last.pt, results.json and results.inference.json) and start that fold from scratch under the "
+            "(best.pt, last.pt, results.json, results.inference.json and the score files scores.npz / scores.inference.npz) and start that fold from scratch under the "
             "same run name. The old W&B run is kept and tagged 'overridden'; the restart logs to '<run_name>-o<N>'. "
             "Mutually exclusive with --resume-training and --inference-only."
         ),

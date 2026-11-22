@@ -17,7 +17,7 @@ from src.evaluation.metrics import (
     average_precision,
     auc_roc,
     f1_at_optimal_threshold,
-    recall_at_fpr,
+    recall_at_fprs,
 )
 
 if TYPE_CHECKING:
@@ -222,6 +222,7 @@ def run_patch_agg(
     frame_cache: "FrameCache | None" = None,
     return_breakdown: bool = False,
     return_scores: bool = False,
+    return_recall: bool = False,
 ) -> dict[str, Any]:
     """Evaluate a model on full frames using patch-grid aggregation.
 
@@ -257,11 +258,14 @@ def run_patch_agg(
             (both computed whatever the aggregation) and session ids under "scores",
             as numpy arrays, for scores.npz. The caller removes it before writing
             results.
+        return_recall: Also return recall at each fixed FPR (`RECALL_FPR_KEYS`), on
+            the aggregation score and on the max-tile score. For the test splits;
+            off for validation, where too few negatives make 1e-3 meaningless.
 
     Returns:
-        dict with keys: ap, auc_roc, f1, threshold and the RECALL_FPR_KEYS (recall at
-        fixed FPR on the aggregation score and on the max-tile score), plus the
-        breakdown keys / "scores" on request.
+        dict with keys: ap, auc_roc, f1, threshold, plus on request the breakdown
+        keys, the RECALL_FPR_KEYS (recall at fixed FPR on the aggregation score and on
+        the max-tile score) and "scores".
     """
     from src.data.frame_cache import CacheMissError
     from src.preprocessing.geometry import get_assembler, get_geometry
@@ -421,8 +425,8 @@ def run_patch_agg(
     if not all_scores:
         nan = float("nan")
         out: dict[str, Any] = {"ap": nan, "auc_roc": nan, "f1": nan, "threshold": nan}
-        # No frames: recall_at_fpr returns NaN for every key.
-        out.update(_recall_metrics(y_true, vote, max_score))
+        if return_recall:  # no frames: NaN for every key
+            out.update(_recall_metrics(y_true, vote, max_score))
     else:
         y_score = np.array(all_scores)
         best_f1, threshold = f1_at_optimal_threshold(y_true, y_score)
@@ -432,7 +436,8 @@ def run_patch_agg(
             "f1": best_f1,
             "threshold": threshold,
         }
-        out.update(_recall_metrics(y_true, y_score, max_score))
+        if return_recall:
+            out.update(_recall_metrics(y_true, y_score, max_score))
         if return_breakdown:
             out.update(_breakdown_metrics(y_true, vote, max_score))
     if return_scores:
@@ -450,13 +455,12 @@ def _recall_metrics(
 ) -> dict[str, float]:
     """Recall at each fixed FPR, on the aggregation score and on the max-tile score."""
     out: dict[str, float] = {}
-    for t, target in RECALL_FPR_TARGETS.items():
-        out[f"recall_at_fpr_{t}"], out[f"fpr_at_fpr_{t}"] = recall_at_fpr(
-            y_true, y_score, target
-        )
-        out[f"max_recall_at_fpr_{t}"], out[f"max_fpr_at_fpr_{t}"] = recall_at_fpr(
-            y_true, max_score, target
-        )
+    targets = list(RECALL_FPR_TARGETS.values())
+    agg_points = recall_at_fprs(y_true, y_score, targets)
+    max_points = recall_at_fprs(y_true, max_score, targets)
+    for t, agg, mx in zip(RECALL_FPR_TARGETS, agg_points, max_points):
+        out[f"recall_at_fpr_{t}"], out[f"fpr_at_fpr_{t}"] = agg
+        out[f"max_recall_at_fpr_{t}"], out[f"max_fpr_at_fpr_{t}"] = mx
     return out
 
 

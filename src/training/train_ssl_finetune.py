@@ -303,7 +303,7 @@ def main() -> None:
         action="store_true",
         help=(
             "When best.pt exists for the resolved run name, discard it and "
-            "last.pt, results.json and results.inference.json and start that fold from scratch under the same run name. The old W&B run is kept "
+            "last.pt, results.json, results.inference.json and the score files scores.npz / scores.inference.npz and start that fold from scratch under the same run name. The old W&B run is kept "
             "and tagged 'overridden'; the restart logs to '<run_name>-o<N>'."
         ),
     )

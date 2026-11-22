@@ -122,8 +122,8 @@ def test_results_json_wins_when_it_has_the_metric(tmp_path):
 def test_a_fold_without_the_metric_shows_na(tmp_path, capsys):
     _run(tmp_path, "m-fold1-seed42", 1, 0.9)
     results = agg.load_results(tmp_path, "m", metric="recall_at_fpr_1e-2")
-    mu, _ = agg.print_metric_table("m", results, "recall_at_fpr_1e-2")
-    assert "n/a" in capsys.readouterr().out and mu != mu  # NaN mean
+    mu, _, n = agg.print_metric_table("m", results, "recall_at_fpr_1e-2")
+    assert "n/a" in capsys.readouterr().out and mu != mu and n == 0  # NaN mean
 
 
 def test_the_metric_flag_replaces_the_default_table(tmp_path, capsys):
@@ -158,3 +158,35 @@ def test_metric_pools_seeds_across_results_and_inference_files(tmp_path, capsys)
     assert rows[0]["in_domain"][key] == pytest.approx(0.6)
     agg.print_metric_table("m", rows, key)
     assert "0.5000*" in capsys.readouterr().out
+
+
+def test_a_pooled_fold_keeps_the_metric_from_the_seeds_that_have_it(tmp_path, capsys):
+    key = "recall_at_fpr_1e-3"
+    for seed, value in ((42, None), (43, 0.4), (44, 0.6)):
+        _run(tmp_path, f"m-fold1-seed{seed}", 1, 0.9)
+        if value is not None:
+            path = tmp_path / f"m-fold1-seed{seed}" / "results.json"
+            data = json.loads(path.read_text())
+            data["cross"][key] = data["in_domain"][key] = value
+            path.write_text(json.dumps(data))
+    rows = agg.load_results(tmp_path, "m-fold*-seed*", pool_seeds=True, metric=key)
+    assert rows[0]["cross"][key] == pytest.approx(0.5)
+    assert rows[0][agg.PARTIAL_SEEDS] == {"cross": {key: 2}, "in_domain": {key: 2}}
+    assert rows[0]["cross"]["ap"] == pytest.approx(0.9)  # every seed: not marked
+    agg.print_metric_table("m", rows, key)
+    out = capsys.readouterr().out
+    assert "0.5000+" in out and "fold 1 cross: 2/3 seeds" in out
+
+
+def test_the_metric_summary_shows_how_many_folds_each_mean_covers(tmp_path, capsys):
+    key = "recall_at_fpr_1e-2"
+    for prefix, folds in (("a", (1, 2)), ("b", (1,))):
+        for fold in folds:
+            _run(tmp_path, f"{prefix}-fold{fold}-seed42", fold, 0.9)
+            path = tmp_path / f"{prefix}-fold{fold}-seed42" / "results.json"
+            data = json.loads(path.read_text())
+            data["cross"][key] = data["in_domain"][key] = 0.5
+            path.write_text(json.dumps(data))
+    agg.main(["--checkpoints-dir", str(tmp_path), "--select", "1,2", "--metric", key])
+    summary = capsys.readouterr().out.split("Cross-variant summary")[1]
+    assert "Folds" in summary and "2/4" in summary and "1/4" in summary
