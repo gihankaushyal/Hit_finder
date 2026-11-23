@@ -223,7 +223,8 @@ class TestTrainFoldWritesTheTrainingBlock:
                 f"{s}_{k}"
                 for s in ("cross", "in_domain")
                 for k in ("y_true", "vote", "max", "session")
-            }
+            } | {"aggregation"}
+            assert str(z["aggregation"]) == "vote"
 
     def test_recall_at_fixed_fpr_is_logged_for_the_test_not_per_epoch(
         self, run_fold, monkeypatch

@@ -162,3 +162,60 @@ def test_recall_keys_use_the_aggregation_score_and_the_max_score_separately():
     assert out["recall_at_fpr_1e-2"] == recall_at_fpr(y, vote, 1e-2)[0] == 1.0
     assert out["max_recall_at_fpr_1e-2"] == recall_at_fpr(y, max_score, 1e-2)[0]
     assert out["max_recall_at_fpr_1e-2"] == 0.0
+
+
+class _PerFrameScoreModel(torch.nn.Module):
+    """Patch scores taken in order from a list of per-frame score lists, one per call."""
+
+    def __init__(self, frames: list[list[float]]) -> None:
+        super().__init__()
+        self._frames = iter(frames)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        scores = torch.tensor(next(self._frames))
+        assert len(scores) == x.shape[0]  # one forward per frame (4 patches)
+        logits = torch.zeros(x.shape[0], 2)
+        logits[:, 1] = torch.log(scores / (1 - scores))
+        return logits
+
+
+@pytest.mark.parametrize("aggregation", ["vote", "max"])
+def test_headline_recall_follows_the_configured_aggregation(tmp_path, aggregation):
+    from src.evaluation.metrics import recall_at_fpr
+
+    session_map, ids = _two_frame_session(tmp_path)  # labels [1, 0], 4 patches each
+    # Hit frame: one strong tile (vote 0.25, max 0.99). Non-hit: four mid tiles
+    # (vote 1.0, max 0.6). Vote ranks the non-hit first, max the hit.
+    model = _PerFrameScoreModel([[0.99, 0.1, 0.1, 0.1], [0.6, 0.6, 0.6, 0.6]])
+    out = run_patch_agg(
+        model, session_map, ids, device="cpu", aggregation=aggregation,
+        return_recall=True, return_scores=True,
+    )  # fmt: skip
+    y, sc = out["scores"]["y_true"], out["scores"]
+    expected = recall_at_fpr(y, sc[aggregation], 1e-2)[0]
+    assert out["recall_at_fpr_1e-2"] == expected
+    assert out["recall_at_fpr_1e-2"] == (0.0 if aggregation == "vote" else 1.0)
+    assert out["max_recall_at_fpr_1e-2"] == 1.0  # always the max-tile score
+
+
+def test_scores_keep_session_ids_aligned_with_labels(tmp_path):
+    import h5py
+
+    session_map = {}
+    for sid, labels in (("s0", [1, 0]), ("s1", [0, 0])):
+        cxi = tmp_path / f"{sid}.cxi"
+        with h5py.File(cxi, "w") as f:
+            f.create_dataset(
+                "entry_1/data_1/data", data=np.zeros((2, 448, 448), np.float32)
+            )
+            f.create_dataset("entry_1/labels/hit", data=np.array(labels, np.float32))
+            f.create_dataset(
+                "entry_1/instrument_1/detector_1/description", data=b"Jungfrau 4M"
+            )
+        session_map[sid] = cxi
+    out = run_patch_agg(
+        _FixedScoreModel(0.8), session_map, ["s0", "s1"], device="cpu",
+        return_scores=True,
+    )  # fmt: skip
+    assert out["scores"]["session"].tolist() == ["s0", "s0", "s1", "s1"]
+    assert out["scores"]["y_true"].tolist() == [1, 0, 0, 0]

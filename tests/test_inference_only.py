@@ -530,6 +530,31 @@ class TestTrainFoldInferenceOnly:
         assert second["cross"]["ap"] == 0.5
         assert (ckpt_dir / RESULTS_NAME).read_text() == "{}"
 
+    def test_scores_are_written_before_the_results_file(self, harness, monkeypatch):
+        # The stability script pairs a score file with a results file that is not
+        # older; that holds only if a failed score write leaves the old results.
+        fake, ckpt_dir, make_checkpoint = harness
+        make_checkpoint(results="{}")
+        monkeypatch.setattr(lodo, "run_patch_agg", _fake_agg(ap=0.9))
+        lodo._train_fold(cfg=_cfg(), inference_only=True, **_fold_args())
+        monkeypatch.setattr(lodo, "run_patch_agg", _fake_agg(ap=0.5))
+
+        def _fail(*args, **kwargs):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(lodo, "write_scores", _fail)
+        with pytest.raises(OSError, match="disk full"):
+            lodo._train_fold(cfg=_cfg(), inference_only=True, **_fold_args())
+        side = json.loads((ckpt_dir / INFERENCE_RESULTS_NAME).read_text())
+        assert side["cross"]["ap"] == 0.9  # the results of the first pass
+
+    def test_the_score_file_records_the_aggregation(self, harness):
+        fake, ckpt_dir, make_checkpoint = harness
+        make_checkpoint()
+        lodo._train_fold(cfg=_cfg(), inference_only=True, **_fold_args())
+        with np.load(ckpt_dir / SCORES_NAME) as z:
+            assert str(z["aggregation"]) == "vote"
+
     def test_writes_summary_keys_and_logs_no_training_metrics(self, harness):
         fake, ckpt_dir, make_checkpoint = harness
         make_checkpoint()

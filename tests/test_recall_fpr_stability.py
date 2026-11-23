@@ -26,7 +26,7 @@ def _write_run(run: Path, y, s, sessions=None, name="scores.npz", results=None):
     """A run dir as the evaluation leaves it: the score file, then its results file."""
     run.mkdir(parents=True, exist_ok=True)
     if sessions is None:
-        sessions = np.array([f"s{i % 4}" for i in range(len(y))])
+        sessions = np.array([f"s{i % 5}" for i in range(len(y))])  # MIN_SESSIONS
     np.savez(
         run / name, cross_y_true=y, cross_vote=s, cross_max=s, cross_session=sessions
     )
@@ -117,7 +117,7 @@ def test_main_reads_score_files_and_writes_json(tmp_path):
     assert {r["file"] for r in data["rows"]} == {"scores.npz"}
     assert data["missing_scores"] == ["no-scores-fold1-seed42"]
     assert data["unit"] == "both"
-    assert data["runs"]["m-fold1-seed42"]["n_sessions"] == 4
+    assert data["runs"]["m-fold1-seed42"]["n_sessions"] == 5
     assert {r["unit"] for r in data["rows"]} == {"frame", "session"}
     width = data["runs"]["m-fold1-seed42"]["width"]["1e-2"]
     assert width["used"] == max(("frame", "session"), key=lambda u: width[u])
@@ -207,14 +207,16 @@ def test_both_targets_come_from_the_same_resamples():
 
 
 def test_session_scale_widens_few_sessions():
-    assert stab.session_scale(5) == pytest.approx((5 / 4) ** 0.5)
-    assert stab.session_scale(100) == pytest.approx(1.0, abs=0.01)
+    # sqrt(S/(S-1)) * t(S-1, 0.95) / z(0.95)
+    assert stab.session_scale(5) == pytest.approx(1.449, abs=1e-3)
+    assert stab.session_scale(10) == pytest.approx(1.175, abs=1e-3)
+    assert stab.session_scale(1000) == pytest.approx(1.0, abs=0.01)
     assert np.isnan(stab.session_scale(1))
 
 
 def test_the_session_width_is_scaled_and_the_wider_unit_decides(tmp_path, monkeypatch):
     y, s = _scores(n_neg=3_000)
-    _write_run(tmp_path / "ckpt" / "m-fold1-seed42", y, s)  # 4 sessions
+    _write_run(tmp_path / "ckpt" / "m-fold1-seed42", y, s)  # 5 sessions
     real = stab.stability_rows
 
     def fake(y, s, targets, sizes, n_boot, seed, sessions=None):
@@ -231,9 +233,9 @@ def test_the_session_width_is_scaled_and_the_wider_unit_decides(tmp_path, monkey
     )  # fmt: skip
     w = data["runs"]["m-fold1-seed42"]["width"]["1e-2"]
     assert w["frame"] == pytest.approx(0.02)
-    assert w["session"] == pytest.approx(0.04 * (4 / 3) ** 0.5)  # 0.0462
+    assert w["session"] == pytest.approx(0.04 * stab.session_scale(5))  # 0.058
     assert w["used"] == "session"
-    assert data["widest_at_full"]["1e-2"] == pytest.approx(0.04 * (4 / 3) ** 0.5)
+    assert data["widest_at_full"]["1e-2"] == pytest.approx(0.04 * stab.session_scale(5))
 
 
 def test_too_many_one_class_resamples_fail_the_target(tmp_path):
@@ -249,7 +251,8 @@ def test_too_many_one_class_resamples_fail_the_target(tmp_path):
          "--sizes", "500", "--max-width", "1.0", "--out", str(tmp_path / "o.json")]
     )  # fmt: skip
     assert data["undefined_draws"]["1e-2"]
-    assert data["undefined_draws"]["1e-2"][0].startswith("m-fold1-seed42 (session: ")
+    # hits in 1 of 5 sessions, misses in 4: P = (4/5)^5 + (1/5)^5 = 0.3280
+    assert data["undefined_draws"]["1e-2"] == ["m-fold1-seed42 (P = 0.3280)"]
     assert data["decision"] == "interval"
 
 
@@ -283,3 +286,133 @@ def test_session_unit_needs_session_ids(tmp_path):
          "frame", "--out", str(tmp_path / "o.json")]
     )  # fmt: skip
     assert data["runs"]["m-fold1-seed42"]["n_sessions"] is None
+
+
+def _main(tmp_path, *extra):
+    return stab.main(
+        ["--checkpoints-dir", str(tmp_path / "ckpt"), "--n-boot", "20",
+         "--sizes", "500", "--out", str(tmp_path / "o.json"), *extra]
+    )  # fmt: skip
+
+
+@pytest.mark.parametrize("n_sessions", [1, 2])
+def test_fewer_than_min_sessions_fails_every_target(tmp_path, n_sessions):
+    y, s = _scores(n_neg=3_000)
+    sessions = np.array([f"s{i % n_sessions}" for i in range(len(y))])
+    _write_run(tmp_path / "ckpt" / "m-fold2-seed42", y, s, sessions=sessions)
+    data = _main(tmp_path, "--max-width", "1.0")
+    expected = [f"m-fold2-seed42 ({n_sessions} sessions)"]
+    assert data["few_sessions"] == {"1e-3": expected, "1e-2": expected}
+    assert data["decision"] == "interval"  # the frame width alone does not decide
+
+
+def test_one_class_probability_is_exact():
+    # hits in 3 of 5 sessions, misses in all 5: P = (2/5)^5 + 0
+    y = np.r_[np.ones(30), np.zeros(500)]
+    sessions = np.r_[
+        [f"s{i % 3}" for i in range(30)], [f"s{i % 5}" for i in range(500)]
+    ]
+    assert stab.one_class_probability(y, sessions) == pytest.approx(0.4**5)
+
+
+@pytest.mark.parametrize("wide_first", [True, False])
+def test_the_widest_run_decides(tmp_path, monkeypatch, wide_first):
+    y, s = _scores(n_neg=3_000)
+    names = ["a-fold1-seed42", "b-fold1-seed42"]
+    halves = {names[0]: 0.04, names[1]: 0.005}
+    if not wide_first:
+        halves = {names[0]: 0.005, names[1]: 0.04}
+    for name in names:
+        _write_run(tmp_path / "ckpt" / name, y, s + halves[name])  # tag the run
+    real = stab.stability_rows
+
+    def fake(y_, s_, targets, sizes, n_boot, seed, sessions=None):
+        half = 0.04 if s_[0] - s[0] > 0.02 else 0.005
+        rows = real(y_, s_, targets, sizes, n_boot, seed, sessions)
+        for r in rows:
+            r["q05"], r["q95"] = r["median"] - half, r["median"] + half
+        return rows
+
+    monkeypatch.setattr(stab, "stability_rows", fake)
+    data = _main(tmp_path, "--max-width", "0.05")
+    assert data["widest_at_full"]["1e-2"] == pytest.approx(0.08 * stab.session_scale(5))
+    assert data["decision"] == "interval"
+
+
+def test_split_and_score_pick_the_matching_arrays(tmp_path):
+    y = np.r_[np.ones(200), np.zeros(2_000)].astype(np.int8)
+    separating = np.r_[np.ones(200), np.zeros(2_000)]  # recall 1 at FPR 0
+    tied = np.zeros(len(y))  # all tied: recall 0
+    sessions = np.array([f"s{i % 5}" for i in range(len(y))])
+    run = tmp_path / "ckpt" / "m-fold1-seed42"
+    run.mkdir(parents=True)
+    np.savez(
+        run / "scores.npz",
+        cross_y_true=y, cross_vote=separating, cross_max=tied, cross_session=sessions,
+        in_domain_y_true=y, in_domain_vote=tied, in_domain_max=separating,
+        in_domain_session=sessions, aggregation=np.array("vote"),
+    )  # fmt: skip
+    (run / "results.json").write_text("{}")
+
+    def full_median(data):
+        return {r["median"] for r in data["rows"] if r["n_neg"] == 2_000}
+
+    assert full_median(_main(tmp_path)) == {1.0}  # stored aggregation: vote
+    assert full_median(_main(tmp_path, "--score", "max")) == {0.0}
+    assert full_median(_main(tmp_path, "--split", "in_domain")) == {0.0}
+    data = _main(tmp_path, "--split", "in_domain", "--score", "max")
+    assert full_median(data) == {1.0}
+    assert data["score_mismatch"] == ["m-fold1-seed42 (evaluated with vote)"]
+
+
+def test_the_stored_aggregation_is_the_default_score(tmp_path):
+    y, s = _scores(n_neg=2_000)
+    run = tmp_path / "ckpt" / "m-fold1-seed42"
+    _write_run(run, y, s)
+    with np.load(run / "scores.npz") as z:
+        arrays = dict(z)
+    np.savez(run / "scores.npz", **arrays, aggregation=np.array("max"))
+    (run / "results.json").write_text("{}")  # not older than the score file
+    data = _main(tmp_path)
+    assert data["runs"]["m-fold1-seed42"]["score"] == "max"
+    assert data["score_mismatch"] == []
+
+
+def test_equal_mtimes_count_as_complete(tmp_path):
+    import os
+
+    run = tmp_path / "ckpt" / "m-fold1-seed42"
+    y, s = _scores(n_neg=1_000)
+    _write_run(run, y, s)
+    for name in ("scores.npz", "results.json"):
+        os.utime(run / name, (100, 100))
+    assert stab._score_file(run) == (run / "scores.npz", [])
+
+
+def test_a_run_with_no_usable_pair_is_incomplete_not_missing(tmp_path):
+    import os
+
+    run = tmp_path / "ckpt" / "m-fold1-seed42"
+    y, s = _scores(n_neg=1_000)
+    _write_run(run, y, s)
+    _write_run(run, y, s, name="scores.inference.npz")
+    for name in ("results.json", "results.inference.json"):
+        os.utime(run / name, (1, 1))
+    _write_run(tmp_path / "ckpt" / "ok-fold1-seed42", y, s)
+    data = _main(tmp_path)
+    assert data["incomplete"] == [
+        "m-fold1-seed42/scores.npz",
+        "m-fold1-seed42/scores.inference.npz",
+    ]
+    assert data["missing_scores"] == []
+
+
+def test_the_json_is_strict_and_its_folder_is_created(tmp_path):
+    _write_run(
+        tmp_path / "ckpt" / "m-fold1-seed42", np.zeros(500, np.int8), np.zeros(500)
+    )
+    out = tmp_path / "new" / "dir" / "o.json"
+    stab.main(["--checkpoints-dir", str(tmp_path / "ckpt"), "--n-boot", "5",
+               "--out", str(out)])  # fmt: skip
+    data = json.loads(out.read_text(), parse_constant=lambda c: pytest.fail(c))
+    assert data["rows"][0]["median"] is None

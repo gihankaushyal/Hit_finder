@@ -788,7 +788,11 @@ def _train_fold(
         )
     # Scores before results: the results file marks the evaluation complete.
     scores_path = scores_path_for(results_path)
-    write_scores(scores_path, {"cross": cross_scores, "in_domain": in_domain_scores})
+    write_scores(
+        scores_path,
+        {"cross": cross_scores, "in_domain": in_domain_scores},
+        aggregation=aggregation,
+    )
     print(f"  Per-frame scores → {scores_path}")
     text = json.dumps(result, indent=2)
     atomic_write(results_path, lambda f: f.write(text.encode()))

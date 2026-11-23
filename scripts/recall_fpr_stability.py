@@ -10,8 +10,10 @@ Two resampling units, both run by default (--unit both):
 - "session": frames of one session (one CXI file) may not be independent (CLAUDE.md
   constraint 7), so each resample draws the split's S sessions with replacement, then
   the frames within each drawn session with replacement. With few sessions (S = 5 per
-  detector) the cluster bootstrap underestimates the spread by about (S-1)/S, so its
-  width is scaled by sqrt(S / (S-1)) before the decision.
+  cross split) the cluster bootstrap underestimates the variance by about (S-1)/S, and
+  the between-session spread rests on S-1 degrees of freedom, so the width is scaled by
+  sqrt(S/(S-1)) * t(S-1, 0.95) / z(0.95) (1.449 at S = 5, 1.175 at S = 10). A run with
+  fewer than MIN_SESSIONS sessions fails every target.
 Each run's decision width at the full size is the wider of the two. At each size in
 --sizes below the negative count, n negatives are drawn with replacement from the
 original negatives of the drawn units, with the resample's positives; each resample is
@@ -22,10 +24,14 @@ Decision: 1e-3 if every run's decision width is below --max-width, else 1e-2 if 
 holds, else "interval" (report every figure with its interval). A target also fails
 when no run has a defined width; when a run has fewer than MIN_EXPECTED_FP / target
 negatives (below that, recall at the target is recall above the few highest negatives,
-which a bootstrap cannot resample beyond); or when more than MAX_UNDEFINED_SHARE of a
-run's full-size resamples had no positive or no negative (the interval would describe
-only the resamples that drew both classes). Runs with one class only, runs without a
-usable score file and incomplete score files are listed, not silently dropped.
+which a bootstrap cannot resample beyond); or when the chance that a session resample
+draws one class only, computed exactly from how many sessions hold each class, is above
+MAX_UNDEFINED_SHARE (the interval would describe only the resamples that drew both).
+Runs with one class only, runs without a usable score file and incomplete score files
+are listed, not silently dropped; the decision states how many runs it covers.
+
+--score defaults to the aggregation the evaluation stored in the score file (the score
+the result file's recall_at_fpr_* keys use), else "vote".
 
     python scripts/recall_fpr_stability.py --glob 'resnet18-asymmetric-v2-fold*' \\
         --out reports/recall_fpr_stability.json
@@ -40,6 +46,8 @@ import sys
 from pathlib import Path
 
 import numpy as np
+from scipy.stats import norm
+from scipy.stats import t as student_t
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from src.evaluation.metrics import RECALL_FPR_TARGETS, recall_at_fprs  # noqa: E402
@@ -61,7 +69,8 @@ DEFAULT_N_BOOT = 1_000
 DEFAULT_MAX_WIDTH = 0.05
 INTERVAL = (0.05, 0.95)  # 90% interval
 MIN_EXPECTED_FP = 10  # target * n_neg below this: too few negatives for the target
-MAX_UNDEFINED_SHARE = 0.01  # full-size resamples with one class only, above this: fail
+MAX_UNDEFINED_SHARE = 0.01  # chance of a one-class session resample, above this: fail
+MIN_SESSIONS = 5  # fewer sessions than this (unit "both"): no session estimate, fail
 
 
 def _resample(
@@ -143,8 +152,37 @@ def stability_rows(
 
 
 def session_scale(n_sessions: int) -> float:
-    """Widening for a cluster bootstrap over few sessions: sqrt(S / (S-1)); NaN if S < 2."""
-    return math.sqrt(n_sessions / (n_sessions - 1)) if n_sessions > 1 else float("nan")
+    """Widening of a session-bootstrap width over S sessions; NaN if S < 2.
+
+    sqrt(S/(S-1)) corrects the bootstrap variance bias; t(S-1)/z widens for the
+    between-session spread being estimated from S-1 degrees of freedom.
+    """
+    if n_sessions < 2:
+        return float("nan")
+    q = INTERVAL[1]
+    bias = math.sqrt(n_sessions / (n_sessions - 1))
+    return bias * float(student_t.ppf(q, n_sessions - 1) / norm.ppf(q))
+
+
+def one_class_probability(y_true: np.ndarray, sessions: np.ndarray) -> float:
+    """Chance that a session resample (S draws of S sessions) holds one class only."""
+    y_true, sessions = np.asarray(y_true), np.asarray(sessions)
+    ids = np.unique(sessions)
+    n = len(ids)
+    with_pos = sum(bool((y_true[sessions == g] == 1).any()) for g in ids)
+    with_neg = sum(bool((y_true[sessions == g] == 0).any()) for g in ids)
+    return ((n - with_pos) / n) ** n + ((n - with_neg) / n) ** n
+
+
+def _json_safe(value):
+    """NaN floats as None, recursively, so the JSON output is strict."""
+    if isinstance(value, float) and math.isnan(value):
+        return None
+    if isinstance(value, dict):
+        return {k: _json_safe(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_json_safe(v) for v in value]
+    return value
 
 
 def decide(
@@ -205,7 +243,12 @@ def main(argv: list[str] | None = None) -> dict:
     p.add_argument("--checkpoints-dir", type=Path, default=Path("checkpoints"))
     p.add_argument("--glob", default="*", help="run directories to include")
     p.add_argument("--split", default="cross", choices=["cross", "in_domain"])
-    p.add_argument("--score", default="vote", choices=["vote", "max"])
+    p.add_argument(
+        "--score",
+        default=None,
+        choices=["vote", "max"],
+        help="default: the aggregation stored in the score file, else vote",
+    )
     p.add_argument(
         "--unit",
         default="both",
@@ -220,6 +263,7 @@ def main(argv: list[str] | None = None) -> dict:
     p.add_argument("--max-width", type=float, default=DEFAULT_MAX_WIDTH)
     p.add_argument("--out", type=Path, default=Path("recall_fpr_stability.json"))
     a = p.parse_args(argv)
+    a.out.parent.mkdir(parents=True, exist_ok=True)  # fail before the bootstrap
 
     targets = RECALL_FPR_TARGETS
     rows: list[dict] = []
@@ -228,6 +272,8 @@ def main(argv: list[str] | None = None) -> dict:
     undefined: list[str] = []  # runs whose split has no positives or no negatives
     underpowered: dict[str, list[str]] = {t: [] for t in targets}
     undefined_draws: dict[str, list[str]] = {t: [] for t in targets}
+    few_sessions: dict[str, list[str]] = {t: [] for t in targets}
+    score_mismatch: list[str] = []
     missing_scores: list[str] = []
     incomplete: list[str] = []
     for run_dir in sorted(a.checkpoints_dir.glob(a.glob)):
@@ -240,7 +286,11 @@ def main(argv: list[str] | None = None) -> dict:
                 missing_scores.append(run_dir.name)
             continue
         with np.load(path) as z:
-            y, s = z[f"{a.split}_y_true"], z[f"{a.split}_{a.score}"]
+            stored = str(z["aggregation"]) if "aggregation" in z else None
+            score_name = a.score or stored or "vote"
+            if a.score and stored and a.score != stored:
+                score_mismatch.append(f"{run_dir.name} (evaluated with {stored})")
+            y, s = z[f"{a.split}_y_true"], z[f"{a.split}_{score_name}"]
             key = f"{a.split}_session"
             if a.unit == "both" and key not in z:
                 raise SystemExit(f"{path} has no {key}; use --unit frame")
@@ -255,6 +305,8 @@ def main(argv: list[str] | None = None) -> dict:
             )
         info: dict = {
             "file": path.name,
+            "score": score_name,
+            "aggregation": stored,
             "n_pos": n_pos,
             "n_neg": n_full,
             "n_sessions": n_sessions,
@@ -263,23 +315,30 @@ def main(argv: list[str] | None = None) -> dict:
         runs[run_dir.name] = info
         for unit, unit_rows in by_unit.items():
             for r in unit_rows:
-                r.update(run=run_dir.name, file=path.name, unit=unit)
+                r.update(run=run_dir.name, file=path.name, unit=unit, score=score_name)
             rows += unit_rows
         if not (n_full and n_pos):
             undefined.append(run_dir.name)
             continue
+        if sessions is not None and n_sessions is not None:
+            p_one = one_class_probability(y, sessions)
+            info["p_one_class"] = p_one
+            for t in targets:
+                if n_sessions < MIN_SESSIONS:
+                    few_sessions[t].append(f"{run_dir.name} ({n_sessions} sessions)")
+                if p_one > MAX_UNDEFINED_SHARE:
+                    undefined_draws[t].append(f"{run_dir.name} (P = {p_one:.4f})")
         for t, target in targets.items():
             if n_full * target < MIN_EXPECTED_FP:
                 underpowered[t].append(f"{run_dir.name} ({n_full} negatives)")
             widths: dict[str, float | None] = {}
             for unit, unit_rows in by_unit.items():
-                width, n_undef = _full_width(unit_rows, t, n_full)
+                # n_undefined (Monte Carlo) is reported in the rows; the session
+                # decision uses the exact one_class_probability above. The frame
+                # unit draws each class separately, so it is never undefined here.
+                width, _ = _full_width(unit_rows, t, n_full)
                 if unit == "session":
                     width *= session_scale(n_sessions or 0)
-                if n_undef > MAX_UNDEFINED_SHARE * a.n_boot:
-                    undefined_draws[t].append(
-                        f"{run_dir.name} ({unit}: {n_undef}/{a.n_boot})"
-                    )
                 widths[unit] = None if math.isnan(width) else width
             measured = {u: w for u, w in widths.items() if w is not None}
             used = max(measured, key=lambda u: measured[u]) if measured else None
@@ -294,7 +353,8 @@ def main(argv: list[str] | None = None) -> dict:
     print(f"Resampling: {unit_text}")
     for name, info in runs.items():
         print(
-            f"  {name}: {info['n_pos']} positives, {info['n_neg']} negatives"
+            f"  {name} ({info['file']}, {info['score']} score):"
+            f" {info['n_pos']} positives, {info['n_neg']} negatives"
             + (f", {info['n_sessions']} sessions" if info["n_sessions"] else "")
         )
     print(
@@ -332,31 +392,52 @@ def main(argv: list[str] | None = None) -> dict:
     for t, names in undefined_draws.items():
         if names:
             print(
-                f"\nMore than {MAX_UNDEFINED_SHARE:.0%} of full-size resamples had one"
-                f" class only, so {t} fails: {', '.join(names)}"
+                f"\nChance of a one-class session resample above"
+                f" {MAX_UNDEFINED_SHARE:.0%}, so {t} fails: {', '.join(names)}"
             )
-    blocked = {t: underpowered[t] + undefined_draws[t] for t in targets}
+    for t, names in few_sessions.items():
+        if names:
+            print(
+                f"\nFewer than {MIN_SESSIONS} sessions, so {t} fails:"
+                f" {', '.join(names)}"
+            )
+    if score_mismatch:
+        print(
+            f"\n--score {a.score} differs from the evaluated aggregation:"
+            f" {', '.join(score_mismatch)}"
+        )
+    blocked = {
+        t: underpowered[t] + undefined_draws[t] + few_sessions[t] for t in targets
+    }
     decision = decide(widest, a.max_width, blocked)
+    covered = sum(1 for info in runs.values() if info["width"])
     print(f"\nWidest decision width at full size: {widest}")
-    print(f"Decision (max width {a.max_width}): {decision}")
+    print(
+        f"Decision (max width {a.max_width}): {decision}"
+        f" (covers {covered} of {len(runs)} runs with a score file)"
+    )
     result = {
         "split": a.split,
-        "score": a.score,
+        "score": a.score,  # None: per run, from the score file (see runs)
         "unit": a.unit,
         "max_width": a.max_width,
         "n_boot": a.n_boot,
         "seed": a.seed,
-        "widest_at_full": {t: (w if w == w else None) for t, w in widest.items()},
+        "widest_at_full": widest,
         "runs": runs,
         "undefined": undefined,
         "underpowered": underpowered,
         "undefined_draws": undefined_draws,
+        "few_sessions": few_sessions,
+        "score_mismatch": score_mismatch,
         "missing_scores": missing_scores,
         "incomplete": incomplete,
         "decision": decision,
+        "decision_covers": {"runs": covered, "of": len(runs)},
         "rows": rows,
     }
-    a.out.write_text(json.dumps(result, indent=2))
+    result = _json_safe(result)
+    a.out.write_text(json.dumps(result, indent=2, allow_nan=False))
     print(f"Written → {a.out}")
     return result
 
