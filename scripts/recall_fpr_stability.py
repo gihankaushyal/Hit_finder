@@ -9,11 +9,13 @@ Two resampling units, both run by default (--unit both):
 - "frame": all positives and all negatives drawn independently with replacement.
 - "session": frames of one session (one CXI file) may not be independent (CLAUDE.md
   constraint 7), so each resample draws the split's S sessions with replacement, then
-  the frames within each drawn session with replacement. With few sessions (S = 5 per
+  the frames within each drawn session with replacement. Recall's between-session
+  spread rests on the sessions that hold positives, so S below is the smaller of the
+  session count and the count of sessions with positives. With few sessions (S = 5 per
   cross split) the cluster bootstrap underestimates the variance by about (S-1)/S, and
   the between-session spread rests on S-1 degrees of freedom, so the width is scaled by
   sqrt(S/(S-1)) * t(S-1, 0.95) / z(0.95) (1.449 at S = 5, 1.175 at S = 10). A run with
-  fewer than MIN_SESSIONS sessions fails every target.
+  S below MIN_SESSIONS fails every target.
 Each run's decision width at the full size is the wider of the two. At each size in
 --sizes below the negative count, n negatives are drawn with replacement from the
 original negatives of the drawn units, with the resample's positives; each resample is
@@ -25,8 +27,9 @@ holds, else "interval" (report every figure with its interval). A target also fa
 when no run has a defined width; when a run has fewer than MIN_EXPECTED_FP / target
 negatives (below that, recall at the target is recall above the few highest negatives,
 which a bootstrap cannot resample beyond); or when the chance that a session resample
-draws one class only, computed exactly from how many sessions hold each class, is above
-MAX_UNDEFINED_SHARE (the interval would describe only the resamples that drew both).
+draws one class only (computed exactly from each session's class counts, and also
+counted among the full-size resamples) is above MAX_UNDEFINED_SHARE (the interval would
+describe only the resamples that drew both).
 Runs with one class only, runs without a usable score file and incomplete score files
 are listed, not silently dropped; the decision states how many runs it covers.
 
@@ -165,13 +168,23 @@ def session_scale(n_sessions: int) -> float:
 
 
 def one_class_probability(y_true: np.ndarray, sessions: np.ndarray) -> float:
-    """Chance that a session resample (S draws of S sessions) holds one class only."""
+    """Chance that a session resample (S draws of S sessions) holds one class only.
+
+    A drawn session g with k of its n_g frames positive yields no positive with
+    probability (1 - k/n_g)^n_g, as its frames are drawn with replacement regardless of
+    class. The S draws are independent, so P(no positive) = (mean_g of that)^S; the same
+    for negatives. Both cannot happen at once (every frame has a class), so they add.
+    """
     y_true, sessions = np.asarray(y_true), np.asarray(sessions)
     ids = np.unique(sessions)
+    no_pos = no_neg = 0.0
+    for g in ids:
+        y_g = y_true[sessions == g]
+        frac = float((y_g == 1).mean())
+        no_pos += (1.0 - frac) ** len(y_g)
+        no_neg += frac ** len(y_g)
     n = len(ids)
-    with_pos = sum(bool((y_true[sessions == g] == 1).any()) for g in ids)
-    with_neg = sum(bool((y_true[sessions == g] == 0).any()) for g in ids)
-    return ((n - with_pos) / n) ** n + ((n - with_neg) / n) ** n
+    return (no_pos / n) ** n + (no_neg / n) ** n
 
 
 def _json_safe(value):
@@ -297,9 +310,10 @@ def main(argv: list[str] | None = None) -> dict:
             sessions = z[key] if a.unit == "both" else None
         n_full, n_pos = int((y == 0).sum()), int((y == 1).sum())
         by_unit = {"frame": stability_rows(y, s, targets, a.sizes, a.n_boot, a.seed)}
-        n_sessions = None
+        n_sessions = n_pos_sessions = None
         if sessions is not None:
             n_sessions = int(len(np.unique(sessions)))
+            n_pos_sessions = int(len(np.unique(sessions[y == 1])))
             by_unit["session"] = stability_rows(
                 y, s, targets, a.sizes, a.n_boot, a.seed, sessions
             )
@@ -310,6 +324,7 @@ def main(argv: list[str] | None = None) -> dict:
             "n_pos": n_pos,
             "n_neg": n_full,
             "n_sessions": n_sessions,
+            "n_pos_sessions": n_pos_sessions,
             "width": {},
         }
         runs[run_dir.name] = info
@@ -320,12 +335,18 @@ def main(argv: list[str] | None = None) -> dict:
         if not (n_full and n_pos):
             undefined.append(run_dir.name)
             continue
-        if sessions is not None and n_sessions is not None:
+        # Sessions that bound the session width: those holding positives, at most S.
+        n_eff = 0
+        if sessions is not None and n_sessions is not None and n_pos_sessions:
+            n_eff = min(n_sessions, n_pos_sessions)
             p_one = one_class_probability(y, sessions)
             info["p_one_class"] = p_one
             for t in targets:
-                if n_sessions < MIN_SESSIONS:
-                    few_sessions[t].append(f"{run_dir.name} ({n_sessions} sessions)")
+                if n_eff < MIN_SESSIONS:
+                    few_sessions[t].append(
+                        f"{run_dir.name} ({n_sessions} sessions,"
+                        f" {n_pos_sessions} with positives)"
+                    )
                 if p_one > MAX_UNDEFINED_SHARE:
                     undefined_draws[t].append(f"{run_dir.name} (P = {p_one:.4f})")
         for t, target in targets.items():
@@ -333,12 +354,19 @@ def main(argv: list[str] | None = None) -> dict:
                 underpowered[t].append(f"{run_dir.name} ({n_full} negatives)")
             widths: dict[str, float | None] = {}
             for unit, unit_rows in by_unit.items():
-                # n_undefined (Monte Carlo) is reported in the rows; the session
-                # decision uses the exact one_class_probability above. The frame
-                # unit draws each class separately, so it is never undefined here.
-                width, _ = _full_width(unit_rows, t, n_full)
+                # The frame unit draws each class separately, so it is never
+                # undefined here. For the session unit the Monte Carlo count backs
+                # up the exact one_class_probability above.
+                width, n_undef = _full_width(unit_rows, t, n_full)
                 if unit == "session":
-                    width *= session_scale(n_sessions or 0)
+                    width *= session_scale(n_eff)
+                    listed = any(
+                        e.startswith(f"{run_dir.name} (") for e in undefined_draws[t]
+                    )
+                    if n_undef > MAX_UNDEFINED_SHARE * a.n_boot and not listed:
+                        undefined_draws[t].append(
+                            f"{run_dir.name} ({n_undef} of {a.n_boot} resamples)"
+                        )
                 widths[unit] = None if math.isnan(width) else width
             measured = {u: w for u, w in widths.items() if w is not None}
             used = max(measured, key=lambda u: measured[u]) if measured else None
@@ -355,7 +383,12 @@ def main(argv: list[str] | None = None) -> dict:
         print(
             f"  {name} ({info['file']}, {info['score']} score):"
             f" {info['n_pos']} positives, {info['n_neg']} negatives"
-            + (f", {info['n_sessions']} sessions" if info["n_sessions"] else "")
+            + (
+                f", {info['n_sessions']} sessions ({info['n_pos_sessions']} with"
+                " positives)"
+                if info["n_sessions"]
+                else ""
+            )
         )
     print(
         f"\n{'run':<45} {'unit':>7} {'target':>6} {'n_neg':>7} {'median':>7}"
@@ -367,7 +400,7 @@ def main(argv: list[str] | None = None) -> dict:
             f" {r['median']:>7.4f} {r['q05']:>7.4f} {r['q95']:>7.4f}"
             f" {r['n_undefined']:>6}"
         )
-    print("\nDecision width at full size (session scaled by sqrt(S/(S-1))):")
+    print("\nDecision width at full size (session scaled by session_scale(S)):")
     for name, info in runs.items():
         for t, w in info["width"].items():
             parts = [
@@ -398,7 +431,7 @@ def main(argv: list[str] | None = None) -> dict:
     for t, names in few_sessions.items():
         if names:
             print(
-                f"\nFewer than {MIN_SESSIONS} sessions, so {t} fails:"
+                f"\nFewer than {MIN_SESSIONS} sessions with positives, so {t} fails:"
                 f" {', '.join(names)}"
             )
     if score_mismatch:
@@ -410,7 +443,10 @@ def main(argv: list[str] | None = None) -> dict:
         t: underpowered[t] + undefined_draws[t] + few_sessions[t] for t in targets
     }
     decision = decide(widest, a.max_width, blocked)
-    covered = sum(1 for info in runs.values() if info["width"])
+    covered = sum(
+        any(w["used"] is not None for w in info["width"].values())
+        for info in runs.values()
+    )
     print(f"\nWidest decision width at full size: {widest}")
     print(
         f"Decision (max width {a.max_width}): {decision}"

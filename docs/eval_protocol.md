@@ -117,7 +117,9 @@ resamples, seed 0) with two resampling units, both by default (`--unit both`):
 - **Session:** frames of one session (one CXI file; constraint 7) may not be
   independent, so each resample draws the split's S sessions with replacement, then
   the frames within each drawn session. A cross split has S = 5 sessions (10 for
-  Jungfrau); an in-domain test split has 1 or 2. A cluster bootstrap over so few units
+  Jungfrau); an in-domain test split has 1 or 2. Recall's between-session spread rests
+  on the sessions that hold positives, so S here is the smaller of the session count
+  and the count of sessions with positives. A cluster bootstrap over so few units
   underestimates the variance by about (S−1)/S, and the between-session spread rests on
   S−1 degrees of freedom, so the session width is scaled by
   √(S/(S−1)) · t(S−1, 0.95) / z(0.95): 1.449 at S = 5, 1.175 at S = 10.
@@ -128,8 +130,8 @@ the original negatives of the drawn units; at the full count the resample is use
 drawn. Both targets are read from the same resamples. `--score` defaults to the
 aggregation stored in the score file, which is the score behind the result file's
 `recall_at_fpr_*`; an explicit `--score` that differs is listed. The script prints, per
-run, the score file and score used and the numbers of positives, negatives and
-sessions; per (unit, target, size) the median and
+run, the score file and score used and the numbers of positives, negatives,
+sessions and sessions with positives; per (unit, target, size) the median and
 90% interval of recall and the number of resamples with no positive or no negative
 (left out of the quantiles); and each run's decision width.
 
@@ -139,10 +141,12 @@ the scaled session interval. Report 10⁻³ if every run's decision width is bel
 interval. A target also fails when no run has a defined width; when any run has fewer
 than 10/target negatives (fewer than 10 expected false positives: recall there is
 recall above the few highest negatives, which the bootstrap cannot resample beyond);
-when any run has fewer than 5 sessions (`MIN_SESSIONS`; so every in-domain split gives
-"interval"); or when the chance that a session resample holds one class only, computed
-exactly from how many sessions contain each class, is above 1% (the interval would
-describe only the resamples that drew both). Runs whose split has one class only, runs
+when any run has fewer than 5 sessions with positives (`MIN_SESSIONS`; so every
+in-domain split gives "interval"); or when the chance that a session resample holds one
+class only is above 1% (the interval would describe only the resamples that drew both).
+That chance is computed exactly from each session's class counts (a drawn session that
+holds both classes can still draw no positive) and also counted among the full-size
+resamples; either one above 1% fails the target. Runs whose split has one class only, runs
 without a score file, and score files without a results file beside them that is at
 least as new (a pass killed between the two writes) are listed and left out; the
 decision states how many runs it covers. The JSON output is strict (NaN written as

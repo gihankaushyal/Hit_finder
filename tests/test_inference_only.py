@@ -548,12 +548,14 @@ class TestTrainFoldInferenceOnly:
         side = json.loads((ckpt_dir / INFERENCE_RESULTS_NAME).read_text())
         assert side["cross"]["ap"] == 0.9  # the results of the first pass
 
-    def test_the_score_file_records_the_aggregation(self, harness):
+    @pytest.mark.parametrize("aggregation", ["vote", "max"])
+    def test_the_score_file_records_the_aggregation(self, harness, aggregation):
         fake, ckpt_dir, make_checkpoint = harness
         make_checkpoint()
-        lodo._train_fold(cfg=_cfg(), inference_only=True, **_fold_args())
+        cfg = {**_cfg(), "benchmark": {"aggregation": aggregation}}
+        lodo._train_fold(cfg=cfg, inference_only=True, **_fold_args())
         with np.load(ckpt_dir / SCORES_NAME) as z:
-            assert str(z["aggregation"]) == "vote"
+            assert str(z["aggregation"]) == aggregation
 
     def test_writes_summary_keys_and_logs_no_training_metrics(self, harness):
         fake, ckpt_dir, make_checkpoint = harness

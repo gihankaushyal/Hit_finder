@@ -301,18 +301,95 @@ def test_fewer_than_min_sessions_fails_every_target(tmp_path, n_sessions):
     sessions = np.array([f"s{i % n_sessions}" for i in range(len(y))])
     _write_run(tmp_path / "ckpt" / "m-fold2-seed42", y, s, sessions=sessions)
     data = _main(tmp_path, "--max-width", "1.0")
-    expected = [f"m-fold2-seed42 ({n_sessions} sessions)"]
+    expected = [f"m-fold2-seed42 ({n_sessions} sessions, {n_sessions} with positives)"]
     assert data["few_sessions"] == {"1e-3": expected, "1e-2": expected}
     assert data["decision"] == "interval"  # the frame width alone does not decide
 
 
-def test_one_class_probability_is_exact():
-    # hits in 3 of 5 sessions, misses in all 5: P = (2/5)^5 + 0
-    y = np.r_[np.ones(30), np.zeros(500)]
+def test_one_class_probability_with_pure_sessions():
+    # hits only in h, misses only in n0..n3: P = (4/5)^5 + (1/5)^5
+    y = np.r_[np.ones(30), np.zeros(400)]
+    sessions = np.r_[["h"] * 30, [f"n{i % 4}" for i in range(400)]]
+    assert stab.one_class_probability(y, sessions) == pytest.approx(0.8**5 + 0.2**5)
+
+
+def test_one_class_probability_counts_mixed_sessions_that_draw_no_positive():
+    # 4 sessions of 500 frames with 1 hit each, 1 session of misses only. A drawn mixed
+    # session misses its hit with chance (499/500)^500 ~ e^-1, so P(no positive) is
+    # ((1 + 4 (499/500)^500) / 5)^5 ~ 0.029, not (1/5)^5.
+    y = np.zeros(2_500)
+    y[[0, 500, 1_000, 1_500]] = 1
+    sessions = np.repeat([f"s{i}" for i in range(5)], 500)
+    expected = ((1 + 4 * (499 / 500) ** 500) / 5) ** 5
+    assert stab.one_class_probability(y, sessions) == pytest.approx(expected)
+    assert stab.one_class_probability(y, sessions) > stab.MAX_UNDEFINED_SHARE
+
+
+def test_one_class_probability_matches_the_resamples():
+    y = np.zeros(400)
+    y[[0, 1, 100, 200]] = 1
+    sessions = np.repeat([f"s{i}" for i in range(5)], 80)
+    rng = np.random.default_rng(0)
+    groups = [np.nonzero(sessions == g)[0] for g in np.unique(sessions)]
+    n = 20_000
+    one_class = 0
+    for _ in range(n):
+        idx, _pool = stab._resample(rng, y, groups)
+        one_class += len(np.unique(y[idx])) < 2
+    p = stab.one_class_probability(y, sessions)
+    assert one_class / n == pytest.approx(p, abs=4 * np.sqrt(p * (1 - p) / n))
+
+
+def test_the_resample_count_backs_up_the_exact_probability(tmp_path, monkeypatch):
+    # Hits only in session h: with the exact probability forced to 0, the full-size
+    # resamples without a hit still fail the target.
+    y = np.r_[np.ones(300), np.zeros(4_000)].astype(np.int8)
+    rng = np.random.default_rng(0)
+    s = np.r_[rng.normal(2, 1, 300), rng.normal(0, 1, 4_000)]
+    sessions = np.r_[["h"] * 300, [f"n{i % 4}" for i in range(4_000)]]
+    _write_run(tmp_path / "ckpt" / "m-fold1-seed42", y, s, sessions=sessions)
+    monkeypatch.setattr(stab, "one_class_probability", lambda y_, s_: 0.0)
+    monkeypatch.setattr(stab, "MIN_SESSIONS", 1)
+    data = _main(tmp_path, "--max-width", "1.0", "--n-boot", "50")
+    entry = data["undefined_draws"]["1e-2"]
+    assert len(entry) == 1 and entry[0].startswith("m-fold1-seed42 (")
+    assert entry[0].endswith("of 50 resamples)")
+    assert data["decision"] == "interval"
+
+
+def test_sessions_without_positives_do_not_count(tmp_path):
+    # 10 sessions, hits in 4: the session minimum fails although S = 10.
+    y, s = _scores(n_pos=400, n_neg=3_000)
     sessions = np.r_[
-        [f"s{i % 3}" for i in range(30)], [f"s{i % 5}" for i in range(500)]
+        [f"s{i % 4}" for i in range(400)], [f"s{i % 10}" for i in range(3_000)]
     ]
-    assert stab.one_class_probability(y, sessions) == pytest.approx(0.4**5)
+    _write_run(tmp_path / "ckpt" / "m-fold2-seed42", y, s, sessions=sessions)
+    data = _main(tmp_path, "--max-width", "1.0")
+    expected = ["m-fold2-seed42 (10 sessions, 4 with positives)"]
+    assert data["few_sessions"] == {"1e-3": expected, "1e-2": expected}
+    assert data["runs"]["m-fold2-seed42"]["n_pos_sessions"] == 4
+
+
+def test_the_session_scale_uses_the_sessions_with_positives(tmp_path, monkeypatch):
+    # 10 sessions, hits in 6: the width is scaled by session_scale(6), not (10).
+    y, s = _scores(n_pos=600, n_neg=3_000)
+    sessions = np.r_[
+        [f"s{i % 6}" for i in range(600)], [f"s{i % 10}" for i in range(3_000)]
+    ]
+    _write_run(tmp_path / "ckpt" / "m-fold2-seed42", y, s, sessions=sessions)
+    real = stab.stability_rows
+
+    def fake(y_, s_, targets, sizes, n_boot, seed, sessions=None):
+        rows = real(y_, s_, targets, sizes, n_boot, seed, sessions)
+        for r in rows:
+            r["q05"], r["q95"] = r["median"] - 0.02, r["median"] + 0.02
+        return rows
+
+    monkeypatch.setattr(stab, "stability_rows", fake)
+    data = _main(tmp_path, "--max-width", "1.0")
+    w = data["runs"]["m-fold2-seed42"]["width"]["1e-2"]
+    assert w["session"] == pytest.approx(0.04 * stab.session_scale(6))
+    assert data["few_sessions"]["1e-2"] == []
 
 
 @pytest.mark.parametrize("wide_first", [True, False])
@@ -416,3 +493,49 @@ def test_the_json_is_strict_and_its_folder_is_created(tmp_path):
                "--out", str(out)])  # fmt: skip
     data = json.loads(out.read_text(), parse_constant=lambda c: pytest.fail(c))
     assert data["rows"][0]["median"] is None
+
+
+def test_decision_covers_only_runs_with_a_measured_width(tmp_path, monkeypatch):
+    y, s = _scores(n_neg=3_000)
+    _write_run(tmp_path / "ckpt" / "a-fold1-seed42", y, s)
+    _write_run(tmp_path / "ckpt" / "b-fold1-seed42", y, s + 1.0)  # tag the run
+    real = stab.stability_rows
+
+    def fake(y_, s_, targets, sizes, n_boot, seed, sessions=None):
+        rows = real(y_, s_, targets, sizes, n_boot, seed, sessions)
+        if s_[0] - s[0] > 0.5:  # run b: no width measured
+            for r in rows:
+                r["q05"] = r["q95"] = float("nan")
+        return rows
+
+    monkeypatch.setattr(stab, "stability_rows", fake)
+    data = _main(tmp_path)
+    assert data["decision_covers"] == {"runs": 1, "of": 2}
+
+
+def test_an_old_score_file_without_aggregation_defaults_to_vote(tmp_path):
+    y = np.r_[np.ones(200), np.zeros(2_000)].astype(np.int8)
+    run = tmp_path / "ckpt" / "m-fold1-seed42"
+    run.mkdir(parents=True)
+    np.savez(
+        run / "scores.npz",
+        cross_y_true=y, cross_vote=y.astype(float), cross_max=np.zeros(len(y)),
+        cross_session=np.array([f"s{i % 5}" for i in range(len(y))]),
+    )  # fmt: skip
+    (run / "results.json").write_text("{}")
+    data = _main(tmp_path)
+    info = data["runs"]["m-fold1-seed42"]
+    assert info["score"] == "vote" and info["aggregation"] is None
+    assert {r["median"] for r in data["rows"] if r["n_neg"] == 2_000} == {1.0}
+    assert data["score_mismatch"] == []
+
+
+def test_the_session_minimum_does_not_apply_to_frame_resampling(tmp_path):
+    y, s = _scores(n_neg=3_000)
+    sessions = np.array([f"s{i % 2}" for i in range(len(y))])
+    _write_run(tmp_path / "ckpt" / "m-fold1-seed42", y, s, sessions=sessions)
+    data = _main(tmp_path, "--unit", "frame", "--max-width", "1.0")
+    assert data["few_sessions"] == {"1e-3": [], "1e-2": []}
+    assert (
+        data["decision"] == "1e-2"
+    )  # 1e-3 fails only as underpowered (3,000 negatives)
