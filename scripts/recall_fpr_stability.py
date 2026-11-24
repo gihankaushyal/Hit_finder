@@ -10,12 +10,12 @@ Two resampling units, both run by default (--unit both):
 - "session": frames of one session (one CXI file) may not be independent (CLAUDE.md
   constraint 7), so each resample draws the split's S sessions with replacement, then
   the frames within each drawn session with replacement. Recall's between-session
-  spread rests on the sessions that hold positives, so S below is the smaller of the
-  session count and the count of sessions with positives. With few sessions (S = 5 per
-  cross split) the cluster bootstrap underestimates the variance by about (S-1)/S, and
-  the between-session spread rests on S-1 degrees of freedom, so the width is scaled by
-  sqrt(S/(S-1)) * t(S-1, 0.95) / z(0.95) (1.449 at S = 5, 1.175 at S = 10). A run with
-  S below MIN_SESSIONS fails every target.
+  spread rests on the sessions that hold positives and the threshold's on those that
+  hold negatives, so S below is the smaller of those two counts. With few sessions
+  (S = 5 per cross split) the cluster bootstrap underestimates the variance by about
+  (S-1)/S, and the between-session spread rests on S-1 degrees of freedom, so the width
+  is scaled by sqrt(S/(S-1)) * t(S-1, 0.95) / z(0.95) (1.449 at S = 5, 1.175 at
+  S = 10). A run with S below MIN_SESSIONS fails every target.
 Each run's decision width at the full size is the wider of the two. At each size in
 --sizes below the negative count, n negatives are drawn with replacement from the
 original negatives of the drawn units, with the resample's positives; each resample is
@@ -31,7 +31,8 @@ draws one class only (computed exactly from each session's class counts, and als
 counted among the full-size resamples) is above MAX_UNDEFINED_SHARE (the interval would
 describe only the resamples that drew both).
 Runs with one class only, runs without a usable score file and incomplete score files
-are listed, not silently dropped; the decision states how many runs it covers.
+are listed, not silently dropped; the decision states how many runs have a measured
+width (a run blocked by a gate still counts there).
 
 --score defaults to the aggregation the evaluation stored in the score file (the score
 the result file's recall_at_fpr_* keys use), else "vote".
@@ -310,10 +311,12 @@ def main(argv: list[str] | None = None) -> dict:
             sessions = z[key] if a.unit == "both" else None
         n_full, n_pos = int((y == 0).sum()), int((y == 1).sum())
         by_unit = {"frame": stability_rows(y, s, targets, a.sizes, a.n_boot, a.seed)}
-        n_sessions = n_pos_sessions = None
+        n_sessions = n_pos_sessions = n_neg_sessions = None
         if sessions is not None:
             n_sessions = int(len(np.unique(sessions)))
             n_pos_sessions = int(len(np.unique(sessions[y == 1])))
+            n_neg_sessions = int(len(np.unique(sessions[y == 0])))
+        if sessions is not None and n_full and n_pos:  # one class: listed below
             by_unit["session"] = stability_rows(
                 y, s, targets, a.sizes, a.n_boot, a.seed, sessions
             )
@@ -325,6 +328,7 @@ def main(argv: list[str] | None = None) -> dict:
             "n_neg": n_full,
             "n_sessions": n_sessions,
             "n_pos_sessions": n_pos_sessions,
+            "n_neg_sessions": n_neg_sessions,
             "width": {},
         }
         runs[run_dir.name] = info
@@ -335,17 +339,19 @@ def main(argv: list[str] | None = None) -> dict:
         if not (n_full and n_pos):
             undefined.append(run_dir.name)
             continue
-        # Sessions that bound the session width: those holding positives, at most S.
-        n_eff = 0
-        if sessions is not None and n_sessions is not None and n_pos_sessions:
-            n_eff = min(n_sessions, n_pos_sessions)
+        # Sessions that bound the session width: recall rests on the sessions with
+        # positives, the threshold at a fixed FPR on those with negatives.
+        n_eff, p_one = 0, 0.0
+        if sessions is not None and n_pos_sessions and n_neg_sessions:
+            n_eff = min(n_pos_sessions, n_neg_sessions)
             p_one = one_class_probability(y, sessions)
             info["p_one_class"] = p_one
             for t in targets:
                 if n_eff < MIN_SESSIONS:
                     few_sessions[t].append(
                         f"{run_dir.name} ({n_sessions} sessions,"
-                        f" {n_pos_sessions} with positives)"
+                        f" {n_pos_sessions} with positives,"
+                        f" {n_neg_sessions} with negatives)"
                     )
                 if p_one > MAX_UNDEFINED_SHARE:
                     undefined_draws[t].append(f"{run_dir.name} (P = {p_one:.4f})")
@@ -360,9 +366,7 @@ def main(argv: list[str] | None = None) -> dict:
                 width, n_undef = _full_width(unit_rows, t, n_full)
                 if unit == "session":
                     width *= session_scale(n_eff)
-                    listed = any(
-                        e.startswith(f"{run_dir.name} (") for e in undefined_draws[t]
-                    )
+                    listed = p_one > MAX_UNDEFINED_SHARE  # already listed above
                     if n_undef > MAX_UNDEFINED_SHARE * a.n_boot and not listed:
                         undefined_draws[t].append(
                             f"{run_dir.name} ({n_undef} of {a.n_boot} resamples)"
@@ -375,7 +379,12 @@ def main(argv: list[str] | None = None) -> dict:
                 w = widest[t]
                 widest[t] = measured[used] if w != w else max(w, measured[used])
     if not rows:
-        raise SystemExit(f"no usable score files under {a.checkpoints_dir}/{a.glob}")
+        raise SystemExit(
+            f"no usable score files under {a.checkpoints_dir}/{a.glob}"
+            f" (no score file: {', '.join(missing_scores) or 'none'};"
+            " score file without a matching results file:"
+            f" {', '.join(incomplete) or 'none'})"
+        )
 
     unit_text = "frame and session (the wider decides)" if a.unit == "both" else "frame"
     print(f"Resampling: {unit_text}")
@@ -450,7 +459,7 @@ def main(argv: list[str] | None = None) -> dict:
     print(f"\nWidest decision width at full size: {widest}")
     print(
         f"Decision (max width {a.max_width}): {decision}"
-        f" (covers {covered} of {len(runs)} runs with a score file)"
+        f" ({covered} of {len(runs)} runs with a score file have a measured width)"
     )
     result = {
         "split": a.split,

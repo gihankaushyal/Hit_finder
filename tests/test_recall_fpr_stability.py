@@ -301,7 +301,10 @@ def test_fewer_than_min_sessions_fails_every_target(tmp_path, n_sessions):
     sessions = np.array([f"s{i % n_sessions}" for i in range(len(y))])
     _write_run(tmp_path / "ckpt" / "m-fold2-seed42", y, s, sessions=sessions)
     data = _main(tmp_path, "--max-width", "1.0")
-    expected = [f"m-fold2-seed42 ({n_sessions} sessions, {n_sessions} with positives)"]
+    expected = [
+        f"m-fold2-seed42 ({n_sessions} sessions, {n_sessions} with positives,"
+        f" {n_sessions} with negatives)"
+    ]
     assert data["few_sessions"] == {"1e-3": expected, "1e-2": expected}
     assert data["decision"] == "interval"  # the frame width alone does not decide
 
@@ -365,7 +368,7 @@ def test_sessions_without_positives_do_not_count(tmp_path):
     ]
     _write_run(tmp_path / "ckpt" / "m-fold2-seed42", y, s, sessions=sessions)
     data = _main(tmp_path, "--max-width", "1.0")
-    expected = ["m-fold2-seed42 (10 sessions, 4 with positives)"]
+    expected = ["m-fold2-seed42 (10 sessions, 4 with positives, 10 with negatives)"]
     assert data["few_sessions"] == {"1e-3": expected, "1e-2": expected}
     assert data["runs"]["m-fold2-seed42"]["n_pos_sessions"] == 4
 
@@ -539,3 +542,43 @@ def test_the_session_minimum_does_not_apply_to_frame_resampling(tmp_path):
     assert (
         data["decision"] == "1e-2"
     )  # 1e-3 fails only as underpowered (3,000 negatives)
+
+
+def test_sessions_without_negatives_do_not_count(tmp_path):
+    # 10 sessions with hits, misses in only 3: the threshold rests on 3 sessions.
+    y, s = _scores(n_pos=1_000, n_neg=3_000)
+    sessions = np.r_[
+        [f"s{i % 10}" for i in range(1_000)], [f"s{i % 3}" for i in range(3_000)]
+    ]
+    _write_run(tmp_path / "ckpt" / "m-fold2-seed42", y, s, sessions=sessions)
+    data = _main(tmp_path, "--max-width", "1.0")
+    expected = ["m-fold2-seed42 (10 sessions, 10 with positives, 3 with negatives)"]
+    assert data["few_sessions"] == {"1e-3": expected, "1e-2": expected}
+    assert data["runs"]["m-fold2-seed42"]["n_neg_sessions"] == 3
+
+
+def test_an_empty_split_is_listed_not_fatal(tmp_path):
+    y, s = _scores(n_neg=3_000)
+    _write_run(tmp_path / "ckpt" / "a-fold1-seed42", y, s)
+    run = tmp_path / "ckpt" / "b-fold1-seed42"
+    run.mkdir(parents=True)
+    empty = np.array([], dtype=float)
+    np.savez(
+        run / "scores.npz",
+        cross_y_true=empty.astype(np.int8), cross_vote=empty, cross_max=empty,
+        cross_session=np.array([], dtype="<U2"),
+    )  # fmt: skip
+    (run / "results.json").write_text("{}")
+    data = _main(tmp_path)
+    assert data["undefined"] == ["b-fold1-seed42"]
+    assert data["decision_covers"] == {"runs": 1, "of": 2}
+
+
+def test_no_usable_score_file_names_the_runs(tmp_path):
+    (tmp_path / "ckpt" / "a-fold1-seed42").mkdir(parents=True)  # no score file
+    run = tmp_path / "ckpt" / "b-fold1-seed42"
+    y, s = _scores(n_neg=500)
+    _write_run(run, y, s)
+    (run / "results.json").unlink()  # score file without its results file
+    with pytest.raises(SystemExit, match="a-fold1-seed42.*b-fold1-seed42/scores.npz"):
+        _main(tmp_path)
