@@ -30,12 +30,9 @@ from src.training.inference_results import (  # noqa: E402  (no torch / numpy im
 from src.utils.config import DEFAULT_SEED as CONFIG_DEFAULT_SEED  # noqa: E402
 
 DETECTOR_ORDER = {1: "AGIPD", 2: "JUNGFRAU_4M", 3: "ePix10k", 4: "Eiger4M"}
-# The side file an --inference-only pass writes next to a finished run's results.json.
-INFERENCE_RESULTS = INFERENCE_RESULTS_NAME
 _SPLITS = ("cross", "in_domain")
-# Keys --metric accepts: the per-split keys of a result file.
-METRIC_CHOICES = SPLIT_RESULT_KEYS
-# Set on a loaded record: the splits whose --metric value came from INFERENCE_RESULTS.
+# Set on a loaded record: the splits whose --metric value came from the side file
+# (INFERENCE_RESULTS_NAME) an --inference-only pass writes next to results.json.
 FROM_INFERENCE = "_metric_from_inference"
 # Set on a pooled record: {split: {key: n}} for keys only n of the fold's seeds have.
 PARTIAL_SEEDS = "_partial_seeds"
@@ -132,7 +129,9 @@ def load_results(
         with open(path) as f:
             data = json.load(f)
         if metric is not None:
-            _fill_metric_from_inference(data, path.with_name(INFERENCE_RESULTS), metric)
+            _fill_metric_from_inference(
+                data, path.with_name(INFERENCE_RESULTS_NAME), metric
+            )
         fold_id = data.get("fold_id")
         if fold_id not in DETECTOR_ORDER:
             continue
@@ -176,7 +175,7 @@ def _pool_by_fold(results: list[dict]) -> list[dict]:
         filled = sorted({s for r in runs for s in r.get(FROM_INFERENCE, [])})
         if filled:
             rec[FROM_INFERENCE] = filled
-        for split in ("cross", "in_domain"):
+        for split in _SPLITS:
             keys = dict.fromkeys(k for r in runs for k in r.get(split, {}))
             rec[split] = {}
             for k in keys:
@@ -205,6 +204,8 @@ def mean_std(values: list[float]) -> tuple[float, float]:
 
 _HDR = f"{'Fold':<6} {'Held-out':<14} {'Cross AP':>9} {'Cross AUC':>10} {'Cross F1':>9} {'ID AP':>8} {'ID AUC':>9} {'ID F1':>8}"
 _SEP = "-" * len(_HDR)
+# The per-split keys the default table shows.
+_TABLE_KEYS = ("ap", "auc_roc", "f1")
 
 
 def print_variant_table(label: str, results: list[dict]) -> tuple[float, float]:
@@ -213,14 +214,24 @@ def print_variant_table(label: str, results: list[dict]) -> tuple[float, float]:
     print(_HDR)
     print(_SEP)
     cross_aps, cross_aucs, cross_f1s = [], [], []
+    partial_notes = []
     for r in results:
         fold = r["fold_id"]
         det = r["test_detector"]
         c = r["cross"]
         d = r["in_domain"]
+        partial = [
+            f"{split} {k} {n}/{r['n_seeds']}"
+            for split in _SPLITS
+            for k, n in r.get(PARTIAL_SEEDS, {}).get(split, {}).items()
+            if k in _TABLE_KEYS
+        ]
+        if partial:
+            partial_notes.append(f"fold {fold}: {', '.join(partial)} seeds")
         print(
             f"{fold:<6} {det:<14} {c['ap']:>9.4f} {c['auc_roc']:>10.4f} {c['f1']:>9.4f}"
             f" {d['ap']:>8.4f} {d['auc_roc']:>9.4f} {d['f1']:>8.4f}"
+            + (" +" if partial else "")
         )
         cross_aps.append(c["ap"])
         cross_aucs.append(c["auc_roc"])
@@ -229,12 +240,14 @@ def print_variant_table(label: str, results: list[dict]) -> tuple[float, float]:
     ap_mu, ap_sd = mean_std(cross_aps)
     auc_mu, auc_sd = mean_std(cross_aucs)
     f1_mu, f1_sd = mean_std(cross_f1s)
-    n = len(results)
-    print(
-        f"{'Mean':<6} {f'({n}/4 folds)':<14} {ap_mu:>9.4f} {auc_mu:>10.4f} {f1_mu:>9.4f}"
-    )
-    if n > 1:
+    folds = f"({len(results)}/{len(DETECTOR_ORDER)} folds)"
+    print(f"{'Mean':<6} {folds:<14} {ap_mu:>9.4f} {auc_mu:>10.4f} {f1_mu:>9.4f}")
+    if len(results) > 1:
         print(f"{'Std':<6} {'':<14} {ap_sd:>9.4f} {auc_sd:>10.4f} {f1_sd:>9.4f}")
+    if partial_notes:
+        print(
+            f"+ pooled over fewer seeds than the fold has: {'; '.join(partial_notes)}"
+        )
     return ap_mu, ap_sd
 
 
@@ -277,12 +290,13 @@ def print_metric_table(
         if c == c:
             cross_vals.append(c)
     mu, sd = mean_std(cross_vals)
-    print(f"{'Mean':<6} {f'({len(cross_vals)}/4 folds)':<14} {fmt(mu)}")
+    folds = f"({len(cross_vals)}/{len(DETECTOR_ORDER)} folds)"
+    print(f"{'Mean':<6} {folds:<14} {fmt(mu)}")
     if len(cross_vals) > 1:
         print(f"{'Std':<6} {'':<14} {fmt(sd)}")
     if any_filled:
         print(
-            f"* from {INFERENCE_RESULTS} (an --inference-only pass; see its"
+            f"* from {INFERENCE_RESULTS_NAME} (an --inference-only pass; see its"
             " 'inference' block for the evaluation settings)"
         )
     if partial_notes:
@@ -380,7 +394,7 @@ def main(argv: list[str] | None = None):
     parser.add_argument(
         "--metric",
         default=None,
-        choices=METRIC_CHOICES,
+        choices=SPLIT_RESULT_KEYS,
         help=(
             "Tabulate one key of the cross / in_domain blocks (for example "
             "recall_at_fpr_1e-3) instead of AP/AUC/F1. Read from results.inference.json "

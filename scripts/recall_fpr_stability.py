@@ -2,8 +2,11 @@
 
 Reads the per-frame score files written by the test evaluation in each run directory:
 scores.npz when results.json is next to it, else scores.inference.npz when
-results.inference.json is. A score file newer than its results file (a pass killed
-between the two writes) is listed as incomplete and not used.
+results.inference.json is. The two belong together when they carry the same
+evaluation_id; a pair from before that id was written belongs together when the
+results file is not older than the score file (the evaluation writes the score file
+first). A score file that does not belong to its results file (a pass killed between
+the two writes) is listed as incomplete and not used.
 
 Two resampling units, both run by default (--unit both):
 - "frame": all positives and all negatives drawn independently with replacement.
@@ -19,7 +22,9 @@ Two resampling units, both run by default (--unit both):
 Each run's decision width at the full size is the wider of the two. At each size in
 --sizes below the negative count, n negatives are drawn with replacement from the
 original negatives of the drawn units, with the resample's positives; each resample is
-read at every target. Reported per (unit, target, size): median and 90% interval of
+read at every target. Below the full size the negatives are drawn frame by frame,
+also in the session unit, so those rows understate the session spread; only the
+full-size rows decide. Reported per (unit, target, size): median and 90% interval of
 recall, and the number of resamples with no positive or no negative (left out).
 
 Decision: 1e-3 if every run's decision width is below --max-width, else 1e-2 if that
@@ -223,22 +228,37 @@ def _positive_int(text: str) -> int:
     return value
 
 
-def _score_file(run_dir: Path) -> tuple[Path | None, list[str]]:
-    """The first score file whose results file is next to it and not older than it.
+def _paired(score_path: Path, results_path: Path) -> bool:
+    """Whether a score file and its results file come from the same evaluation.
 
-    Returns (path or None, the score files present but unusable). The evaluation writes
-    the score file first, so one newer than its results file is from a pass killed
-    between the two writes, and does not belong to the results beside it.
+    By evaluation_id when both carry one (a copy that resets file times keeps it);
+    otherwise the results file must not be older than the score file. A results file
+    that cannot be read is not paired, so the score file is listed as incomplete.
+    """
+    with np.load(score_path) as z:
+        score_id = str(z["evaluation_id"]) if "evaluation_id" in z else None
+    if score_id is not None:
+        try:
+            results = json.loads(results_path.read_text())
+        except (OSError, json.JSONDecodeError):
+            return False
+        results_id = results.get("evaluation_id") if isinstance(results, dict) else None
+        if results_id is not None:
+            return results_id == score_id
+    return results_path.stat().st_mtime >= score_path.stat().st_mtime
+
+
+def _score_file(run_dir: Path) -> tuple[Path | None, list[str]]:
+    """The first score file that pairs with the results file next to it (`_paired`).
+
+    Returns (path or None, the score files present but unusable).
     """
     incomplete: list[str] = []
     for score_name, results_name in SCORE_FILES:
         score_path, results_path = run_dir / score_name, run_dir / results_name
         if not score_path.exists():
             continue
-        if (
-            results_path.exists()
-            and results_path.stat().st_mtime >= score_path.stat().st_mtime
-        ):
+        if results_path.exists() and _paired(score_path, results_path):
             return score_path, incomplete
         incomplete.append(f"{run_dir.name}/{score_name}")
     return None, incomplete
@@ -310,16 +330,18 @@ def main(argv: list[str] | None = None) -> dict:
                 raise SystemExit(f"{path} has no {key}; use --unit frame")
             sessions = z[key] if a.unit == "both" else None
         n_full, n_pos = int((y == 0).sum()), int((y == 1).sum())
-        by_unit = {"frame": stability_rows(y, s, targets, a.sizes, a.n_boot, a.seed)}
         n_sessions = n_pos_sessions = n_neg_sessions = None
         if sessions is not None:
             n_sessions = int(len(np.unique(sessions)))
             n_pos_sessions = int(len(np.unique(sessions[y == 1])))
             n_neg_sessions = int(len(np.unique(sessions[y == 0])))
-        if sessions is not None and n_full and n_pos:  # one class: listed below
-            by_unit["session"] = stability_rows(
-                y, s, targets, a.sizes, a.n_boot, a.seed, sessions
-            )
+        by_unit: dict[str, list[dict]] = {}
+        if n_full and n_pos:  # one class: no recall to resample, listed below
+            by_unit["frame"] = stability_rows(y, s, targets, a.sizes, a.n_boot, a.seed)
+            if sessions is not None:
+                by_unit["session"] = stability_rows(
+                    y, s, targets, a.sizes, a.n_boot, a.seed, sessions
+                )
         info: dict = {
             "file": path.name,
             "score": score_name,
@@ -378,7 +400,7 @@ def main(argv: list[str] | None = None) -> dict:
             if used is not None:
                 w = widest[t]
                 widest[t] = measured[used] if w != w else max(w, measured[used])
-    if not rows:
+    if not runs:
         raise SystemExit(
             f"no usable score files under {a.checkpoints_dir}/{a.glob}"
             f" (no score file: {', '.join(missing_scores) or 'none'};"
@@ -420,7 +442,8 @@ def main(argv: list[str] | None = None) -> dict:
         print(f"\nNo score file, left out: {', '.join(missing_scores)}")
     if incomplete:
         print(
-            "\nScore file without a matching (not older) results file, left out:"
+            "\nScore file without a matching results file (same evaluation_id, or not"
+            " older), left out:"
             f" {', '.join(incomplete)}"
         )
     if undefined:

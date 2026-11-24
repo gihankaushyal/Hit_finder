@@ -9,7 +9,8 @@ Run naming convention (--run-name-prefix, REQUIRED, no default):
     vits16-mae-finetune-v2-fold{N}-seed{S} and, with --linear-probe,
     vits16-mae-probe-v2-fold{N}-seed{S}. If best.pt already exists under the
     resolved name, the script exits and asks for --resume-training (continue),
-    --override-training (discard best.pt, last.pt and results.json, then restart; the old
+    --override-training (discard best.pt, last.pt, results.json, results.inference.json
+    and the score files scores.npz / scores.inference.npz, then restart; the old
     W&B run is kept and tagged 'overridden', the restart logs to <run_name>-o<N>) or
     --inference-only (evaluate best.pt without training; no pretrain checkpoint needed).
 

@@ -49,7 +49,7 @@ METRICS = {
 }
 RECALL = {
     k: 0.5 for k in RECALL_FPR_KEYS
-}  # only with return_recall=True, as the real one
+}  # only with return_test_metrics=True, as the real one
 
 
 def _fake_scores() -> dict:
@@ -65,8 +65,8 @@ def _fake_agg(**overrides):
     """A run_patch_agg stand-in: METRICS (with overrides), plus scores when asked."""
 
     def agg(*a, **kw) -> dict:
-        scores = {"scores": _fake_scores()} if kw.get("return_scores") else {}
-        recall = RECALL if kw.get("return_recall") else {}
+        scores = {"scores": _fake_scores()} if kw.get("return_test_metrics") else {}
+        recall = RECALL if kw.get("return_test_metrics") else {}
         return {**METRICS, **recall, **overrides, **scores}
 
     return agg

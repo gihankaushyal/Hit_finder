@@ -106,8 +106,9 @@ Targets are 10⁻³ and 10⁻² (`RECALL_FPR_TARGETS`). Per split, `run_patch_ag
 `recall_at_fpr_<t>` and `fpr_at_fpr_<t>` on the aggregation score (the headline; the
 vote score whenever `aggregation: vote`, as in every current config, and the max-tile
 score under `aggregation: max`) and `max_recall_at_fpr_<t>` / `max_fpr_at_fpr_<t>` on the max-tile score (a
-diagnostic), for `<t>` in `1e-3`, `1e-2`, when called with `return_recall=True` (the
-two test evaluations only; validation never computes them). They are written to the
+diagnostic), for `<t>` in `1e-3`, `1e-2`, when called with `return_test_metrics=True` (the
+two test evaluations only, which also get the per-frame scores; validation computes
+neither). A NaN or infinite score raises instead of taking a place in the ranking. They are written to the
 test blocks of the result file and to W&B (`cross/…`, `in_domain/…`).
 
 Whether 10⁻³ can be reported depends on the number of negatives per fold.
@@ -126,8 +127,9 @@ resamples, seed 0) with two resampling units, both by default (`--unit both`):
 
 `--unit frame` runs the frame unit only (needed when a score file has no session ids).
 At 500, 1,000, 2,000 and 5,000 negatives, n negatives are drawn with replacement from
-the original negatives of the drawn units; at the full count the resample is used as
-drawn. Both targets are read from the same resamples. `--score` defaults to the
+the original negatives of the drawn units, frame by frame also in the session unit (so
+those rows understate the session spread; only the full size decides); at the full
+count the resample is used as drawn. Both targets are read from the same resamples. `--score` defaults to the
 aggregation stored in the score file, which is the score behind the result file's
 `recall_at_fpr_*`; an explicit `--score` that differs is listed. The script prints, per
 run, the score file and score used and the numbers of positives, negatives,
@@ -147,8 +149,10 @@ class only is above 1% (the interval would describe only the resamples that drew
 That chance is computed exactly from each session's class counts (a drawn session that
 holds both classes can still draw no positive) and also counted among the full-size
 resamples; either one above 1% fails the target. Runs whose split has one class only, runs
-without a score file, and score files without a results file beside them that is at
-least as new (a pass killed between the two writes) are listed and left out (also when
+without a score file, and score files that do not pair with the results file beside
+them (a pass killed between the two writes) are listed and left out. A pair is matched
+by `evaluation_id` when both files carry one, which survives a copy that resets file
+times; older files without it pair when the results file is at least as new (also when
 no run is usable, in the exit message); the decision states how many runs have a
 measured width. The JSON output is strict (NaN written as
 `null`).
@@ -199,6 +203,7 @@ Each fold writes `checkpoints/<run-prefix>-fold<N>-seed<S>/results.json`:
 | Field | Meaning |
 |-------|---------|
 | `fold_id`, `test_detector` | Fold identity |
+| `evaluation_id` *(runs evaluated from 2026-11-24)* | Random id of this evaluation, also stored in the score file written with it |
 | `inference_threshold` | Validation-set F1-optimal threshold (the deployable operating point) |
 | `cross` / `in_domain` | `{ap, auc_roc, f1, threshold}` and the eight recall-at-fixed-FPR keys *(runs evaluated from 2026-11-21)* on the held-out detector / training-detector test split; `f1`, `threshold` and the recall thresholds are the optimum on that split itself |
 | `training` *(newer runs)* | `configured_epochs`, `last_epoch`, `best_epoch`, `early_stopped` |
@@ -217,7 +222,8 @@ The test evaluation also writes the per-frame scores, before the result file:
 `results.inference.json`. Keys are `<split>_<name>` for split `cross` / `in_domain`
 and name `y_true` (int8), `vote` and `max` (float32, both computed whatever the
 aggregation) and `session`, plus `aggregation` (the score the result file's
-`recall_at_fpr_*` keys were computed on). Score and result files are written atomically (temporary
+`recall_at_fpr_*` keys were computed on) and `evaluation_id` (the same value as in the
+result file). Score and result files are written atomically (temporary
 file, then rename). `--override-training` deletes both score files.
 
 `python scripts/aggregate_lodo_results.py` collects finished folds into

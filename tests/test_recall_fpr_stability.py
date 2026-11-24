@@ -495,7 +495,8 @@ def test_the_json_is_strict_and_its_folder_is_created(tmp_path):
     stab.main(["--checkpoints-dir", str(tmp_path / "ckpt"), "--n-boot", "5",
                "--out", str(out)])  # fmt: skip
     data = json.loads(out.read_text(), parse_constant=lambda c: pytest.fail(c))
-    assert data["rows"][0]["median"] is None
+    assert data["rows"] == []  # one class: no bootstrap
+    assert data["widest_at_full"] == {"1e-3": None, "1e-2": None}  # NaN as null
 
 
 def test_decision_covers_only_runs_with_a_measured_width(tmp_path, monkeypatch):
@@ -581,4 +582,33 @@ def test_no_usable_score_file_names_the_runs(tmp_path):
     _write_run(run, y, s)
     (run / "results.json").unlink()  # score file without its results file
     with pytest.raises(SystemExit, match="a-fold1-seed42.*b-fold1-seed42/scores.npz"):
+        _main(tmp_path)
+
+
+def _with_ids(run: Path, score_id: str, results_id: str) -> None:
+    with np.load(run / "scores.npz") as z:
+        arrays = dict(z)
+    np.savez(run / "scores.npz", **arrays, evaluation_id=np.array(score_id))
+    (run / "results.json").write_text(json.dumps({"evaluation_id": results_id}))
+
+
+def test_a_matching_evaluation_id_pairs_files_whatever_their_times(tmp_path):
+    import os
+
+    y, s = _scores(n_neg=2_000)
+    run = tmp_path / "ckpt" / "m-fold1-seed42"
+    _write_run(run, y, s)
+    _with_ids(run, "abc", "abc")
+    t = (run / "scores.npz").stat().st_mtime
+    os.utime(run / "results.json", (t - 60, t - 60))  # a copy reset the times
+    data = _main(tmp_path)
+    assert "m-fold1-seed42" in data["runs"] and data["incomplete"] == []
+
+
+def test_a_different_evaluation_id_is_incomplete_whatever_their_times(tmp_path):
+    y, s = _scores(n_neg=2_000)
+    run = tmp_path / "ckpt" / "m-fold1-seed42"
+    _write_run(run, y, s)
+    _with_ids(run, "abc", "xyz")  # results written after, by another pass
+    with pytest.raises(SystemExit, match="m-fold1-seed42/scores.npz"):
         _main(tmp_path)

@@ -111,11 +111,11 @@ def _two_frame_session(tmp_path):
 
 def test_run_patch_agg_reports_recall_at_fixed_fpr(tmp_path):
     session_map, ids = _two_frame_session(tmp_path)
-    assert not set(RECALL_FPR_KEYS) & set(
-        run_patch_agg(_FixedScoreModel(0.8), session_map, ids, device="cpu")
-    )  # opt-in: validation does not pay for it
+    plain = run_patch_agg(_FixedScoreModel(0.8), session_map, ids, device="cpu")
+    # opt-in: validation pays for neither the recall keys nor the scores
+    assert not set(RECALL_FPR_KEYS) & set(plain) and "scores" not in plain
     out = run_patch_agg(
-        _FixedScoreModel(0.8), session_map, ids, device="cpu", return_recall=True
+        _FixedScoreModel(0.8), session_map, ids, device="cpu", return_test_metrics=True
     )
     for key in RECALL_FPR_KEYS:
         assert key in out
@@ -126,11 +126,8 @@ def test_run_patch_agg_reports_recall_at_fixed_fpr(tmp_path):
 
 def test_run_patch_agg_returns_per_frame_scores_on_request(tmp_path):
     session_map, ids = _two_frame_session(tmp_path)
-    assert "scores" not in run_patch_agg(
-        _FixedScoreModel(0.8), session_map, ids, device="cpu"
-    )
     out = run_patch_agg(
-        _FixedScoreModel(0.8), session_map, ids, device="cpu", return_scores=True
+        _FixedScoreModel(0.8), session_map, ids, device="cpu", return_test_metrics=True
     )
     sc = out["scores"]
     assert sc["y_true"].tolist() == [1, 0]
@@ -145,7 +142,7 @@ def test_run_patch_agg_with_no_frames_keeps_every_recall_key_nan(tmp_path):
         {"s0": tmp_path / "missing.cxi"},
         ["s0"],
         device="cpu",
-        return_recall=True,
+        return_test_metrics=True,
     )
     assert all(np.isnan(out[k]) for k in RECALL_FPR_KEYS)
 
@@ -189,7 +186,7 @@ def test_headline_recall_follows_the_configured_aggregation(tmp_path, aggregatio
     model = _PerFrameScoreModel([[0.99, 0.1, 0.1, 0.1], [0.6, 0.6, 0.6, 0.6]])
     out = run_patch_agg(
         model, session_map, ids, device="cpu", aggregation=aggregation,
-        return_recall=True, return_scores=True,
+        return_test_metrics=True,
     )  # fmt: skip
     y, sc = out["scores"]["y_true"], out["scores"]
     expected = recall_at_fpr(y, sc[aggregation], 1e-2)[0]
@@ -215,7 +212,7 @@ def test_scores_keep_session_ids_aligned_with_labels(tmp_path):
         session_map[sid] = cxi
     out = run_patch_agg(
         _FixedScoreModel(0.8), session_map, ["s0", "s1"], device="cpu",
-        return_scores=True,
+        return_test_metrics=True,
     )  # fmt: skip
     assert out["scores"]["session"].tolist() == ["s0", "s0", "s1", "s1"]
     assert out["scores"]["y_true"].tolist() == [1, 0, 0, 0]

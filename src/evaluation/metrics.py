@@ -119,7 +119,8 @@ def recall_at_fpr(
     vote fraction) can therefore reach an FPR well below the target. If the top tie
     group alone exceeds the target, recall is 0.0 at FPR 0.0. (nan, nan) when there are
     no positives or no negatives. The threshold comes from the scored split itself: a
-    ranking metric like AP, not a deployable operating point.
+    ranking metric like AP, not a deployable operating point. A NaN or infinite score
+    raises ValueError: it would otherwise take a place in the ranking silently.
     """
     return recall_at_fprs(y_true, y_score, [target_fpr])[0]
 
@@ -130,6 +131,9 @@ def recall_at_fprs(
     """`recall_at_fpr` at several targets from one sort: one (recall, FPR) per target."""
     y_true = np.asarray(y_true, dtype=float)
     y_score = np.asarray(y_score, dtype=float)
+    if not np.isfinite(y_score).all():
+        bad = int((~np.isfinite(y_score)).sum())
+        raise ValueError(f"recall_at_fprs: {bad} non-finite score(s)")
     n_pos = y_true.sum()
     n_neg = len(y_true) - n_pos
     if n_pos == 0 or n_neg == 0:

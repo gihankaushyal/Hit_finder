@@ -65,12 +65,17 @@ def scores_path_for(results_path: Path) -> Path:
 
 
 def write_scores(
-    path: Path, scores_by_split: dict[str, dict], aggregation: str | None = None
+    path: Path,
+    scores_by_split: dict[str, dict],
+    aggregation: str | None = None,
+    evaluation_id: str | None = None,
 ) -> None:
     """Per-frame scores as one .npz with keys ``<split>_<name>``, written atomically.
 
     `aggregation` ("vote" / "max"), when given, is stored under ``aggregation``: the
-    score the result file's recall_at_fpr_* keys were computed on.
+    score the result file's recall_at_fpr_* keys were computed on. `evaluation_id`,
+    when given, is stored under ``evaluation_id``; the results file of the same
+    evaluation carries the same value, which pairs the two by content.
     """
     # Imported here: this module stays free of numpy and torch (see wandb_identity).
     import numpy as np
@@ -84,6 +89,8 @@ def write_scores(
     }
     if aggregation is not None:
         arrays["aggregation"] = np.array(aggregation)
+    if evaluation_id is not None:
+        arrays["evaluation_id"] = np.array(evaluation_id)
     atomic_write(path, lambda f: np.savez(f, **arrays))
 
 

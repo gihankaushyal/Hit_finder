@@ -607,3 +607,11 @@ class TestRecallAtFpr:
             "recall_at_fpr_1e-2", "fpr_at_fpr_1e-2",
             "max_recall_at_fpr_1e-2", "max_fpr_at_fpr_1e-2",
         )  # fmt: skip
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf")])
+def test_recall_at_fpr_rejects_non_finite_scores(bad):
+    from src.evaluation.metrics import recall_at_fpr
+
+    with pytest.raises(ValueError, match="1 non-finite"):
+        recall_at_fpr(np.array([1, 0, 0]), np.array([0.9, bad, 0.1]), 1e-2)

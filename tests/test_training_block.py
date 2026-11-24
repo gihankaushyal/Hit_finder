@@ -36,7 +36,7 @@ METRICS = {
 }
 RECALL = {
     k: 0.5 for k in RECALL_FPR_KEYS
-}  # only with return_recall=True, as the real one
+}  # only with return_test_metrics=True, as the real one
 RUN_PREFIX = "resnet18-asymmetric-v2"
 RUN_NAME = f"{RUN_PREFIX}-fold1-seed42"
 
@@ -54,8 +54,8 @@ def _fake_test_agg(*a, **kw) -> dict:
     """run_patch_agg on a test split: METRICS, plus recall and scores when asked for."""
     return {
         **METRICS,
-        **(RECALL if kw.get("return_recall") else {}),
-        **({"scores": _fake_scores()} if kw.get("return_scores") else {}),
+        **(RECALL if kw.get("return_test_metrics") else {}),
+        **({"scores": _fake_scores()} if kw.get("return_test_metrics") else {}),
     }
 
 
@@ -195,7 +195,7 @@ def run_fold(tmp_path, monkeypatch):
         def fake_agg(model, session_map, ids, **kw):
             if ids == ["s_val"]:
                 evaluations.append(1)
-                recall = RECALL if kw.get("return_recall") else {}
+                recall = RECALL if kw.get("return_test_metrics") else {}
                 return {**METRICS, **recall, "f1": next(scores), "threshold": 0.5}
             return _fake_test_agg(**kw)
 
@@ -223,8 +223,13 @@ class TestTrainFoldWritesTheTrainingBlock:
                 f"{s}_{k}"
                 for s in ("cross", "in_domain")
                 for k in ("y_true", "vote", "max", "session")
-            } | {"aggregation"}
+            } | {"aggregation", "evaluation_id"}
             assert str(z["aggregation"]) == "vote"
+            score_id = str(z["evaluation_id"])
+        results = json.loads(
+            (tmp_path / "checkpoints" / RUN_NAME / RESULTS_NAME).read_text()
+        )
+        assert results["evaluation_id"] == score_id and len(score_id) == 32
 
     def test_recall_at_fixed_fpr_is_logged_for_the_test_not_per_epoch(
         self, run_fold, monkeypatch

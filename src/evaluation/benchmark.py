@@ -221,8 +221,7 @@ def run_patch_agg(
     aggregation: str = "vote",
     frame_cache: "FrameCache | None" = None,
     return_breakdown: bool = False,
-    return_scores: bool = False,
-    return_recall: bool = False,
+    return_test_metrics: bool = False,
 ) -> dict[str, Any]:
     """Evaluate a model on full frames using patch-grid aggregation.
 
@@ -254,13 +253,12 @@ def run_patch_agg(
         return_breakdown: Also return diagnostics for why the frame score moves
             (see `_breakdown_metrics`). Off by default so callers and results.json
             are unchanged.
-        return_scores: Also return the per-frame labels, vote and max-tile scores
-            (both computed whatever the aggregation) and session ids under "scores",
-            as numpy arrays, for scores.npz. The caller removes it before writing
-            results.
-        return_recall: Also return recall at each fixed FPR (`RECALL_FPR_KEYS`), on
-            the aggregation score and on the max-tile score. For the test splits;
-            off for validation, where too few negatives make 1e-3 meaningless.
+        return_test_metrics: For the test splits. Also return recall at each fixed
+            FPR (`RECALL_FPR_KEYS`), on the aggregation score and on the max-tile
+            score, and, under "scores", the per-frame labels, vote and max-tile scores
+            (both computed whatever the aggregation) and session ids as numpy arrays,
+            for scores.npz; the caller removes "scores" before writing results. Off
+            for validation, where too few negatives make 1e-3 meaningless.
 
     Returns:
         dict with keys: ap, auc_roc, f1, threshold, plus on request the breakdown
@@ -425,7 +423,7 @@ def run_patch_agg(
     if not all_scores:
         nan = float("nan")
         out: dict[str, Any] = {"ap": nan, "auc_roc": nan, "f1": nan, "threshold": nan}
-        if return_recall:  # no frames: NaN for every key
+        if return_test_metrics:  # no frames: NaN for every key
             out.update(_recall_metrics(y_true, vote, max_score))
     else:
         y_score = np.array(all_scores)
@@ -436,11 +434,11 @@ def run_patch_agg(
             "f1": best_f1,
             "threshold": threshold,
         }
-        if return_recall:
+        if return_test_metrics:
             out.update(_recall_metrics(y_true, y_score, max_score))
         if return_breakdown:
             out.update(_breakdown_metrics(y_true, vote, max_score))
-    if return_scores:
+    if return_test_metrics:
         out["scores"] = {
             "y_true": y_true.astype(np.int8),
             "vote": vote.astype(np.float32),

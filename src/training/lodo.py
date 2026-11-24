@@ -8,6 +8,7 @@ reuse the same loop without duplication.
 from __future__ import annotations
 
 import json
+import uuid
 from collections.abc import Callable
 from pathlib import Path
 
@@ -713,8 +714,7 @@ def _train_fold(
         device=device,
         aggregation=aggregation,
         frame_cache=frame_cache,
-        return_scores=True,
-        return_recall=True,
+        return_test_metrics=True,
     )
     cross_m = run_patch_agg(
         model,
@@ -726,8 +726,7 @@ def _train_fold(
         device=device,
         aggregation=aggregation,
         frame_cache=frame_cache,
-        return_scores=True,
-        return_recall=True,
+        return_test_metrics=True,
     )
     in_domain_scores = in_domain_m.pop("scores")
     cross_scores = cross_m.pop("scores")
@@ -786,12 +785,15 @@ def _train_fold(
             best_epoch=ckpt.get("epoch"),
             early_stopped=early_stopped,
         )
-    # Scores before results: the results file marks the evaluation complete.
+    # Scores before results: the results file marks the evaluation complete. Both
+    # carry the same evaluation_id, which pairs them even after a copy resets times.
+    result["evaluation_id"] = uuid.uuid4().hex
     scores_path = scores_path_for(results_path)
     write_scores(
         scores_path,
         {"cross": cross_scores, "in_domain": in_domain_scores},
         aggregation=aggregation,
+        evaluation_id=result["evaluation_id"],
     )
     print(f"  Per-frame scores → {scores_path}")
     text = json.dumps(result, indent=2)

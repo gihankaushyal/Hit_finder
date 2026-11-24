@@ -190,3 +190,30 @@ def test_the_metric_summary_shows_how_many_folds_each_mean_covers(tmp_path, caps
     agg.main(["--checkpoints-dir", str(tmp_path), "--select", "1,2", "--metric", key])
     summary = capsys.readouterr().out.split("Cross-variant summary")[1]
     assert "Folds" in summary and "2/4" in summary and "1/4" in summary
+
+
+def test_the_default_table_marks_a_mean_over_fewer_seeds(tmp_path, capsys):
+    for seed in (42, 43, 44):
+        _run(tmp_path, f"m-fold1-seed{seed}", 1, 0.9)
+    path = tmp_path / "m-fold1-seed44" / "results.json"
+    data = json.loads(path.read_text())
+    data["cross"]["f1"] = "n/a"  # not a number: this seed lacks cross F1
+    path.write_text(json.dumps(data))
+    rows = agg.load_results(tmp_path, "m-fold*-seed*", pool_seeds=True)
+    agg.print_variant_table("m", rows)
+    out = capsys.readouterr().out
+    row = next(line for line in out.splitlines() if line.startswith("1 "))
+    assert row.endswith(" +")
+    assert (
+        "+ pooled over fewer seeds than the fold has: fold 1: cross f1 2/3 seeds" in out
+    )
+
+
+def test_the_default_table_is_unmarked_when_every_seed_has_every_key(tmp_path, capsys):
+    for seed in (42, 43):
+        _run(tmp_path, f"m-fold1-seed{seed}", 1, 0.9)
+    agg.print_variant_table(
+        "m", agg.load_results(tmp_path, "m-fold*-seed*", pool_seeds=True)
+    )
+    out = capsys.readouterr().out
+    assert "+" not in out and "(1/4 folds)" in out
