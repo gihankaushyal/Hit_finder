@@ -424,7 +424,7 @@ def run_patch_agg(
         nan = float("nan")
         out: dict[str, Any] = {"ap": nan, "auc_roc": nan, "f1": nan, "threshold": nan}
         if return_test_metrics:  # no frames: NaN for every key
-            out.update(_recall_metrics(y_true, vote, max_score))
+            out.update(_recall_metrics(y_true, vote, max_score, session_ids))
     else:
         y_score = np.array(all_scores)
         best_f1, threshold = f1_at_optimal_threshold(y_true, y_score)
@@ -435,7 +435,7 @@ def run_patch_agg(
             "threshold": threshold,
         }
         if return_test_metrics:
-            out.update(_recall_metrics(y_true, y_score, max_score))
+            out.update(_recall_metrics(y_true, y_score, max_score, session_ids))
         if return_breakdown:
             out.update(_breakdown_metrics(y_true, vote, max_score))
     if return_test_metrics:
@@ -449,13 +449,32 @@ def run_patch_agg(
 
 
 def _recall_metrics(
-    y_true: np.ndarray, y_score: np.ndarray, max_score: np.ndarray
+    y_true: np.ndarray,
+    y_score: np.ndarray,
+    max_score: np.ndarray,
+    session_ids: list[str] | None = None,
 ) -> dict[str, float]:
-    """Recall at each fixed FPR, on the aggregation score and on the max-tile score."""
+    """Recall at each fixed FPR, on the aggregation score and on the max-tile score.
+
+    A score with any NaN or infinite value gets NaN for its keys and a warning naming
+    the sessions, so one bad patch does not cost the fold its other test results.
+    """
     out: dict[str, float] = {}
     targets = list(RECALL_FPR_TARGETS.values())
-    agg_points = recall_at_fprs(y_true, y_score, targets)
-    max_points = recall_at_fprs(y_true, max_score, targets)
+
+    def points(score: np.ndarray, name: str) -> list[tuple[float, float]]:
+        n_bad = int((~np.isfinite(score)).sum())
+        if n_bad:
+            warnings.warn(
+                f"{n_bad} non-finite {name} score(s) over sessions"
+                f" {', '.join(session_ids or [])}: their recall_at_fpr keys are NaN",
+                stacklevel=3,
+            )
+            return [(float("nan"), float("nan"))] * len(targets)
+        return recall_at_fprs(y_true, score, targets)
+
+    agg_points = points(y_score, "aggregation")
+    max_points = points(max_score, "max-tile")
     for t, agg, mx in zip(RECALL_FPR_TARGETS, agg_points, max_points, strict=True):
         out[f"recall_at_fpr_{t}"], out[f"fpr_at_fpr_{t}"] = agg
         out[f"max_recall_at_fpr_{t}"], out[f"max_fpr_at_fpr_{t}"] = mx

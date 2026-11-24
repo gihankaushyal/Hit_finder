@@ -612,3 +612,26 @@ def test_a_different_evaluation_id_is_incomplete_whatever_their_times(tmp_path):
     _with_ids(run, "abc", "xyz")  # results written after, by another pass
     with pytest.raises(SystemExit, match="m-fold1-seed42/scores.npz"):
         _main(tmp_path)
+
+
+def test_an_unreadable_score_file_is_incomplete_not_fatal(tmp_path):
+    y, s = _scores(n_neg=2_000)
+    _write_run(tmp_path / "ckpt" / "a-fold1-seed42", y, s)
+    bad = tmp_path / "ckpt" / "b-fold1-seed42"
+    _write_run(bad, y, s)
+    (bad / "scores.npz").write_bytes(b"PK\x03\x04 truncated")
+    (bad / "results.json").write_text("{}")  # not older than the score file
+    data = _main(tmp_path)
+    assert data["incomplete"] == ["b-fold1-seed42/scores.npz"]
+    assert list(data["runs"]) == ["a-fold1-seed42"]
+
+
+def test_a_run_with_non_finite_scores_is_listed_and_skipped(tmp_path):
+    y, s = _scores(n_neg=2_000)
+    _write_run(tmp_path / "ckpt" / "a-fold1-seed42", y, s)
+    s_bad = s.copy()
+    s_bad[[0, 5]] = np.nan
+    _write_run(tmp_path / "ckpt" / "b-fold1-seed42", y, s_bad)
+    data = _main(tmp_path)
+    assert data["nonfinite"] == ["b-fold1-seed42 (2 vote scores)"]
+    assert list(data["runs"]) == ["a-fold1-seed42"]

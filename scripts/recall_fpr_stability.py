@@ -35,8 +35,9 @@ which a bootstrap cannot resample beyond); or when the chance that a session res
 draws one class only (computed exactly from each session's class counts, and also
 counted among the full-size resamples) is above MAX_UNDEFINED_SHARE (the interval would
 describe only the resamples that drew both).
-Runs with one class only, runs without a usable score file and incomplete score files
-are listed, not silently dropped; the decision states how many runs have a measured
+Runs with one class only, runs whose chosen score has NaN or infinite values, runs
+without a usable score file and incomplete score files (including unreadable ones) are
+listed, not silently dropped; the decision states how many runs have a measured
 width (a run blocked by a gate still counts there).
 
 --score defaults to the aggregation the evaluation stored in the score file (the score
@@ -52,6 +53,7 @@ import argparse
 import json
 import math
 import sys
+import zipfile
 from pathlib import Path
 
 import numpy as np
@@ -233,10 +235,14 @@ def _paired(score_path: Path, results_path: Path) -> bool:
 
     By evaluation_id when both carry one (a copy that resets file times keeps it);
     otherwise the results file must not be older than the score file. A results file
-    that cannot be read is not paired, so the score file is listed as incomplete.
+    that cannot be read is not paired, nor a score file that cannot be opened (a
+    truncated copy), so the score file is listed as incomplete.
     """
-    with np.load(score_path) as z:
-        score_id = str(z["evaluation_id"]) if "evaluation_id" in z else None
+    try:
+        with np.load(score_path) as z:
+            score_id = str(z["evaluation_id"]) if "evaluation_id" in z else None
+    except (OSError, ValueError, EOFError, zipfile.BadZipFile):
+        return False
     if score_id is not None:
         try:
             results = json.loads(results_path.read_text())
@@ -304,6 +310,7 @@ def main(argv: list[str] | None = None) -> dict:
     runs: dict[str, dict] = {}
     widest = {t: float("nan") for t in targets}  # NaN: no run measured
     undefined: list[str] = []  # runs whose split has no positives or no negatives
+    nonfinite: list[str] = []  # runs whose chosen score has NaN or infinite values
     underpowered: dict[str, list[str]] = {t: [] for t in targets}
     undefined_draws: dict[str, list[str]] = {t: [] for t in targets}
     few_sessions: dict[str, list[str]] = {t: [] for t in targets}
@@ -329,6 +336,10 @@ def main(argv: list[str] | None = None) -> dict:
             if a.unit == "both" and key not in z:
                 raise SystemExit(f"{path} has no {key}; use --unit frame")
             sessions = z[key] if a.unit == "both" else None
+        n_bad = int((~np.isfinite(s)).sum())
+        if n_bad:
+            nonfinite.append(f"{run_dir.name} ({n_bad} {score_name} scores)")
+            continue
         n_full, n_pos = int((y == 0).sum()), int((y == 1).sum())
         n_sessions = n_pos_sessions = n_neg_sessions = None
         if sessions is not None:
@@ -405,7 +416,8 @@ def main(argv: list[str] | None = None) -> dict:
             f"no usable score files under {a.checkpoints_dir}/{a.glob}"
             f" (no score file: {', '.join(missing_scores) or 'none'};"
             " score file without a matching results file:"
-            f" {', '.join(incomplete) or 'none'})"
+            f" {', '.join(incomplete) or 'none'};"
+            f" non-finite scores: {', '.join(nonfinite) or 'none'})"
         )
 
     unit_text = "frame and session (the wider decides)" if a.unit == "both" else "frame"
@@ -448,6 +460,8 @@ def main(argv: list[str] | None = None) -> dict:
         )
     if undefined:
         print(f"\nRecall undefined (one class only), left out: {', '.join(undefined)}")
+    if nonfinite:
+        print(f"\nNaN or infinite scores, left out: {', '.join(nonfinite)}")
     for t, names in underpowered.items():
         if names:
             print(
@@ -495,6 +509,7 @@ def main(argv: list[str] | None = None) -> dict:
         "widest_at_full": widest,
         "runs": runs,
         "undefined": undefined,
+        "nonfinite": nonfinite,
         "underpowered": underpowered,
         "undefined_draws": undefined_draws,
         "few_sessions": few_sessions,

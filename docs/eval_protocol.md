@@ -108,7 +108,9 @@ vote score whenever `aggregation: vote`, as in every current config, and the max
 score under `aggregation: max`) and `max_recall_at_fpr_<t>` / `max_fpr_at_fpr_<t>` on the max-tile score (a
 diagnostic), for `<t>` in `1e-3`, `1e-2`, when called with `return_test_metrics=True` (the
 two test evaluations only, which also get the per-frame scores; validation computes
-neither). A NaN or infinite score raises instead of taking a place in the ranking. They are written to the
+neither). A score with a NaN or infinite value gets NaN for its recall keys and a
+warning naming the sessions (`recall_at_fprs` itself raises), so one bad patch costs the
+max-tile diagnostic, not the fold's results. They are written to the
 test blocks of the result file and to W&B (`cross/…`, `in_domain/…`).
 
 Whether 10⁻³ can be reported depends on the number of negatives per fold.
@@ -148,9 +150,10 @@ in-domain split gives "interval"); or when the chance that a session resample ho
 class only is above 1% (the interval would describe only the resamples that drew both).
 That chance is computed exactly from each session's class counts (a drawn session that
 holds both classes can still draw no positive) and also counted among the full-size
-resamples; either one above 1% fails the target. Runs whose split has one class only, runs
+resamples; either one above 1% fails the target. Runs whose split has one class only, runs whose chosen score has NaN or infinite
+values (`nonfinite`), runs
 without a score file, and score files that do not pair with the results file beside
-them (a pass killed between the two writes) are listed and left out. A pair is matched
+them (a pass killed between the two writes, or a file that cannot be opened) are listed and left out. A pair is matched
 by `evaluation_id` when both files carry one, which survives a copy that resets file
 times; older files without it pair when the results file is at least as new (also when
 no run is usable, in the exit message); the decision states how many runs have a

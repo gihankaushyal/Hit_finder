@@ -216,3 +216,16 @@ def test_scores_keep_session_ids_aligned_with_labels(tmp_path):
     )  # fmt: skip
     assert out["scores"]["session"].tolist() == ["s0", "s0", "s1", "s1"]
     assert out["scores"]["y_true"].tolist() == [1, 0, 0, 0]
+
+
+def test_a_nan_max_tile_score_leaves_the_aggregation_keys_and_warns():
+    from src.evaluation.benchmark import _recall_metrics
+
+    y = np.array([1, 1, 0, 0, 0])
+    vote = np.array([0.9, 0.8, 0.1, 0.1, 0.1])
+    max_score = np.array([0.9, np.nan, 0.1, 0.1, 0.1])
+    with pytest.warns(UserWarning, match="1 non-finite max-tile score.*s0, s1"):
+        out = _recall_metrics(y, vote, max_score, ["s0", "s1"])
+    assert out["recall_at_fpr_1e-2"] == 1.0  # the headline survives
+    assert all(np.isnan(out[f"max_{k}_at_fpr_{t}"]) for k in ("recall", "fpr")
+               for t in ("1e-3", "1e-2"))  # fmt: skip
