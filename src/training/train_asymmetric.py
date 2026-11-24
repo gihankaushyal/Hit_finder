@@ -65,7 +65,12 @@ from src.training.run_naming import (
     validate_run_name_prefix,
 )
 from src.training.checkpoint_io import TMP_GLOB
-from src.training.inference_results import INFERENCE_RESULTS_NAME, RESULTS_NAME
+from src.training.inference_results import (
+    INFERENCE_RESULTS_NAME,
+    INFERENCE_SCORES_NAME,
+    RESULTS_NAME,
+    SCORES_NAME,
+)
 from src.training.wandb_identity import override_hook_from_cfg
 from src.training.lodo import check_crop_options
 from src.utils.config import apply_seed_override, load_config, seed_arg
@@ -97,6 +102,8 @@ def _check_checkpoint_collisions(
         extra_delete=(
             RESULTS_NAME,
             INFERENCE_RESULTS_NAME,
+            SCORES_NAME,
+            INFERENCE_SCORES_NAME,
             LAST_CHECKPOINT_NAME,
             TMP_GLOB,  # a partial checkpoint left by a kill mid-save
         ),
@@ -353,7 +360,7 @@ if __name__ == "__main__":
         default=False,
         help=(
             "When a checkpoint exists for the resolved run name, discard it "
-            "(best.pt, last.pt, results.json and results.inference.json) and start that fold from scratch under the "
+            "(best.pt, last.pt, results.json, results.inference.json and the score files scores.npz / scores.inference.npz) and start that fold from scratch under the "
             "same run name. The old W&B run is kept and tagged 'overridden'; the restart logs to '<run_name>-o<N>'. "
             "Mutually exclusive with --resume-training and --inference-only."
         ),

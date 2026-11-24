@@ -12,8 +12,21 @@ import math
 import os
 from pathlib import Path
 
+from src.evaluation.metric_keys import RECALL_FPR_KEYS
+
 RESULTS_NAME = "results.json"
 INFERENCE_RESULTS_NAME = "results.inference.json"
+# Per-frame test scores (labels, vote, max-tile, session per split), one per results file.
+SCORES_NAME = "scores.npz"
+INFERENCE_SCORES_NAME = "scores.inference.npz"
+# Keys of the cross / in_domain blocks in a results file.
+SPLIT_RESULT_KEYS: tuple[str, ...] = (
+    "ap",
+    "auc_roc",
+    "f1",
+    "threshold",
+    *RECALL_FPR_KEYS,
+)
 WANDB_OFF_MODES = frozenset({"offline", "disabled"})
 WANDB_API_TIMEOUT_S = 60
 WANDB_STATE_FINISHED = "finished"
@@ -25,7 +38,13 @@ LOSS_FLAT_WINDOW = 5
 LOSS_FLAT_REL_TOL = 0.01
 
 # summary key -> key in the dict returned by run_patch_agg
-_SUMMARY_METRICS = {"ap": "ap", "auc": "auc_roc", "f1": "f1", "threshold": "threshold"}
+_SUMMARY_METRICS = {
+    "ap": "ap",
+    "auc": "auc_roc",
+    "f1": "f1",
+    "threshold": "threshold",
+    **{k: k for k in RECALL_FPR_KEYS},
+}
 
 
 def inference_result_path(ckpt_dir: str | Path) -> Path:
@@ -33,6 +52,46 @@ def inference_result_path(ckpt_dir: str | Path) -> Path:
     ckpt_dir = Path(ckpt_dir)
     primary = ckpt_dir / RESULTS_NAME
     return ckpt_dir / INFERENCE_RESULTS_NAME if primary.exists() else primary
+
+
+def scores_path_for(results_path: Path) -> Path:
+    """The score file that goes with a results file: the side file with the side file."""
+    name = (
+        INFERENCE_SCORES_NAME
+        if results_path.name == INFERENCE_RESULTS_NAME
+        else SCORES_NAME
+    )
+    return results_path.with_name(name)
+
+
+def write_scores(
+    path: Path,
+    scores_by_split: dict[str, dict],
+    aggregation: str | None = None,
+    evaluation_id: str | None = None,
+) -> None:
+    """Per-frame scores as one .npz with keys ``<split>_<name>``, written atomically.
+
+    `aggregation` ("vote" / "max"), when given, is stored under ``aggregation``: the
+    score the result file's recall_at_fpr_* keys were computed on. `evaluation_id`,
+    when given, is stored under ``evaluation_id``; the results file of the same
+    evaluation carries the same value, which pairs the two by content.
+    """
+    # Imported here: this module stays free of numpy and torch (see wandb_identity).
+    import numpy as np
+
+    from src.training.checkpoint_io import atomic_write
+
+    arrays = {
+        f"{split}_{name}": values
+        for split, scores in scores_by_split.items()
+        for name, values in scores.items()
+    }
+    if aggregation is not None:
+        arrays["aggregation"] = np.array(aggregation)
+    if evaluation_id is not None:
+        arrays["evaluation_id"] = np.array(evaluation_id)
+    atomic_write(path, lambda f: np.savez(f, **arrays))
 
 
 def _epoch(value) -> int | None:

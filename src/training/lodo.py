@@ -8,6 +8,7 @@ reuse the same loop without duplication.
 from __future__ import annotations
 
 import json
+import uuid
 from collections.abc import Callable
 from pathlib import Path
 
@@ -32,18 +33,22 @@ from src.evaluation.benchmark import (
     run_patch_agg,
     save_split_artifact,
 )
+from src.evaluation.metrics import RECALL_FPR_KEYS, RECALL_FPR_TARGETS
 from src.hitfinders.base import Hitfinder
 from src.models.supervised import build_supervised_model
 from src.training.inference_results import (
     INFERENCE_RESULTS_NAME,
     RESULTS_NAME,
+    SPLIT_RESULT_KEYS,
     assess_training,
     fetch_wandb_history,
     inference_block,
     inference_result_path,
+    scores_path_for,
     summary_updates,
     training_block,
     wandb_enabled,
+    write_scores,
 )
 from src.models.ssl import DROP_PATH_RATE_DEFAULT, HEAD_INIT_DEFAULT
 from src.training.recipe import (
@@ -53,7 +58,7 @@ from src.training.recipe import (
     apply_lr_schedule,
     build_optimizer,
 )
-from src.training.checkpoint_io import atomic_torch_save
+from src.training.checkpoint_io import atomic_torch_save, atomic_write
 from src.training.train_supervised import _set_seeds, train_one_epoch
 from src.training.wandb_identity import resolve_wandb_id, wandb_id_for_training
 
@@ -709,6 +714,7 @@ def _train_fold(
         device=device,
         aggregation=aggregation,
         frame_cache=frame_cache,
+        return_test_metrics=True,
     )
     cross_m = run_patch_agg(
         model,
@@ -720,7 +726,10 @@ def _train_fold(
         device=device,
         aggregation=aggregation,
         frame_cache=frame_cache,
+        return_test_metrics=True,
     )
+    in_domain_scores = in_domain_m.pop("scores")
+    cross_scores = cross_m.pop("scores")
 
     print(
         f"  In-domain test:    AP={in_domain_m['ap']:.4f}  AUC={in_domain_m['auc_roc']:.4f}  F1={in_domain_m['f1']:.4f}"
@@ -728,6 +737,10 @@ def _train_fold(
     print(
         f"  Cross-detector:    AP={cross_m['ap']:.4f}  AUC={cross_m['auc_roc']:.4f}  F1={cross_m['f1']:.4f}"
     )
+    recall = " / ".join(
+        f"{cross_m[f'recall_at_fpr_{t}']:.4f}" for t in RECALL_FPR_TARGETS
+    )
+    print(f"  Recall @ FPR {' / '.join(RECALL_FPR_TARGETS)} (cross): {recall}")
 
     if not inference_only:
         wandb.log(
@@ -738,6 +751,8 @@ def _train_fold(
                 "cross/ap": cross_m["ap"],
                 "cross/auc": cross_m["auc_roc"],
                 "cross/f1": cross_m["f1"],
+                **{f"in_domain/{k}": in_domain_m[k] for k in RECALL_FPR_KEYS},
+                **{f"cross/{k}": cross_m[k] for k in RECALL_FPR_KEYS},
                 "inference_threshold": inference_threshold,
             }
         )
@@ -747,18 +762,8 @@ def _train_fold(
         "fold_id": fold_id,
         "test_detector": fold["test_detector"],
         "inference_threshold": inference_threshold,
-        "cross": {
-            "ap": cross_m["ap"],
-            "auc_roc": cross_m["auc_roc"],
-            "f1": cross_m["f1"],
-            "threshold": cross_m["threshold"],
-        },
-        "in_domain": {
-            "ap": in_domain_m["ap"],
-            "auc_roc": in_domain_m["auc_roc"],
-            "f1": in_domain_m["f1"],
-            "threshold": in_domain_m["threshold"],
-        },
+        "cross": {k: cross_m[k] for k in SPLIT_RESULT_KEYS},
+        "in_domain": {k: in_domain_m[k] for k in SPLIT_RESULT_KEYS},
     }
     result.update(extra_results or {})
     if inference_only:
@@ -780,8 +785,19 @@ def _train_fold(
             best_epoch=ckpt.get("epoch"),
             early_stopped=early_stopped,
         )
-    with open(results_path, "w") as f:
-        json.dump(result, f, indent=2)
+    # Scores before results: the results file marks the evaluation complete. Both
+    # carry the same evaluation_id, which pairs them even after a copy resets times.
+    result["evaluation_id"] = uuid.uuid4().hex
+    scores_path = scores_path_for(results_path)
+    write_scores(
+        scores_path,
+        {"cross": cross_scores, "in_domain": in_domain_scores},
+        aggregation=aggregation,
+        evaluation_id=result["evaluation_id"],
+    )
+    print(f"  Per-frame scores → {scores_path}")
+    text = json.dumps(result, indent=2)
+    atomic_write(results_path, lambda f: f.write(text.encode()))
     print(f"  Results saved → {results_path}")
 
     if inference_only:

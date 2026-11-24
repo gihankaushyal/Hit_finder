@@ -256,6 +256,8 @@ class TestFinetuneRunNaming:
         (run_dir / "best.pt").write_bytes(b"x")
         (run_dir / "last.pt").write_bytes(b"x")
         (run_dir / "results.json").write_text("{}")
+        (run_dir / "scores.npz").write_bytes(b"x")
+        (run_dir / "scores.inference.npz").write_bytes(b"x")
         return run_dir
 
     def test_existing_checkpoint_without_flag_exits(self, tmp_path, monkeypatch):
@@ -324,6 +326,8 @@ class TestFinetuneRunNaming:
         assert not (run_dir / "best.pt").exists()
         assert not (run_dir / "results.json").exists()
         assert not (run_dir / "results.inference.json").exists()
+        assert not (run_dir / "scores.npz").exists()
+        assert not (run_dir / "scores.inference.npz").exists()
 
     def test_inference_only_needs_an_existing_checkpoint_and_deletes_nothing(
         self, tmp_path, monkeypatch

@@ -11,6 +11,7 @@ import sys
 import types
 from pathlib import Path
 
+import numpy as np
 import pytest
 import torch
 import torch.nn as nn
@@ -21,12 +22,15 @@ from src.evaluation.benchmark import (
     SPLIT_TRAIN,
     SPLIT_VAL,
 )
+from src.evaluation.metrics import RECALL_FPR_KEYS
 from src.training import lodo
 from src.training.inference_results import (
     INFERENCE_RESULTS_NAME,
+    INFERENCE_SCORES_NAME,
     LOSS_FLAT_REL_TOL,
     LOSS_FLAT_WINDOW,
     RESULTS_NAME,
+    SCORES_NAME,
     assess_training,
     fetch_wandb_history,
     inference_block,
@@ -37,7 +41,35 @@ from src.training.inference_results import (
 )
 
 REPO = Path(__file__).resolve().parent.parent
-METRICS = {"ap": 0.9, "auc_roc": 0.95, "f1": 0.8, "threshold": 0.4}
+METRICS = {
+    "ap": 0.9,
+    "auc_roc": 0.95,
+    "f1": 0.8,
+    "threshold": 0.4,
+}
+RECALL = {
+    k: 0.5 for k in RECALL_FPR_KEYS
+}  # only with return_test_metrics=True, as the real one
+
+
+def _fake_scores() -> dict:
+    return {
+        "y_true": np.array([1, 0], dtype=np.int8),
+        "vote": np.array([0.9, 0.1], dtype=np.float32),
+        "max": np.array([0.95, 0.2], dtype=np.float32),
+        "session": np.array(["s", "s"]),
+    }
+
+
+def _fake_agg(**overrides):
+    """A run_patch_agg stand-in: METRICS (with overrides), plus scores when asked."""
+
+    def agg(*a, **kw) -> dict:
+        scores = {"scores": _fake_scores()} if kw.get("return_test_metrics") else {}
+        recall = RECALL if kw.get("return_test_metrics") else {}
+        return {**METRICS, **recall, **overrides, **scores}
+
+    return agg
 
 
 class TestInferenceResultPath:
@@ -280,13 +312,16 @@ class TestFetchWandbHistory:
 
 class TestSummaryUpdates:
     def test_keys_are_prefixed_and_cover_both_sets(self):
-        updates = summary_updates(METRICS, {**METRICS, "ap": 0.5}, threshold=0.4)
+        test_m = {**METRICS, **RECALL}  # a test split's dict carries recall
+        updates = summary_updates(test_m, {**test_m, "ap": 0.5}, threshold=0.4)
         assert updates["inference/threshold"] == 0.4
         assert updates["inference/in_domain/ap"] == 0.9
         assert updates["inference/in_domain/auc"] == 0.95
         assert updates["inference/cross/ap"] == 0.5
         assert updates["inference/cross/f1"] == 0.8
         assert updates["inference/cross/threshold"] == 0.4
+        assert updates["inference/cross/recall_at_fpr_1e-3"] == 0.5
+        assert updates["inference/in_domain/max_fpr_at_fpr_1e-2"] == 0.5
         assert all(k.startswith("inference/") for k in updates)
 
 
@@ -419,7 +454,7 @@ def harness(tmp_path, monkeypatch):
         return nn.Linear(4, 2)
 
     monkeypatch.setattr(lodo, "build_supervised_model", _build)
-    monkeypatch.setattr(lodo, "run_patch_agg", lambda *a, **kw: dict(METRICS))
+    monkeypatch.setattr(lodo, "run_patch_agg", _fake_agg())
     ckpt_dir = tmp_path / "checkpoints" / RUN_NAME
 
     def make_checkpoint(backbone: str = "resnet18", results: str | None = None):
@@ -459,6 +494,10 @@ class TestTrainFoldInferenceOnly:
         assert data["inference"]["training_check"]["status"] == "unknown"
         assert not (ckpt_dir / INFERENCE_RESULTS_NAME).exists()
         assert result["ap"] == 0.9
+        # the score file goes with the results file it belongs to
+        assert (ckpt_dir / SCORES_NAME).exists()
+        assert not (ckpt_dir / INFERENCE_SCORES_NAME).exists()
+        assert data["cross"]["recall_at_fpr_1e-3"] == 0.5
 
     def test_keeps_an_existing_results_json_and_writes_the_side_file(self, harness):
         fake, ckpt_dir, make_checkpoint = harness
@@ -471,24 +510,52 @@ class TestTrainFoldInferenceOnly:
         assert side["inference"]["aggregation"] == "vote"
         assert side["inference"]["checkpoint_epoch"] == 7
         assert "training_check" in side["inference"]
+        assert (ckpt_dir / INFERENCE_SCORES_NAME).exists()
+        assert not (ckpt_dir / SCORES_NAME).exists()
+        with np.load(ckpt_dir / INFERENCE_SCORES_NAME) as z:
+            assert z["in_domain_max"].tolist() == pytest.approx([0.95, 0.2])
 
     def test_a_second_inference_overwrites_only_the_side_file(
         self, harness, monkeypatch
     ):
         fake, ckpt_dir, make_checkpoint = harness
         make_checkpoint(results="{}")
-        state = {"ap": 0.9}
-        monkeypatch.setattr(
-            lodo, "run_patch_agg", lambda *a, **kw: {**METRICS, "ap": state["ap"]}
-        )
+        monkeypatch.setattr(lodo, "run_patch_agg", _fake_agg(ap=0.9))
         lodo._train_fold(cfg=_cfg(), inference_only=True, **_fold_args())
         first = json.loads((ckpt_dir / INFERENCE_RESULTS_NAME).read_text())
-        state["ap"] = 0.5
+        monkeypatch.setattr(lodo, "run_patch_agg", _fake_agg(ap=0.5))
         lodo._train_fold(cfg=_cfg(), inference_only=True, **_fold_args())
         second = json.loads((ckpt_dir / INFERENCE_RESULTS_NAME).read_text())
         assert first["cross"]["ap"] == 0.9
         assert second["cross"]["ap"] == 0.5
         assert (ckpt_dir / RESULTS_NAME).read_text() == "{}"
+
+    def test_scores_are_written_before_the_results_file(self, harness, monkeypatch):
+        # The stability script pairs a score file with a results file that is not
+        # older; that holds only if a failed score write leaves the old results.
+        fake, ckpt_dir, make_checkpoint = harness
+        make_checkpoint(results="{}")
+        monkeypatch.setattr(lodo, "run_patch_agg", _fake_agg(ap=0.9))
+        lodo._train_fold(cfg=_cfg(), inference_only=True, **_fold_args())
+        monkeypatch.setattr(lodo, "run_patch_agg", _fake_agg(ap=0.5))
+
+        def _fail(*args, **kwargs):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(lodo, "write_scores", _fail)
+        with pytest.raises(OSError, match="disk full"):
+            lodo._train_fold(cfg=_cfg(), inference_only=True, **_fold_args())
+        side = json.loads((ckpt_dir / INFERENCE_RESULTS_NAME).read_text())
+        assert side["cross"]["ap"] == 0.9  # the results of the first pass
+
+    @pytest.mark.parametrize("aggregation", ["vote", "max"])
+    def test_the_score_file_records_the_aggregation(self, harness, aggregation):
+        fake, ckpt_dir, make_checkpoint = harness
+        make_checkpoint()
+        cfg = {**_cfg(), "benchmark": {"aggregation": aggregation}}
+        lodo._train_fold(cfg=cfg, inference_only=True, **_fold_args())
+        with np.load(ckpt_dir / SCORES_NAME) as z:
+            assert str(z["aggregation"]) == aggregation
 
     def test_writes_summary_keys_and_logs_no_training_metrics(self, harness):
         fake, ckpt_dir, make_checkpoint = harness
@@ -508,6 +575,7 @@ class TestTrainFoldInferenceOnly:
         }
         assert fake.run.summary["inference/cross/ap"] == 0.9
         assert fake.run.summary["inference/in_domain/auc"] == 0.95
+        assert fake.run.summary["inference/cross/recall_at_fpr_1e-2"] == 0.5
         assert fake.logged == []
         assert fake.finished is True
 

@@ -6,13 +6,19 @@ import json
 import os
 import warnings
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
-from src.evaluation.metrics import average_precision, auc_roc, f1_at_optimal_threshold
+from src.evaluation.metrics import (
+    RECALL_FPR_TARGETS,
+    average_precision,
+    auc_roc,
+    f1_at_optimal_threshold,
+    recall_at_fprs,
+)
 
 if TYPE_CHECKING:
     from src.data.frame_cache import FrameCache
@@ -215,7 +221,8 @@ def run_patch_agg(
     aggregation: str = "vote",
     frame_cache: "FrameCache | None" = None,
     return_breakdown: bool = False,
-) -> dict[str, float]:
+    return_test_metrics: bool = False,
+) -> dict[str, Any]:
     """Evaluate a model on full frames using patch-grid aggregation.
 
     For each frame: tile into complete patch_size×patch_size patches → GCN →
@@ -246,10 +253,17 @@ def run_patch_agg(
         return_breakdown: Also return diagnostics for why the frame score moves
             (see `_breakdown_metrics`). Off by default so callers and results.json
             are unchanged.
+        return_test_metrics: For the test splits. Also return recall at each fixed
+            FPR (`RECALL_FPR_KEYS`), on the aggregation score and on the max-tile
+            score, and, under "scores", the per-frame labels, vote and max-tile scores
+            (both computed whatever the aggregation) and session ids as numpy arrays,
+            for scores.npz; the caller removes "scores" before writing results. Off
+            for validation, where too few negatives make 1e-3 meaningless.
 
     Returns:
-        dict with keys: ap, auc_roc, f1, threshold (plus the breakdown keys when
-        `return_breakdown` is set).
+        dict with keys: ap, auc_roc, f1, threshold, plus on request the breakdown
+        keys, the RECALL_FPR_KEYS (recall at fixed FPR on the aggregation score and on
+        the max-tile score) and "scores".
     """
     from src.data.frame_cache import CacheMissError
     from src.preprocessing.geometry import get_assembler, get_geometry
@@ -271,6 +285,7 @@ def run_patch_agg(
     all_labels: list[int] = []
     all_vote_scores: list[float] = []
     all_max_scores: list[float] = []
+    all_sessions: list[str] = []
 
     for sid in session_ids:
         path = Path(session_map[sid])
@@ -400,26 +415,69 @@ def run_patch_agg(
             all_vote_scores.append(vote_frac)
             all_max_scores.append(float(patch_scores.max()) if n_patches else 0.0)
             all_labels.append(int(round(float(labels_arr[frame_idx]))))
+            all_sessions.append(sid)
 
+    y_true = np.array(all_labels, dtype=int)
+    vote = np.array(all_vote_scores, dtype=float)
+    max_score = np.array(all_max_scores, dtype=float)
     if not all_scores:
         nan = float("nan")
-        return {"ap": nan, "auc_roc": nan, "f1": nan, "threshold": nan}
+        out: dict[str, Any] = {"ap": nan, "auc_roc": nan, "f1": nan, "threshold": nan}
+        if return_test_metrics:  # no frames: NaN for every key
+            out.update(_recall_metrics(y_true, vote, max_score, session_ids))
+    else:
+        y_score = np.array(all_scores)
+        best_f1, threshold = f1_at_optimal_threshold(y_true, y_score)
+        out = {
+            "ap": average_precision(y_true, y_score),
+            "auc_roc": auc_roc(y_true, y_score),
+            "f1": best_f1,
+            "threshold": threshold,
+        }
+        if return_test_metrics:
+            out.update(_recall_metrics(y_true, y_score, max_score, session_ids))
+        if return_breakdown:
+            out.update(_breakdown_metrics(y_true, vote, max_score))
+    if return_test_metrics:
+        out["scores"] = {
+            "y_true": y_true.astype(np.int8),
+            "vote": vote.astype(np.float32),
+            "max": max_score.astype(np.float32),
+            "session": np.array(all_sessions, dtype=str),
+        }
+    return out
 
-    y_score = np.array(all_scores)
-    y_true = np.array(all_labels)
-    best_f1, threshold = f1_at_optimal_threshold(y_true, y_score)
-    out = {
-        "ap": average_precision(y_true, y_score),
-        "auc_roc": auc_roc(y_true, y_score),
-        "f1": best_f1,
-        "threshold": threshold,
-    }
-    if return_breakdown:
-        out.update(
-            _breakdown_metrics(
-                y_true, np.array(all_vote_scores), np.array(all_max_scores)
+
+def _recall_metrics(
+    y_true: np.ndarray,
+    y_score: np.ndarray,
+    max_score: np.ndarray,
+    session_ids: list[str] | None = None,
+) -> dict[str, float]:
+    """Recall at each fixed FPR, on the aggregation score and on the max-tile score.
+
+    A score with any NaN or infinite value gets NaN for its keys and a warning naming
+    the sessions, so one bad patch does not cost the fold its other test results.
+    """
+    out: dict[str, float] = {}
+    targets = list(RECALL_FPR_TARGETS.values())
+
+    def points(score: np.ndarray, name: str) -> list[tuple[float, float]]:
+        n_bad = int((~np.isfinite(score)).sum())
+        if n_bad:
+            warnings.warn(
+                f"{n_bad} non-finite {name} score(s) over sessions"
+                f" {', '.join(session_ids or [])}: their recall_at_fpr keys are NaN",
+                stacklevel=3,
             )
-        )
+            return [(float("nan"), float("nan"))] * len(targets)
+        return recall_at_fprs(y_true, score, targets)
+
+    agg_points = points(y_score, "aggregation")
+    max_points = points(max_score, "max-tile")
+    for t, agg, mx in zip(RECALL_FPR_TARGETS, agg_points, max_points, strict=True):
+        out[f"recall_at_fpr_{t}"], out[f"fpr_at_fpr_{t}"] = agg
+        out[f"max_recall_at_fpr_{t}"], out[f"max_fpr_at_fpr_{t}"] = mx
     return out
 
 

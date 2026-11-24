@@ -1,3 +1,4 @@
+import math
 import tempfile
 from pathlib import Path
 
@@ -21,7 +22,15 @@ from src.evaluation.benchmark import (
     run_on_loader,
     save_split_artifact,
 )
-from src.evaluation.metrics import average_precision, auc_roc, f1_at_optimal_threshold
+from src.evaluation.metrics import (
+    RECALL_FPR_KEYS,
+    RECALL_FPR_TARGETS,
+    average_precision,
+    auc_roc,
+    f1_at_optimal_threshold,
+    recall_at_fpr,
+    recall_at_fprs,
+)
 
 
 def test_average_precision_perfect():
@@ -529,3 +538,80 @@ def test_tie_aware_auc_matches_pairwise_count_on_heavily_tied_scores():
         (pos[:, None] > neg[None, :]).sum() + 0.5 * (pos[:, None] == neg[None, :]).sum()
     ) / (len(pos) * len(neg))
     assert _tie_aware_auc(y, s) == pytest.approx(brute)
+
+
+def _recall_at_fpr_by_scan(y_true, y_score, target):
+    """Reference: the original per-target scan over the tie-group ends."""
+    y, s = np.asarray(y_true, float), np.asarray(y_score, float)
+    order = np.argsort(-s, kind="stable")
+    s, y = s[order], y[order]
+    last = np.r_[np.nonzero(np.diff(s))[0], len(s) - 1]
+    tpr = np.cumsum(y)[last] / y.sum()
+    fpr = np.cumsum(1.0 - y)[last] / (len(y) - y.sum())
+    within = np.nonzero(fpr <= target)[0]
+    if len(within) == 0:
+        return 0.0, 0.0
+    return float(tpr[within[-1]]), float(fpr[within[-1]])
+
+
+class TestRecallAtFpr:
+    def test_several_targets_from_one_sort_match_the_per_target_scan(self):
+        rng = np.random.default_rng(0)
+        y = np.r_[np.ones(50), np.zeros(2_000)]
+        s = np.round(np.r_[rng.normal(2, 1, 50), rng.normal(0, 1, 2_000)], 1)  # ties
+        targets = [1e-3, 1e-2, 0.5, 1.0, 0.0, 2 / 2_000]  # last: FPR equals target
+        expected = [_recall_at_fpr_by_scan(y, s, t) for t in targets]
+        assert recall_at_fprs(y, s, targets) == expected
+        assert [recall_at_fpr(y, s, t) for t in targets] == expected
+        one_class = recall_at_fprs([1, 1], [0.5, 0.4], [1e-3, 1e-2])
+        assert len(one_class) == 2 and np.isnan(one_class).all()
+
+    def test_perfect_separation_gives_full_recall_at_zero_fpr(self):
+        assert recall_at_fpr([1, 1, 0, 0], [0.9, 0.8, 0.2, 0.1], 1e-3) == (1.0, 0.0)
+
+    def test_the_point_is_the_most_recall_within_the_target(self):
+        y = [1, 0, 1] + [0] * 99  # 100 negatives
+        s = [0.9, 0.8, 0.7] + [0.1] * 99
+        assert recall_at_fpr(y, s, 1e-2) == (1.0, 0.01)
+        assert recall_at_fpr(y, s, 1e-3) == (0.5, 0.0)
+
+    def test_a_tie_group_is_all_in_or_all_out(self):
+        pos, negs = [1] * 10, [0] * 1000
+        one_tied = (
+            [0.9] * 10 + [0.9] + [0.0] * 999
+        )  # 1 negative tied with the positives
+        assert recall_at_fpr(pos + negs, one_tied, 1e-3) == (1.0, 0.001)
+        two_tied = [0.9] * 10 + [0.9, 0.9] + [0.0] * 998
+        assert recall_at_fpr(pos + negs, two_tied, 1e-3) == (0.0, 0.0)
+
+    def test_all_scores_tied_gives_zero_recall(self):
+        assert recall_at_fpr([1, 0, 1, 0], [0.5] * 4, 1e-2) == (0.0, 0.0)
+
+    def test_coarse_vote_scores(self):
+        # vote fractions in steps of 1/4; 3 of 200 negatives reach 0.5
+        y = [1] * 4 + [0] * 200
+        s = [1.0, 0.75, 0.5, 0.25] + [0.5] * 3 + [0.0] * 197
+        assert recall_at_fpr(y, s, 1e-2) == (0.5, 0.0)
+        assert recall_at_fpr(y, s, 2e-2) == (1.0, 0.015)  # the 0.25 group adds no FP
+
+    def test_one_class_only_is_nan(self):
+        for y in ([1, 1], [0, 0]):
+            r, f = recall_at_fpr(y, [0.3, 0.7], 1e-2)
+            assert math.isnan(r) and math.isnan(f)
+
+    def test_the_targets_and_their_keys(self):
+        assert RECALL_FPR_TARGETS == {"1e-3": 1e-3, "1e-2": 1e-2}
+        assert RECALL_FPR_KEYS == (
+            "recall_at_fpr_1e-3", "fpr_at_fpr_1e-3",
+            "max_recall_at_fpr_1e-3", "max_fpr_at_fpr_1e-3",
+            "recall_at_fpr_1e-2", "fpr_at_fpr_1e-2",
+            "max_recall_at_fpr_1e-2", "max_fpr_at_fpr_1e-2",
+        )  # fmt: skip
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf")])
+def test_recall_at_fpr_rejects_non_finite_scores(bad):
+    from src.evaluation.metrics import recall_at_fpr
+
+    with pytest.raises(ValueError, match="1 non-finite"):
+        recall_at_fpr(np.array([1, 0, 0]), np.array([0.9, bad, 0.1]), 1e-2)

@@ -1,6 +1,6 @@
 # Cross-Detector Leave-One-Detector-Out Benchmark Protocol
 
-**Version:** 2.3 — Phase 5 update (2026-11-11); originally 1.0, Phase 1 finalization
+**Version:** 2.4 — recall at fixed FPR and per-frame score files (2026-11-21); 2.3 Phase 5 update (2026-11-11); originally 1.0, Phase 1 finalization
 **Original design:** `docs/superpowers/plans/2026-05-13-benchmark-protocol.md` (the design spec file is no longer in the repo)
 **Implementation:** `src/evaluation/benchmark.py` (splits, patch aggregation, metrics), `src/training/lodo.py` (fold loop, sessions), `src/training/inference_results.py` (result files)
 
@@ -80,14 +80,85 @@ class imbalance. SFX hit rates can be as low as 5%.
 | AUC-ROC | Ranking quality, full threshold range |
 | F1 at optimal threshold | Single operating-point summary; the F1-maximizing threshold over all unique scores **of the evaluated split itself** is returned with it (`threshold`). This is an optimistic, best-case operating point (on `cross`, it uses the held-out detector's labels); AP and AUC-ROC do not depend on a threshold |
 
-`run_on_loader` and `run_patch_agg` return four values by default: `ap`, `auc_roc`,
-`f1` and `threshold`. `run_patch_agg(..., return_breakdown=True)` (used when
+`run_on_loader` returns four values: `ap`, `auc_roc`, `f1` and `threshold`.
+`run_patch_agg` returns those four and the recall-at-fixed-FPR keys below.
+`run_patch_agg(..., return_breakdown=True)` (used when
 `training.log_val_breakdown` is set) adds `pos_zero_vote_frac`, `neg_any_vote_frac`,
 `ap_max`, `auc_max`, `ap_vote_tieaware`, `auc_vote_tieaware`, `pos_vote_mean` and
 `neg_max_mean`. Ties: `average_precision` orders tied scores by sample index and
 `auc_roc` puts tied positives first, so the two can disagree on discrete vote scores;
-`ap_max` / `auc_max` and the `*_tieaware` keys treat tied scores as one group. Precision and recall at the operating point are **not**
-computed by the current code.
+`ap_max` / `auc_max` and the `*_tieaware` keys treat tied scores as one group. Precision and recall at the deployable
+`inference_threshold` are **not** computed by the current code.
+
+### Recall at fixed FPR
+
+`recall_at_fpr(y_true, y_score, target_fpr)` (`src/evaluation/metrics.py`) returns
+(recall, achieved FPR) at the most permissive threshold whose FPR does not exceed the
+target. Thresholds sit only between distinct scores, so a group of tied frames is
+predicted all positive or all negative; the vote score moves in steps of
+1/`n_patches`, so the achieved FPR is often well below the target and is reported with
+the recall. If the top tie group alone exceeds the target, recall is 0.0 at FPR 0.0;
+with no positives or no negatives both are NaN. As with `f1` / `threshold`, the
+threshold comes from the evaluated split itself: this is a ranking metric like AP, not
+a deployable operating point.
+
+Targets are 10⁻³ and 10⁻² (`RECALL_FPR_TARGETS`). Per split, `run_patch_agg` reports
+`recall_at_fpr_<t>` and `fpr_at_fpr_<t>` on the aggregation score (the headline; the
+vote score whenever `aggregation: vote`, as in every current config, and the max-tile
+score under `aggregation: max`) and `max_recall_at_fpr_<t>` / `max_fpr_at_fpr_<t>` on the max-tile score (a
+diagnostic), for `<t>` in `1e-3`, `1e-2`, when called with `return_test_metrics=True` (the
+two test evaluations only, which also get the per-frame scores; validation computes
+neither). A score with a NaN or infinite value gets NaN for its recall keys and a
+warning naming the sessions (`recall_at_fprs` itself raises), so one bad patch costs the
+max-tile diagnostic, not the fold's results. They are written to the
+test blocks of the result file and to W&B (`cross/…`, `in_domain/…`).
+
+Whether 10⁻³ can be reported depends on the number of negatives per fold.
+`scripts/recall_fpr_stability.py` bootstraps the saved per-frame scores (1,000
+resamples, seed 0) with two resampling units, both by default (`--unit both`):
+- **Frame:** all positives and all negatives drawn independently with replacement.
+- **Session:** frames of one session (one CXI file; constraint 7) may not be
+  independent, so each resample draws the split's S sessions with replacement, then
+  the frames within each drawn session. A cross split has S = 5 sessions (10 for
+  Jungfrau); an in-domain test split has 1 or 2. Recall's between-session spread rests
+  on the sessions that hold positives, and the threshold's on those that hold
+  negatives, so S here is the smaller of those two counts. A cluster bootstrap over so few units
+  underestimates the variance by about (S−1)/S, and the between-session spread rests on
+  S−1 degrees of freedom, so the session width is scaled by
+  √(S/(S−1)) · t(S−1, 0.95) / z(0.95): 1.449 at S = 5, 1.175 at S = 10.
+
+`--unit frame` runs the frame unit only (needed when a score file has no session ids).
+At 500, 1,000, 2,000 and 5,000 negatives, n negatives are drawn with replacement from
+the original negatives of the drawn units, frame by frame also in the session unit (so
+those rows understate the session spread; only the full size decides); at the full
+count the resample is used as drawn. Both targets are read from the same resamples. `--score` defaults to the
+aggregation stored in the score file, which is the score behind the result file's
+`recall_at_fpr_*`; an explicit `--score` that differs is listed. The script prints, per
+run, the score file and score used and the numbers of positives, negatives,
+sessions and sessions with each class; per (unit, target, size) the median and
+90% interval of recall and the number of resamples with no positive or no negative
+(left out of the quantiles); and each run's decision width.
+
+Rule, at the full size: a run's decision width is the wider of the frame interval and
+the scaled session interval. Report 10⁻³ if every run's decision width is below
+`--max-width` (default 0.05); else 10⁻² if that holds; else report each figure with its
+interval. A target also fails when no run has a defined width; when any run has fewer
+than 10/target negatives (fewer than 10 expected false positives: recall there is
+recall above the few highest negatives, which the bootstrap cannot resample beyond);
+when any run has fewer than 5 sessions with positives or with negatives (`MIN_SESSIONS`; so every
+in-domain split gives "interval"); or when the chance that a session resample holds one
+class only is above 1% (the interval would describe only the resamples that drew both).
+That chance is computed exactly from each session's class counts (a drawn session that
+holds both classes can still draw no positive) and also counted among the full-size
+resamples; either one above 1% fails the target. Runs whose split has one class only, runs whose chosen score has NaN or infinite
+values (`nonfinite`), runs
+without a score file, and score files that do not pair with the results file beside
+them (a pass killed between the two writes, or a file that cannot be opened) are listed and left out. A pair is matched
+by `evaluation_id` when both files carry one, which survives a copy that resets file
+times; older files without it pair when the results file is at least as new (also when
+no run is usable, in the exit message); the decision states how many runs have a
+measured width. The JSON output is strict (NaN written as
+`null`).
 
 All headline metrics are **frame-level**. Both are computed twice per fold: on
 the held-out detector (`cross`) and on the test split of the training detectors
@@ -135,8 +206,9 @@ Each fold writes `checkpoints/<run-prefix>-fold<N>-seed<S>/results.json`:
 | Field | Meaning |
 |-------|---------|
 | `fold_id`, `test_detector` | Fold identity |
+| `evaluation_id` *(runs evaluated from 2026-11-24)* | Random id of this evaluation, also stored in the score file written with it |
 | `inference_threshold` | Validation-set F1-optimal threshold (the deployable operating point) |
-| `cross` / `in_domain` | `{ap, auc_roc, f1, threshold}` on the held-out detector / training-detector test split; `f1` and `threshold` are the optimum on that split itself |
+| `cross` / `in_domain` | `{ap, auc_roc, f1, threshold}` and the eight recall-at-fixed-FPR keys *(runs evaluated from 2026-11-21)* on the held-out detector / training-detector test split; `f1`, `threshold` and the recall thresholds are the optimum on that split itself |
 | `training` *(newer runs)* | `configured_epochs`, `last_epoch`, `best_epoch`, `early_stopped` |
 | `inference` *(inference-only passes)* | `aggregation`, `patch_stride`, `min_hit_patches`, `checkpoint_epoch`, `checkpoint_val_f1`, `training_check`, `evaluated_at` |
 
@@ -148,8 +220,17 @@ overwritten, and logs `inference/threshold` and
 `inference/{in_domain,cross}/<metric>` to the W&B summary
 (`src/training/inference_results.py`).
 
+The test evaluation also writes the per-frame scores, before the result file:
+`scores.npz` next to `results.json`, `scores.inference.npz` next to
+`results.inference.json`. Keys are `<split>_<name>` for split `cross` / `in_domain`
+and name `y_true` (int8), `vote` and `max` (float32, both computed whatever the
+aggregation) and `session`, plus `aggregation` (the score the result file's
+`recall_at_fpr_*` keys were computed on) and `evaluation_id` (the same value as in the
+result file). Score and result files are written atomically (temporary
+file, then rename). `--override-training` deletes both score files.
+
 `python scripts/aggregate_lodo_results.py` collects finished folds into
-per-variant tables, grouping runs by (prefix, suffix, seed) (interactive menu, `--select`, or `--run-prefix`, where a bare prefix means unsuffixed seed 42 and any other group is passed as the menu key `<prefix>-fold*-seed<S><suffix>`; `--pool-seeds` averages the seeds of each group per fold and mixes seed counts when only some folds were repeated).
+per-variant tables, grouping runs by (prefix, suffix, seed) (interactive menu, `--select`, or `--run-prefix`, where a bare prefix means unsuffixed seed 42 and any other group is passed as the menu key `<prefix>-fold*-seed<S><suffix>`; `--pool-seeds` averages the seeds of each group per fold and mixes seed counts when only some folds were repeated). `--metric <key>` (for example `recall_at_fpr_1e-3`) tabulates that one key, cross and in-domain, instead of AP / AUC / F1; a `results.json` without the key takes it from `results.inference.json` (marked `*`), a fold with neither shows `n/a`, and an unknown key is rejected; under `--pool-seeds` a fold averages the seeds that have the key (marked `+`, with the seed count), and the cross-variant summary gives the number of folds behind each mean.
 
 ## Run Identity
 
