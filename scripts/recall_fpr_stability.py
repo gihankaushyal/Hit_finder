@@ -394,7 +394,7 @@ def main(argv: list[str] | None = None) -> dict:
             f" {info['n_pos']} positives, {info['n_neg']} negatives"
             + (
                 f", {info['n_sessions']} sessions ({info['n_pos_sessions']} with"
-                " positives)"
+                f" positives, {info['n_neg_sessions']} with negatives)"
                 if info["n_sessions"]
                 else ""
             )
@@ -440,7 +440,8 @@ def main(argv: list[str] | None = None) -> dict:
     for t, names in few_sessions.items():
         if names:
             print(
-                f"\nFewer than {MIN_SESSIONS} sessions with positives, so {t} fails:"
+                f"\nFewer than {MIN_SESSIONS} sessions with positives or with"
+                f" negatives, so {t} fails:"
                 f" {', '.join(names)}"
             )
     if score_mismatch:
