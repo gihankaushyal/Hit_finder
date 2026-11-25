@@ -2,7 +2,9 @@
 
 import os
 import shutil
+import signal
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -11,7 +13,7 @@ SCRIPT = Path(__file__).resolve().parents[1] / ".claude" / "hooks" / "backup-doc
 
 
 def run(main: Path, home: Path) -> subprocess.CompletedProcess:
-    env = {**os.environ, "HOME": str(home)}
+    env = {**os.environ, "HOME": str(home), "LC_ALL": "C"}
     return subprocess.run(
         ["bash", str(SCRIPT), str(main)], env=env, capture_output=True, text=True
     )
@@ -166,15 +168,27 @@ def test_a_broken_backup_repo_is_reported_and_marked(checkout, home):
 def test_a_killed_run_leaves_the_marker(checkout, home, tmp_path):
     slow = tmp_path / "slowbin"
     slow.mkdir()
-    (slow / "rsync").write_text("#!/bin/sh\nsleep 5\n")
+    (slow / "rsync").write_text("#!/bin/sh\nsleep 60\n")
     (slow / "rsync").chmod(0o755)
     env = {**os.environ, "HOME": str(home), "PATH": f"{slow}:{os.environ['PATH']}"}
-    result = subprocess.run(
-        ["timeout", "1", "bash", str(SCRIPT), str(checkout)],
+    proc = subprocess.Popen(
+        ["bash", str(SCRIPT), str(checkout)],
         env=env,
-        capture_output=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
     )
-    assert result.returncode == 124
+    try:
+        # Kill only once the run is stuck in the slow rsync: no timing guess.
+        for _ in range(200):
+            if (backup_dir(checkout, home) / "docs" / "superpowers").exists():
+                break
+            time.sleep(0.05)
+        else:
+            pytest.fail("the run never reached the copy step")
+    finally:
+        os.killpg(proc.pid, signal.SIGKILL)
+        proc.wait()
     assert "not finished" in marker(checkout, home).read_text()
 
 
@@ -221,3 +235,47 @@ def test_the_session_tail_shows_a_failed_backup(tmp_path, home):
 def test_the_session_tail_has_no_backup_line_when_all_is_well(tmp_path, home):
     tail = write_tail(tmp_path / "repo", home)
     assert "backup:" not in tail
+
+
+def test_a_symlink_at_the_destination_is_replaced_not_written_through(
+    checkout, home, tmp_path
+):
+    run(checkout, home)
+    outside = tmp_path / "outside.txt"
+    outside.write_text("must stay untouched\n")
+    copied = backup_dir(checkout, home) / "PLANNING.md"
+    copied.unlink()
+    copied.symlink_to(outside)
+    (checkout / "PLANNING.md").write_text("plan v2\n")
+    run(checkout, home)
+    assert outside.read_text() == "must stay untouched\n"
+    assert not copied.is_symlink()
+    assert copied.read_text() == "plan v2\n"
+
+
+@pytest.mark.skipif(shutil.which("flock") is None, reason="needs flock")
+def test_a_run_started_while_another_holds_the_lock_skips(checkout, home):
+    run(checkout, home)
+    lock = backup_dir(checkout, home).parent / "doc-backup.lock"
+    (checkout / "PLANNING.md").write_text("plan v2\n")
+    holder = subprocess.Popen(["flock", str(lock), "sleep", "30"])
+    try:
+        for _ in range(200):  # wait until the holder has the lock
+            if subprocess.run(["flock", "-n", str(lock), "true"]).returncode != 0:
+                break
+            time.sleep(0.05)
+        result = run(checkout, home)
+    finally:
+        holder.kill()
+        holder.wait()
+    assert result.returncode == 0
+    assert "another backup is running" in result.stderr
+    assert not marker(checkout, home).exists()
+    assert len(git(backup_dir(checkout, home), "log", "--format=%s").splitlines()) == 1
+
+
+@pytest.mark.skipif(shutil.which("flock") is None, reason="needs flock")
+def test_the_lock_is_free_again_after_a_run(checkout, home):
+    run(checkout, home)
+    lock = backup_dir(checkout, home).parent / "doc-backup.lock"
+    assert subprocess.run(["flock", "-n", str(lock), "true"]).returncode == 0

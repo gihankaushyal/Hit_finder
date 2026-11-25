@@ -8,9 +8,11 @@
 # docs/superpowers/ and reports/ into
 #   ~/.claude/projects/<project-id>/doc-backup/
 # and commits there when something changed. session-tail.md and .session-next are
-# regenerated every turn and are not backed up. A file deleted from docs/superpowers/
-# or reports/ leaves the backup's working tree but stays in its history; a deleted
-# top-level file stays in the working tree too. Symlinks are copied as links.
+# regenerated every turn and are not backed up. With rsync (used when installed), a file
+# deleted from docs/superpowers/ or reports/ leaves the backup's working tree but stays
+# in its history; without rsync, and for the top-level files, nothing is ever removed from
+# the working tree. Symlinks are copied as links, replacing whatever is at the destination.
+# Runs do not overlap: a second one that starts while another is running skips.
 #
 # This script never fails its caller: every problem is written to stderr and the exit
 # status is 0, so a broken backup can never block a git commit. So that a failure is
@@ -49,6 +51,14 @@ if ! mkdir -p "$DEST" 2>/dev/null; then
   echo "backup-docs: cannot create $DEST" >&2
   exit 0
 fi
+# One run at a time: the lock is released when the process ends, even if it is killed.
+# A skipped run touches neither the marker nor the repository.
+if command -v flock >/dev/null 2>&1 && { exec 9>"$STATE/doc-backup.lock"; } 2>/dev/null; then
+  if ! flock -n 9; then
+    echo "backup-docs: another backup is running; skipped" >&2
+    exit 0
+  fi
+fi
 printf '%s run started, not finished\n' "$(date -u +%Y-%m-%dT%H:%MZ)" >"$MARKER" 2>/dev/null
 if [ ! -d "$DEST/.git" ] && ! git -C "$DEST" init -q 2>/dev/null; then
   fail "cannot initialise the backup repository"
@@ -57,7 +67,7 @@ fi
 
 copy_file() { # path relative to the checkout
   [ -f "$MAIN/$1" ] || [ -L "$MAIN/$1" ] || return 0
-  mkdir -p "$DEST/$(dirname "$1")" && cp -P -p -- "$MAIN/$1" "$DEST/$1"
+  mkdir -p "$DEST/$(dirname "$1")" && cp -P -p --remove-destination -- "$MAIN/$1" "$DEST/$1"
 }
 
 copy_dir() { # path relative to the checkout
