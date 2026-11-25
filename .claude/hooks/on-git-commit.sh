@@ -46,6 +46,12 @@ TODAY=$(date +"%Y-%m-%d")
 
 cd "$REPO"
 
+# 0. Back up the local-only docs. Never blocks the commit: at most 30 s, the script
+#    exits 0, its errors go to doc-backup.log, and a failed or killed run leaves
+#    doc-backup.FAILED, which write-session-tail.sh shows.
+mkdir -p "$(dirname "$MEM_DIR")" 2>/dev/null || true
+timeout 30 bash "$REPO/.claude/hooks/backup-docs.sh" "${MAIN_ROOT:-$REPO}" >/dev/null 2>>"$(dirname "$MEM_DIR")/doc-backup.log" || true
+
 # 1. Update graphify knowledge graph (AST-only, no API cost)
 [ -f graphify-out/graph.json ] && graphify update . >/dev/null 2>&1 || true
 
