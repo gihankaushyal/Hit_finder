@@ -46,6 +46,9 @@ TODAY=$(date +"%Y-%m-%d")
 
 cd "$REPO"
 
+# 0. Back up the local-only docs (never fails: the script logs and exits 0)
+bash "$REPO/.claude/hooks/backup-docs.sh" "${MAIN_ROOT:-$REPO}" >/dev/null 2>&1 || true
+
 # 1. Update graphify knowledge graph (AST-only, no API cost)
 [ -f graphify-out/graph.json ] && graphify update . >/dev/null 2>&1 || true
 

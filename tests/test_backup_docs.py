@@ -119,3 +119,10 @@ def test_a_missing_checkout_never_fails_the_caller(tmp_path, home):
     result = run(tmp_path / "does-not-exist", home)
     assert result.returncode == 0
     assert "backup-docs" in result.stderr
+
+
+def test_the_commit_hook_calls_the_backup_and_cannot_be_blocked_by_it():
+    hook = (SCRIPT.parent / "on-git-commit.sh").read_text()
+    calls = [line for line in hook.splitlines() if "backup-docs.sh" in line]
+    assert len(calls) == 1
+    assert calls[0].rstrip().endswith("|| true")
