@@ -49,15 +49,31 @@ def _bash_hint_command():
     return cmd
 
 
-def _hint_fires(command: str, cwd: Path) -> bool:
-    out = subprocess.run(
+def _run_hint(command: str, cwd: Path, stdin: str | None = None):
+    return subprocess.run(
         ["bash", "-c", _bash_hint_command()],
-        input=json.dumps({"tool_input": {"command": command}}),
+        input=(
+            stdin
+            if stdin is not None
+            else json.dumps({"tool_input": {"command": command}})
+        ),
         capture_output=True,
         text=True,
         cwd=cwd,
-    ).stdout
-    return out.strip() != ""
+    )
+
+
+def _hint_fires(command: str, cwd: Path) -> bool:
+    """Run the hook; it must always exit 0, stay quiet on stderr and print valid JSON."""
+    result = _run_hint(command, cwd)
+    assert result.returncode == 0, result.stderr
+    assert result.stderr == ""
+    if result.stdout.strip() == "":
+        return False
+    hint = json.loads(result.stdout)["hookSpecificOutput"]
+    assert hint["hookEventName"] == "PreToolUse"
+    assert "graphify query" in hint["additionalContext"]
+    return True
 
 
 @pytest.fixture
@@ -81,6 +97,19 @@ def with_graph(tmp_path):
         "ack pattern",
         "egrep -r foo .",
         "echo start; grep foo f",
+        "(grep x f)",
+        "echo x | grep",
+        "ls | rg",
+        # the search tool in command position behind a wrapper, a path or a substitution
+        "echo `grep x y`",
+        'echo "$(find . -name a)"',
+        "/usr/bin/grep foo x",
+        "\\grep foo x",
+        "FOO=1 rg x",
+        "sudo find / -name a",
+        "time grep x f",
+        "xargs grep x",
+        "ls\ngrep foo f",
     ],
 )
 def test_hint_fires_on_a_search_command(command, with_graph):
@@ -100,6 +129,17 @@ def test_hint_fires_on_a_search_command(command, with_graph):
         "echo agenda for monday",
         "pytest tests/ -q",
         "git log --oneline -3",
+        # the tool's name as a plain word: an argument, a message, a file name
+        "man find",
+        "git checkout fd",
+        "pip install ack",
+        "git log --oneline -- ag",
+        "sbatch --job-name find x.sh",
+        "ls | wc -l # grep later",
+        'git commit -m "fix the find step"',
+        "echo find me",
+        "git log --grep=x",
+        "ls fd",
     ],
 )
 def test_hint_stays_silent_on_other_commands(command, with_graph):
@@ -108,3 +148,10 @@ def test_hint_stays_silent_on_other_commands(command, with_graph):
 
 def test_hint_stays_silent_without_a_graph(tmp_path):
     assert not _hint_fires("grep -rn foo src", tmp_path)
+
+
+@pytest.mark.parametrize("stdin", ["", "not json", "{}", '{"tool_input": {}}', "[]"])
+def test_hint_survives_odd_hook_input(stdin, with_graph):
+    result = _run_hint("", with_graph, stdin=stdin)
+    assert result.returncode == 0
+    assert result.stdout.strip() == ""
